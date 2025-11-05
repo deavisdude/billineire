@@ -108,6 +108,66 @@ public class VillageWorldgenAdapter implements Listener {
         if (plugin.getProjectGenerator() != null) {
             plugin.getProjectGenerator().generateInitialProjects(village);
         }
+        
+        // Spawn initial custom villagers for the village
+        spawnInitialVillagers(village, world, baseX, y + 1, baseZ);
+    }
+    
+    /**
+     * Spawn initial custom villagers for a new village
+     * Spawns 2-3 villagers based on culture professions
+     */
+    private void spawnInitialVillagers(com.example.villageoverhaul.villages.Village village, 
+                                       World world, int centerX, int centerY, int centerZ) {
+        var npcService = plugin.getCustomVillagerService();
+        var appearanceAdapter = plugin.getVillagerAppearanceAdapter();
+        
+        if (npcService == null || appearanceAdapter == null) {
+            logger.warning("NPC services not initialized, skipping villager spawns");
+            return;
+        }
+        
+        String cultureId = village.getCultureId();
+        
+        // Spawn villagers at offset positions around village center
+        int[][] spawnOffsets = {
+            {3, 0, 2},   // East side
+            {-2, 0, 3},  // West side
+            {0, 0, -3}   // North side
+        };
+        
+        String[] professions = {"merchant", "blacksmith", "elder"};
+        
+        for (int i = 0; i < Math.min(spawnOffsets.length, professions.length); i++) {
+            int[] offset = spawnOffsets[i];
+            String profession = professions[i];
+            String definitionId = cultureId + "_" + profession;
+            
+            Location spawnLoc = new Location(
+                world,
+                centerX + offset[0] + 0.5,
+                centerY + offset[1],
+                centerZ + offset[2] + 0.5
+            );
+            
+            var customVillager = npcService.spawnVillager(
+                definitionId,
+                cultureId,
+                profession,
+                village.getId(),
+                spawnLoc
+            );
+            
+            if (customVillager != null) {
+                // Apply appearance
+                org.bukkit.entity.Entity entity = plugin.getServer().getEntity(customVillager.getEntityId());
+                if (entity != null) {
+                    appearanceAdapter.applyAppearance(entity, definitionId);
+                }
+                
+                logger.info("  ✓ Spawned " + definitionId + " at village " + village.getName());
+            }
+        }
     }
 
     private void safeSet(World world, int x, int y, int z, Material material) {

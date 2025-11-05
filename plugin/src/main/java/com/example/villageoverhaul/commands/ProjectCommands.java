@@ -49,6 +49,8 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         switch (subcommand) {
             case "project":
                 return handleProjectCommand(sender, Arrays.copyOfRange(args, 1, args.length));
+            case "villager":
+                return handleVillagerCommand(sender, Arrays.copyOfRange(args, 1, args.length));
             default:
                 sender.sendMessage("§cUnknown subcommand: " + subcommand);
                 return false;
@@ -235,14 +237,175 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         return true;
     }
     
+    /**
+     * Handle /vo villager commands
+     */
+    private boolean handleVillagerCommand(CommandSender sender, String[] args) {
+        if (args.length == 0) {
+            sender.sendMessage("§eVillager Commands:");
+            sender.sendMessage("§7/vo villager spawn <cultureId> <profession> [villageId] - Spawn a custom villager");
+            sender.sendMessage("§7/vo villager list [villageId] - List custom villagers");
+            sender.sendMessage("§7/vo villager despawn <entityId> - Despawn a custom villager");
+            return true;
+        }
+        
+        String action = args[0].toLowerCase();
+        
+        switch (action) {
+            case "spawn":
+                return handleVillagerSpawn(sender, Arrays.copyOfRange(args, 1, args.length));
+            case "list":
+                return handleVillagerList(sender, Arrays.copyOfRange(args, 1, args.length));
+            case "despawn":
+                return handleVillagerDespawn(sender, Arrays.copyOfRange(args, 1, args.length));
+            default:
+                sender.sendMessage("§cUnknown villager command: " + action);
+                return false;
+        }
+    }
+    
+    private boolean handleVillagerSpawn(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("§cThis command must be run by a player");
+            return true;
+        }
+        
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /vo villager spawn <cultureId> <profession> [villageId]");
+            return true;
+        }
+        
+        Player player = (Player) sender;
+        String cultureId = args[0];
+        String profession = args[1];
+        UUID villageId = null;
+        
+        // Find nearest village or use specified village
+        if (args.length >= 3) {
+            try {
+                villageId = UUID.fromString(args[2]);
+            } catch (IllegalArgumentException e) {
+                // Try by name
+                Village village = villageService.findVillageByName(args[2]);
+                if (village != null) {
+                    villageId = village.getId();
+                } else {
+                    sender.sendMessage("§cVillage not found: " + args[2]);
+                    return true;
+                }
+            }
+        } else {
+            // Find nearest village
+            Village nearest = villageService.findNearestVillage(player.getLocation());
+            if (nearest != null) {
+                villageId = nearest.getId();
+            } else {
+                sender.sendMessage("§cNo villages found. Specify a village ID or create one first.");
+                return true;
+            }
+        }
+        
+        String definitionId = cultureId + "_" + profession;
+        var npcService = plugin.getCustomVillagerService();
+        var appearanceAdapter = plugin.getVillagerAppearanceAdapter();
+        
+        var customVillager = npcService.spawnVillager(
+            definitionId,
+            cultureId,
+            profession,
+            villageId,
+            player.getLocation()
+        );
+        
+        if (customVillager != null) {
+            // Apply appearance
+            var entity = player.getServer().getEntity(customVillager.getEntityId());
+            if (entity != null) {
+                appearanceAdapter.applyAppearance(entity, definitionId);
+            }
+            
+            sender.sendMessage("§a✓ Spawned " + definitionId + " at your location");
+            sender.sendMessage("§7Entity ID: " + customVillager.getEntityId());
+        } else {
+            sender.sendMessage("§cFailed to spawn villager (village cap reached or error)");
+        }
+        
+        return true;
+    }
+    
+    private boolean handleVillagerList(CommandSender sender, String[] args) {
+        var npcService = plugin.getCustomVillagerService();
+        
+        if (args.length > 0) {
+            // List for specific village
+            UUID villageId;
+            try {
+                villageId = UUID.fromString(args[0]);
+            } catch (IllegalArgumentException e) {
+                Village village = villageService.findVillageByName(args[0]);
+                if (village == null) {
+                    sender.sendMessage("§cVillage not found: " + args[0]);
+                    return true;
+                }
+                villageId = village.getId();
+            }
+            
+            List<com.example.villageoverhaul.npc.CustomVillager> villagers = npcService.getVillagersByVillageId(villageId);
+            sender.sendMessage("§eCustom Villagers in village " + villageId + ": " + villagers.size());
+            for (com.example.villageoverhaul.npc.CustomVillager villager : villagers) {
+                sender.sendMessage("  §7" + villager.getDefinitionId() + " (entity: " + villager.getEntityId() + ")");
+            }
+        } else {
+            // List all
+            java.util.Collection<com.example.villageoverhaul.npc.CustomVillager> allVillagers = npcService.getAllVillagers();
+            sender.sendMessage("§eTotal custom villagers: " + allVillagers.size());
+            sender.sendMessage("§7Per-village cap: " + npcService.getMaxVillagersPerVillage());
+            
+            for (com.example.villageoverhaul.npc.CustomVillager villager : allVillagers) {
+                sender.sendMessage("  §7" + villager.getDefinitionId() + " @ village " + villager.getVillageId());
+            }
+        }
+        
+        return true;
+    }
+    
+    private boolean handleVillagerDespawn(CommandSender sender, String[] args) {
+        if (args.length < 1) {
+            sender.sendMessage("§cUsage: /vo villager despawn <entityId>");
+            return true;
+        }
+        
+        UUID entityId;
+        try {
+            entityId = UUID.fromString(args[0]);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cInvalid entity ID");
+            return true;
+        }
+        
+        var npcService = plugin.getCustomVillagerService();
+        boolean success = npcService.despawnVillager(entityId);
+        
+        if (success) {
+            sender.sendMessage("§a✓ Despawned custom villager");
+        } else {
+            sender.sendMessage("§cVillager not found");
+        }
+        
+        return true;
+    }
+    
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> completions = new ArrayList<>();
         
         if (args.length == 1) {
             completions.add("project");
+            completions.add("villager");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("project")) {
             completions.addAll(Arrays.asList("list", "status", "create", "activate"));
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("villager")) {
+            completions.addAll(Arrays.asList("spawn", "list", "despawn"));
         }
         
         return completions.stream()

@@ -1,0 +1,43 @@
+{
+  "id": "roman_elder",
+  "cultureId": "roman",
+  "professionId": "elder",
+  "appearanceProfile": {
+    "displayName": "<light_purple>Roman Elder</light_purple>",
+    "attire": [
+      {
+        "slot": "HEAD",
+        "material": "GOLDEN_HELMET"
+      },
+      {
+        "slot": "CHEST",
+        "material": "LEATHER_CHESTPLATE",
+        "color": "#8B008B"
+      },
+      {
+        "slot": "LEGS",
+        "material": "LEATHER_LEGGINGS",
+        "color": "#8B008B"
+      },
+      {
+        "slot": "MAINHAND",
+        "material": "ENCHANTED_BOOK"
+      }
+    ],
+    "icon": "BOOK"
+  },
+  "dialogueKeys": [
+    "villager.greeting.roman",
+    "villager.profession.elder.greeting"
+  ],
+  "interactionFlags": {
+    "allowTrade": true,
+    "allowDialogue": true,
+    "requireReputation": 0
+  },
+  "spawnRules": {
+    "entityType": "VILLAGER",
+    "maxPerVillage": 1,
+    "spawnWeight": 0.5
+  }
+}

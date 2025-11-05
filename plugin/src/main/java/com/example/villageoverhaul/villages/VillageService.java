@@ -47,4 +47,43 @@ public class VillageService {
         village.addWealth(wealthMillz);
         villages.put(id, village);
     }
+    
+    /**
+     * Find village by name (case-insensitive)
+     */
+    public Village findVillageByName(String name) {
+        return villages.values().stream()
+            .filter(v -> v.getName().equalsIgnoreCase(name))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * Find nearest village to a location
+     */
+    public Village findNearestVillage(org.bukkit.Location location) {
+        if (location == null) return null;
+        
+        Village nearest = null;
+        double minDistSq = Double.MAX_VALUE;
+        
+        for (Village village : villages.values()) {
+            // Only consider villages in same world
+            if (!village.getWorldName().equals(location.getWorld().getName())) {
+                continue;
+            }
+            
+            double dx = village.getX() - location.getX();
+            double dy = village.getY() - location.getY();
+            double dz = village.getZ() - location.getZ();
+            double distSq = dx * dx + dy * dy + dz * dz;
+            
+            if (distSq < minDistSq) {
+                minDistSq = distSq;
+                nearest = village;
+            }
+        }
+        
+        return nearest;
+    }
 }

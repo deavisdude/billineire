@@ -1,0 +1,42 @@
+{
+  "id": "roman_blacksmith",
+  "cultureId": "roman",
+  "professionId": "blacksmith",
+  "appearanceProfile": {
+    "displayName": "<dark_gray>Roman Blacksmith</dark_gray>",
+    "attire": [
+      {
+        "slot": "HEAD",
+        "material": "IRON_HELMET"
+      },
+      {
+        "slot": "CHEST",
+        "material": "LEATHER_CHESTPLATE",
+        "color": "#2F4F4F"
+      },
+      {
+        "slot": "LEGS",
+        "material": "LEATHER_LEGGINGS",
+        "color": "#696969"
+      },
+      {
+        "slot": "MAINHAND",
+        "material": "IRON_SWORD"
+      }
+    ],
+    "icon": "ANVIL"
+  },
+  "dialogueKeys": [
+    "villager.greeting.roman",
+    "villager.profession.blacksmith.greeting"
+  ],
+  "interactionFlags": {
+    "allowTrade": true,
+    "allowDialogue": true
+  },
+  "spawnRules": {
+    "entityType": "VILLAGER",
+    "maxPerVillage": 2,
+    "spawnWeight": 1.0
+  }
+}

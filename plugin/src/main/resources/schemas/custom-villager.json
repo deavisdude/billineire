@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://villageoverhaul.example.com/schemas/custom-villager.json",
+  "title": "CustomVillager",
+  "description": "Schema for culture-profession Custom Villagers with appearance and interaction configuration",
+  "type": "object",
+  "required": ["id", "cultureId", "professionId", "appearanceProfile", "spawnRules"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Unique identifier for this custom villager definition"
+    },
+    "cultureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Reference to Culture.id"
+    },
+    "professionId": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Reference to profession within culture"
+    },
+    "appearanceProfile": {
+      "type": "object",
+      "required": ["displayName"],
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "description": "Localized display name (supports MiniMessage)"
+        },
+        "attire": {
+          "type": "array",
+          "description": "Armor/cosmetic items for visual distinction",
+          "items": {
+            "type": "object",
+            "required": ["slot", "material"],
+            "properties": {
+              "slot": {
+                "type": "string",
+                "enum": ["HEAD", "CHEST", "LEGS", "FEET", "MAINHAND", "OFFHAND"]
+              },
+              "material": {
+                "type": "string",
+                "description": "Bukkit Material name"
+              },
+              "color": {
+                "type": "string",
+                "pattern": "^#[0-9A-Fa-f]{6}$",
+                "description": "Hex color for leather armor or dyeable items"
+              },
+              "customModelData": {
+                "type": "integer",
+                "description": "Custom model data for resource pack support (Java-only)"
+              }
+            }
+          }
+        },
+        "glowColor": {
+          "type": "string",
+          "pattern": "^(AQUA|BLACK|BLUE|DARK_AQUA|DARK_BLUE|DARK_GRAY|DARK_GREEN|DARK_PURPLE|DARK_RED|GOLD|GRAY|GREEN|LIGHT_PURPLE|RED|WHITE|YELLOW)$",
+          "description": "Team color for glow effect (optional)"
+        },
+        "icon": {
+          "type": "string",
+          "description": "Material name for GUI icon representation"
+        }
+      }
+    },
+    "dialogueKeys": {
+      "type": "array",
+      "description": "Localization keys for NPC dialogue lines",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9._-]+$"
+      }
+    },
+    "interactionFlags": {
+      "type": "object",
+      "description": "Interaction behavior flags",
+      "properties": {
+        "allowTrade": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowDialogue": {
+          "type": "boolean",
+          "default": true
+        },
+        "requireReputation": {
+          "type": "integer",
+          "description": "Minimum reputation to interact"
+        }
+      }
+    },
+    "spawnRules": {
+      "type": "object",
+      "required": ["entityType"],
+      "properties": {
+        "entityType": {
+          "type": "string",
+          "enum": ["VILLAGER", "ARMOR_STAND", "WANDERING_TRADER"],
+          "description": "Underlying Bukkit entity type"
+        },
+        "maxPerVillage": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Maximum spawns of this type per village"
+        },
+        "spawnWeight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Relative spawn weight within profession pool"
+        },
+        "requiresBuildingType": {
+          "type": "string",
+          "description": "Building type that must exist for spawning (optional)"
+        }
+      }
+    },
+    "tickBudgetHints": {
+      "type": "object",
+      "description": "Performance tuning hints",
+      "properties": {
+        "targetTickMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.05,
+          "description": "Target tick time in milliseconds per NPC"
+        },
+        "idleUpdateIntervalTicks": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20,
+          "description": "Ticks between idle updates when no players nearby"
+        }
+      }
+    }
+  }
+}

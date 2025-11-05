@@ -74,6 +74,26 @@ CI deterministic sim (replace smoke placeholders):
 
 ---
 
+## Phase 2.6: Custom Villagers Foundation (Pre-requisite for US1/US2)
+
+**Purpose**: Introduce culture-profession NPCs with custom appearance and interactions; maintain Bedrock parity.
+
+- [X] T019k [P] Define schema `plugin/src/main/resources/schemas/custom-villager.json` (cultureId, professionId, appearanceProfile, dialogueKeys, spawnRules); wire into `SchemaValidator`.
+- [X] T019l [P] Implement `CustomVillagerService.java` in `plugin/src/main/java/com/example/villageoverhaul/npc/` (spawn/despawn, persist, find-by-village, caps).
+- [X] T019m [P] Implement `VillagerAppearanceAdapter.java` in `npc/` (attire/armor/colors/nametags; optional Java resource-pack hooks; Bedrock-safe fallbacks).
+- [X] T019n Intercept vanilla trading in `economy/TradeListener.java` or `npc/VillagerInteractionController.java`: cancel vanilla UI for Custom Villagers and route to custom flow.
+- [X] T019o Implement `VillagerInteractionController.java` in `npc/` (chat/actionbar prompts; inventory GUI fallback; server-side validation; rate limits).
+- [X] T019p Observability & Security: add NPC metrics in `obs/Metrics.java`; implement interaction rate limits and input validation.
+- [X] T019q Localization: add dialogue/menu keys under `plugin/src/main/resources/lang/`; ensure coverage of FR-015.
+- [ ] T019r Compatibility tests: extend `scripts/ci/sim/run-scenario.ps1` to spawn at least one Custom Villager and verify interaction logs for Java-only and Java+Bedrock paths; update `docs/compatibility-matrix.md`.
+- [ ] T019s Perf guardrail: add a perf test or metric snapshot in `tests/perf/` asserting npc.tick_time_ms within budget at Medium profile.
+
+**Notes**: T019k–T019s map to FR-016 (Custom Villagers) and reinforce FR-010 (Cross-Edition), FR-012 (Performance), FR-013 (Security), and FR-015 (Localization).
+
+**Checkpoint**: Custom villager foundation complete (T019k-T019q); T019r-T019s deferred as optional CI/perf enhancements.
+
+---
+
 ## Phase 3: User Story 1 — Trade-Funded Village Projects (Priority: P1) 🎯 MVP
 
 **Goal**: Players trade; proceeds fund visible village projects and upgrade builds

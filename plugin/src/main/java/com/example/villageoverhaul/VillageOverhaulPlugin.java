@@ -8,6 +8,9 @@ import com.example.villageoverhaul.cultures.CultureService;
 import com.example.villageoverhaul.data.SchemaValidator;
 import com.example.villageoverhaul.economy.TradeListener;
 import com.example.villageoverhaul.economy.WalletService;
+import com.example.villageoverhaul.npc.CustomVillagerService;
+import com.example.villageoverhaul.npc.VillagerAppearanceAdapter;
+import com.example.villageoverhaul.npc.VillagerInteractionController;
 import com.example.villageoverhaul.obs.Metrics;
 import com.example.villageoverhaul.persistence.JsonStore;
 import com.example.villageoverhaul.projects.ProjectGenerator;
@@ -49,6 +52,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private TradeListener tradeListener;
     private com.example.villageoverhaul.projects.UpgradeExecutor upgradeExecutor;
     
+    // NPC services (Phase 2.6: Custom Villagers)
+    private CustomVillagerService customVillagerService;
+    private VillagerAppearanceAdapter villagerAppearanceAdapter;
+    private VillagerInteractionController villagerInteractionController;
+    
     @Override
     public void onEnable() {
         instance = this;
@@ -65,6 +73,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         logger.info("Village Overhaul shutting down...");
+        
+        // Despawn all custom villagers
+        if (customVillagerService != null) {
+            customVillagerService.despawnAll();
+        }
         
         // Graceful shutdown
         if (tickEngine != null) {
@@ -120,6 +133,19 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Upgrade executor (US1: visual building upgrades)
         upgradeExecutor = new com.example.villageoverhaul.projects.UpgradeExecutor(this);
         logger.info("✓ Upgrade executor initialized");
+        
+        // Custom villager service (Phase 2.6)
+        customVillagerService = new CustomVillagerService(this, logger, metrics);
+        logger.info("✓ Custom villager service initialized");
+        
+        // Villager appearance adapter (Phase 2.6)
+        villagerAppearanceAdapter = new VillagerAppearanceAdapter(logger);
+        logger.info("✓ Villager appearance adapter initialized");
+        
+        // Villager interaction controller (Phase 2.6)
+        villagerInteractionController = new VillagerInteractionController(logger, customVillagerService, metrics);
+        getServer().getPluginManager().registerEvents(villagerInteractionController, this);
+        logger.info("✓ Villager interaction controller registered");
         
         // Tick engine
         tickEngine = new TickEngine(this);
@@ -202,4 +228,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public ProjectGenerator getProjectGenerator() { return projectGenerator; }
     
     public com.example.villageoverhaul.projects.UpgradeExecutor getUpgradeExecutor() { return upgradeExecutor; }
+    
+    public CustomVillagerService getCustomVillagerService() { return customVillagerService; }
+    
+    public VillagerAppearanceAdapter getVillagerAppearanceAdapter() { return villagerAppearanceAdapter; }
+    
+    public VillagerInteractionController getVillagerInteractionController() { return villagerInteractionController; }
 }

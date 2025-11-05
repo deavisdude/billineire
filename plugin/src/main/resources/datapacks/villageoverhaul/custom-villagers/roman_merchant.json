@@ -1,0 +1,42 @@
+{
+  "id": "roman_merchant",
+  "cultureId": "roman",
+  "professionId": "merchant",
+  "appearanceProfile": {
+    "displayName": "<gold>Roman Merchant</gold>",
+    "attire": [
+      {
+        "slot": "HEAD",
+        "material": "GOLDEN_HELMET"
+      },
+      {
+        "slot": "CHEST",
+        "material": "LEATHER_CHESTPLATE",
+        "color": "#8B0000"
+      },
+      {
+        "slot": "LEGS",
+        "material": "LEATHER_LEGGINGS",
+        "color": "#8B0000"
+      },
+      {
+        "slot": "MAINHAND",
+        "material": "GOLD_INGOT"
+      }
+    ],
+    "icon": "GOLD_INGOT"
+  },
+  "dialogueKeys": [
+    "villager.greeting.roman",
+    "villager.profession.merchant.greeting"
+  ],
+  "interactionFlags": {
+    "allowTrade": true,
+    "allowDialogue": true
+  },
+  "spawnRules": {
+    "entityType": "VILLAGER",
+    "maxPerVillage": 2,
+    "spawnWeight": 1.0
+  }
+}

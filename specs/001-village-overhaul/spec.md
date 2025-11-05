@@ -22,8 +22,9 @@
 
 ### User Story 1 - Trade-Funded Village Projects (Priority: P1)
 
-Players trade with villagers using a currency economy; proceeds fund village "projects" (e.g., house upgrade,
-blacksmith expansion). Players see project goals, contribution progress, and resulting building upgrades.
+Players trade with Custom Villagers (culture-specific) using a currency economy; proceeds fund village "projects"
+(e.g., house upgrade, blacksmith expansion). Players see project goals, contribution progress, and resulting
+building upgrades.
 
 **Why this priority**: Establishes core gameplay loop that ties player actions to visible village growth.
 
@@ -130,6 +131,14 @@ server restarts.
 - Dungeon generation near protected areas: enforce worldgen safe zones and re-roll rules.
 - Multiple players racing to buy the same property: first-commit wins via server-side transaction lock.
 - Inter-village relation oscillation: apply hysteresis/cooldowns to avoid flip-flopping.
+- Vanilla trading suppression: If a player attempts to open the vanilla trading UI on a Custom Villager, the plugin
+  MUST cancel and route to the custom interaction flow without duping state.
+- Interaction concurrency: Multiple simultaneous interactions with the same NPC MUST serialize server-side; rate limit
+  interaction open/close to prevent spam.
+- Chunk unload during interaction: If the chunk unloads during interaction, the session MUST close gracefully with no
+  currency/project side effects.
+- Bedrock fallback visuals: If a Java-only visual is unavailable to Bedrock clients, a fallback attire/marker MUST be
+  used without desync.
 
 ## Requirements *(mandatory)*
 
@@ -177,6 +186,20 @@ server restarts.
 - **FR-014 (Save/Migration)**: World-save formats MUST be versioned with forward-only migrations and backups.
 - **FR-015 (Localization)**: All user-facing text MUST be localizable.
 
+- **FR-016 (Custom Villagers)**: The system MUST introduce Custom Villagers whose appearance and interactions reflect
+  their culture and profession, distinct from vanilla villagers.
+  - **FR-016a (Appearance)**: Custom Villagers MUST present culture-specific appearance using vanilla-compatible
+    visuals (e.g., armor/cosmetics, custom names, metadata). Java may optionally use a resource pack; Bedrock must get
+    a visually coherent fallback with no client mods.
+  - **FR-016b (Interaction)**: Interactions MUST use a custom, non-vanilla flow (chat/actionbar or inventory GUI) that
+    supports dialogue, offers, and actions; the vanilla trading UI MUST be suppressed around Custom Villagers.
+  - **FR-016c (Data-Driven)**: Custom Villagers SHOULD be defined via data (culture, profession, attire, dialogue
+    keys) with schema validation.
+  - **FR-016d (Parity)**: Bedrock parity MUST be preserved (no client-restricted features). Where Java-only visuals
+    exist (e.g., resource-pack models), provide Bedrock-compatible fallbacks.
+  - **FR-016e (Performance)**: NPC AI and interaction logic MUST stay within the Medium profile budgets; per-NPC tick
+    cost must be observable.
+
 *NEEDS CLARIFICATION markers kept ≤ 3 as required.*
 
 ### Key Entities *(include if feature involves data)*
@@ -195,6 +218,9 @@ server restarts.
 - **RelationshipEdge**: villageA, villageB, status, score, lastChangedAt, modifiers.
 - **Property**: id, villageId, type(plot|house), size(S|M|L), lot bounds, price, furnishings, owner, permissions.
 - **PlayerProfile**: playerId, reputationMap, ownedProperties[], lastContributionAt.
+
+- **CustomVillager**: id, cultureId, professionId, appearanceProfile (attire/armor/colors/icon), dialogueKeys[],
+  interactionFlags, spawnRules, lastInteractionAt, tickBudgetHints.
 
 ## Success Criteria *(mandatory)*
 
@@ -239,6 +265,9 @@ Confirm the feature satisfies or has a plan for:
   inventory/UI (and auto-make change) with no glossary required.
 - Q: Initial launch cultures? → A: Roman, Viking, Middle Ages, Native American, British Colonial, Egyptian, Chinese.
 - Q: Property ownership limits per player? → A: One of each size for plots (S/M/L) and one of each size for houses (S/M/L).
+
+- Q: Do Custom Villagers use vanilla trading? → A: No. Vanilla trading is disabled for Custom Villagers; all offers are
+  handled via custom interaction flows with server-side validation. Bedrock receives an equivalent, mod-free UI path.
 
 ## Assumptions & Open Questions
 

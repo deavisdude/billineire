@@ -94,4 +94,11 @@ public class SchemaValidator {
     public boolean validateContract(String jsonData) {
         return validate("contract.json", jsonData);
     }
+    
+    /**
+     * Validate custom villager JSON
+     */
+    public boolean validateCustomVillager(String jsonData) {
+        return validate("custom-villager.json", jsonData);
+    }
 }

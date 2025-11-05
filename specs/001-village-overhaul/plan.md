@@ -19,6 +19,28 @@ Deliver a cross-edition village overhaul as a Paper/Purpur plugin with a determi
 **Constraints**: No client mods; all authority server-side; integer-only economy; parity fallbacks for Bedrock
 **Scale/Scope**: Medium profile: 100 players, 50 villages, 500 villagers, 200 pathing mobs
 
+### Custom Villagers
+
+Components:
+- CustomVillagerService: lifecycle (spawn/despawn/persist), culture/profession binding, village proximity caps.
+- VillagerAppearanceAdapter: culture-driven attire via vanilla-compatible visuals (armor, colors, nametags, teams); optional resource-pack models on Java; Bedrock-safe fallbacks.
+- VillagerInteractionController: intercepts PlayerInteract events, cancels vanilla trading on Custom Villagers, renders dialogue/actions using chat/actionbar and inventory GUI fallback; server-side validation and rate limits.
+- BedrockParityStrategy: no client mods; identical interaction flow; visual degradation is graceful and non-desyncing.
+
+Data:
+- Schema `schemas/custom-villager.json`: cultureId, professionId, appearanceProfile, dialogueKeys, spawnRules.
+
+Integration:
+- Hooks into CultureService for professions/attire; ProjectService and WalletService for trade→project flows; optional WorldGuard/FAWE to keep spawns within village regions.
+
+Performance budgets:
+- Cap Custom Villagers per village (configurable, default ≤ 10).
+- Target ≤ 0.05 ms average tick per Custom Villager; remain within ≤ 2 ms per-village amortized.
+- Throttle AI/interaction updates by distance and activity; never mutate world off-thread.
+
+Compatibility & Parity:
+- Add compatibility-matrix entries for Java-only and Java+Bedrock (Geyser/Floodgate) verifying interaction parity and acceptable visual fallbacks for Custom Villagers.
+
 ## Constitution Check
 
 Pre-design gate rationale (Plan A):
@@ -31,6 +53,9 @@ Pre-design gate rationale (Plan A):
 - Observability: Structured logs, correlation IDs, metrics counters (tick time per subsystem, queue lengths); debug flags; state hash snapshots for tests.
 - Cultural/Balance: Culture review checklist per culture; economy sink/source ledger; difficulty scaling guidelines.
 - Security/Anti-Exploit: Input validation; rate limits; permission gates; anti-dupe in wallet/loot; region protections for builds.
+
+- Custom Villagers — Observability: Add NPC metrics (npc.ticks, npc.tick_time_ms, npc.interactions_per_sec, npc.interaction_denied_rate, npc.open_sessions) and debug toggles for appearance profiles and interaction flow state.
+- Custom Villagers — Security: Enforce interaction rate limits (e.g., ≤2 opens/sec per player), server-side validation of selections, and deny if NPC moved/despawned mid-flow.
 
 Re-check after Phase 1 design: PASS (no violations identified).
 
