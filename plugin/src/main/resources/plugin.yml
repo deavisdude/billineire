@@ -18,11 +18,24 @@ commands:
     usage: /vo <subcommand>
     permission: villageoverhaul.admin
     aliases: [villageoverhaul]
+  villages:
+    description: List all villages with distances
+    usage: /villages
+    permission: villageoverhaul.use
+    aliases: [vlist]
+  village:
+    description: Village information and navigation
+    usage: /village <list|locate|nearest>
+    permission: villageoverhaul.use
+    aliases: [v]
 
 permissions:
   villageoverhaul.admin:
     description: Access to admin commands
     default: op
+  villageoverhaul.use:
+    description: Access to player village commands
+    default: true
   villageoverhaul.trade:
     description: Ability to trade with villagers
     default: true

@@ -103,6 +103,11 @@ public class VillageWorldgenAdapter implements Listener {
         var village = vs.createVillage(cultureId, name, world.getName(), baseX, y + 1, baseZ);
         logger.info("✓ Seeded test village '" + village.getName() + "' (" + cultureId + ") at "
                 + world.getName() + " @ (" + baseX + "," + (y + 1) + "," + baseZ + ")");
+        
+        // Generate initial projects for the village
+        if (plugin.getProjectGenerator() != null) {
+            plugin.getProjectGenerator().generateInitialProjects(village);
+        }
     }
 
     private void safeSet(World world, int x, int y, int z, Material material) {

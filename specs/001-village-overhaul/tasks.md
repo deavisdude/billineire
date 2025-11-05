@@ -81,12 +81,12 @@ CI deterministic sim (replace smoke placeholders):
 
 ### Implementation
 
-- [ ] T020 [P] [US1] Create models: Village, Project in `plugin/src/main/java/com/example/villageoverhaul/projects/`
-- [ ] T021 [P] [US1] Implement ProjectService in `plugin/src/main/java/com/example/villageoverhaul/projects/ProjectService.java`
-- [ ] T022 [US1] Implement Treasury integration (trade → contribution) in `plugin/src/main/java/com/example/villageoverhaul/economy/TradeListener.java`
-- [ ] T023 [P] [US1] Implement deterministic project progress + audit log in `ProjectService`
-- [ ] T024 [US1] Implement upgrade executor (FAWE/WorldGuard integration) in `plugin/src/main/java/com/example/villageoverhaul/projects/UpgradeExecutor.java`
-- [ ] T025 [US1] Add admin command `/vo project status` in `plugin/src/main/java/com/example/villageoverhaul/commands/ProjectCommands.java`
+- [X] T020 [P] [US1] Create models: Village, Project in `plugin/src/main/java/com/example/villageoverhaul/projects/`
+- [X] T021 [P] [US1] Implement ProjectService in `plugin/src/main/java/com/example/villageoverhaul/projects/ProjectService.java`
+- [X] T022 [US1] Implement Treasury integration (trade → contribution) in `plugin/src/main/java/com/example/villageoverhaul/economy/TradeListener.java`
+- [X] T023 [P] [US1] Implement deterministic project progress + audit log in `ProjectService`
+- [X] T024 [US1] Implement upgrade executor (FAWE/WorldGuard integration) in `plugin/src/main/java/com/example/villageoverhaul/projects/UpgradeExecutor.java`
+- [X] T025 [US1] Add admin command `/vo project status` in `plugin/src/main/java/com/example/villageoverhaul/commands/ProjectCommands.java`
 
 ### Optional tests (if requested)
 

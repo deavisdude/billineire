@@ -1,12 +1,17 @@
 package com.example.villageoverhaul;
 
 import com.example.villageoverhaul.admin.AdminHttpServer;
+import com.example.villageoverhaul.commands.ProjectCommands;
+import com.example.villageoverhaul.commands.VillageCommands;
 import com.example.villageoverhaul.core.TickEngine;
 import com.example.villageoverhaul.cultures.CultureService;
 import com.example.villageoverhaul.data.SchemaValidator;
+import com.example.villageoverhaul.economy.TradeListener;
 import com.example.villageoverhaul.economy.WalletService;
 import com.example.villageoverhaul.obs.Metrics;
 import com.example.villageoverhaul.persistence.JsonStore;
+import com.example.villageoverhaul.projects.ProjectGenerator;
+import com.example.villageoverhaul.projects.ProjectService;
 import com.example.villageoverhaul.villages.VillageService;
 import com.example.villageoverhaul.worldgen.VillageWorldgenAdapter;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -39,6 +44,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private AdminHttpServer adminServer;
     private VillageService villageService;
     private VillageWorldgenAdapter worldgenAdapter;
+    private ProjectService projectService;
+    private ProjectGenerator projectGenerator;
+    private TradeListener tradeListener;
+    private com.example.villageoverhaul.projects.UpgradeExecutor upgradeExecutor;
     
     @Override
     public void onEnable() {
@@ -100,10 +109,27 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         villageService = new VillageService();
         logger.info("✓ Village service initialized");
         
+        // Project service (US1)
+        projectService = new ProjectService(logger);
+        logger.info("✓ Project service initialized");
+        
+        // Project generator (auto-create projects for villages)
+        projectGenerator = new ProjectGenerator(this);
+        logger.info("✓ Project generator initialized");
+        
+        // Upgrade executor (US1: visual building upgrades)
+        upgradeExecutor = new com.example.villageoverhaul.projects.UpgradeExecutor(this);
+        logger.info("✓ Upgrade executor initialized");
+        
         // Tick engine
         tickEngine = new TickEngine(this);
         // Don't start yet - will register systems in user story phases
         logger.info("✓ Tick engine initialized (not started)");
+        
+        // Trade listener (US1: route trade proceeds to projects)
+        tradeListener = new TradeListener(this);
+        getServer().getPluginManager().registerEvents(tradeListener, this);
+        logger.info("✓ Trade listener registered");
         
         // Admin HTTP server (for CI/testing)
         try {
@@ -120,6 +146,19 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(worldgenAdapter, this);
         // In test/CI contexts, worlds may already be loaded: attempt immediate seed
         worldgenAdapter.seedIfPossible();
+        
+        // Register commands
+        ProjectCommands projectCommands = new ProjectCommands(this);
+        getCommand("vo").setExecutor(projectCommands);
+        getCommand("vo").setTabCompleter(projectCommands);
+        
+        VillageCommands villageCommands = new VillageCommands(this);
+        getCommand("villages").setExecutor(villageCommands);
+        getCommand("villages").setTabCompleter(villageCommands);
+        getCommand("village").setExecutor(villageCommands);
+        getCommand("village").setTabCompleter(villageCommands);
+        
+        logger.info("✓ Commands registered");
     }
     
     /**
@@ -157,4 +196,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public VillageService getVillageService() { return villageService; }
 
     public VillageWorldgenAdapter getWorldgenAdapter() { return worldgenAdapter; }
+    
+    public ProjectService getProjectService() { return projectService; }
+    
+    public ProjectGenerator getProjectGenerator() { return projectGenerator; }
+    
+    public com.example.villageoverhaul.projects.UpgradeExecutor getUpgradeExecutor() { return upgradeExecutor; }
 }
