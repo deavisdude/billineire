@@ -3,8 +3,24 @@ name: Compatibility & Deterministic Sim Tests
 on:
   push:
     branches: [ main, '**-village-overhaul' ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - 'plugin/settings.gradle'
+      - 'plugin/gradle/**'
+      - 'plugin/gradlew*'
+      - 'scripts/ci/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - 'plugin/settings.gradle'
+      - 'plugin/gradle/**'
+      - 'plugin/gradlew*'
+      - 'scripts/ci/**'
+      - '.github/workflows/**'
 
 jobs:
   build:
