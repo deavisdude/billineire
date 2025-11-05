@@ -75,13 +75,17 @@ Set-Content -Path "$ServerDir/spigot.yml" -Value $spigotYml
 
 Write-Host "Starting Paper server for $Ticks ticks..." -ForegroundColor Yellow
 
+# Get absolute paths for log files
+$serverLogPath = Join-Path (Resolve-Path $ServerDir) "server.log"
+$serverErrorLogPath = Join-Path (Resolve-Path $ServerDir) "server-error.log"
+
 # Start the server in the background with timeout
 $serverProcess = Start-Process -FilePath "java" `
     -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
                   "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
     -WorkingDirectory $ServerDir `
-    -RedirectStandardOutput "server.log" `
-    -RedirectStandardError "server-error.log" `
+    -RedirectStandardOutput $serverLogPath `
+    -RedirectStandardError $serverErrorLogPath `
     -PassThru `
     -NoNewWindow
 
