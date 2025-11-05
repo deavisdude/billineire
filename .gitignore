@@ -1,6 +1,7 @@
 # Java & Gradle
 *.class
 *.jar
+!gradle-wrapper.jar
 *.war
 *.ear
 *.log
