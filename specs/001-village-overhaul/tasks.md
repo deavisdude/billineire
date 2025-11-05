@@ -55,6 +55,25 @@ CI deterministic sim (replace smoke placeholders):
 
 ---
 
+## Phase 2.5: Village Foundation (Pre-requisite for US1)
+
+**Purpose**: Ensure culture-driven villages and minimal trade content exist so US1 can be tested independently.
+
+- [X] T019a Implement minimal read-only Admin API mappings per OpenAPI (wallets/villages) in `admin/AdminHttpServer.java`
+- [X] T019b [P] Add dungeon schema `plugin/src/main/resources/schemas/dungeon.json` and wire into validator
+- [X] T019c [P] Scaffold CultureService to load/validate cultures in `plugin/src/main/java/com/example/villageoverhaul/cultures/CultureService.java`
+- [X] T019d [P] Add culture datapack scaffolding under `plugin/src/main/resources/datapacks/villageoverhaul/cultures/`
+- [X] T019e Seeded test village fixture (FAWE/world placement or prebuilt structure) in `tests/fixtures/` with one upgrade path
+- [X] T019f Minimal trade offers per initial culture for US1 test in `datapacks/.../trades/`
+- [X] T019g [P] CI: validate culture packs with `SchemaValidator` and run a scenario that loads seeded village
+- [X] T019h Per-village perf metrics (≤2ms amortized) counters in `obs/Metrics.java` (record by village ID)
+- [X] T019i Economy anti-dupe and rate-limit tests for trade→treasury path in `plugin/src/test/java/.../EconomyAntiDupeTest.java`
+- [X] T019j Cultural authenticity checklist task/doc for each culture in `docs/culture-review.md`
+
+**Checkpoint**: Villages spawn/are placed with culture assignment; minimal trades available; CI scenario loads a seeded test village.
+
+---
+
 ## Phase 3: User Story 1 — Trade-Funded Village Projects (Priority: P1) 🎯 MVP
 
 **Goal**: Players trade; proceeds fund visible village projects and upgrade builds

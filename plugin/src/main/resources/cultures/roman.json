@@ -1,0 +1,11 @@
+{
+  "id": "roman",
+  "name": "Roman",
+  "structureSet": ["forum", "bathhouse", "villa_s", "villa_m", "villa_l"],
+  "professionSet": ["blacksmith", "farmer", "mason", "trader"],
+  "styleRules": {
+    "materials": ["stone", "quartz", "terracotta"],
+    "roof": "tile"
+  },
+  "attribution": "Historical Roman architecture - Placeholder culture for bootstrap testing"
+}

@@ -2,10 +2,12 @@ package com.example.villageoverhaul;
 
 import com.example.villageoverhaul.admin.AdminHttpServer;
 import com.example.villageoverhaul.core.TickEngine;
+import com.example.villageoverhaul.cultures.CultureService;
 import com.example.villageoverhaul.data.SchemaValidator;
 import com.example.villageoverhaul.economy.WalletService;
 import com.example.villageoverhaul.obs.Metrics;
 import com.example.villageoverhaul.persistence.JsonStore;
+import com.example.villageoverhaul.villages.VillageService;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.util.logging.Logger;
 
@@ -32,7 +34,9 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private JsonStore jsonStore;
     private SchemaValidator schemaValidator;
     private Metrics metrics;
+    private CultureService cultureService;
     private AdminHttpServer adminServer;
+    private VillageService villageService;
     
     @Override
     public void onEnable() {
@@ -81,9 +85,18 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         schemaValidator = new SchemaValidator(logger);
         logger.info("✓ Schema validator initialized");
         
+    // Culture service (data-driven cultural sets)
+    cultureService = new CultureService(logger, schemaValidator);
+    cultureService.load(this);
+    logger.info("✓ Culture service loaded " + cultureService.all().size() + " culture(s)");
+
         // Wallet service (economy)
         walletService = new WalletService();
         logger.info("✓ Wallet service initialized");
+        
+        // Village service (minimal for Phase 2.5)
+        villageService = new VillageService();
+        logger.info("✓ Village service initialized");
         
         // Tick engine
         tickEngine = new TickEngine(this);
@@ -130,4 +143,8 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public Metrics getMetrics() {
         return metrics;
     }
+
+    public CultureService getCultureService() { return cultureService; }
+    
+    public VillageService getVillageService() { return villageService; }
 }

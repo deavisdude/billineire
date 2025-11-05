@@ -96,7 +96,7 @@ public class WalletService {
                 }
                 
                 // Check overflow before crediting
-                if (to.getBalanceMillz() + millz > MAX_BALANCE_MILLZ) {
+                if (millz > MAX_BALANCE_MILLZ - to.getBalanceMillz()) {
                     return false; // Would overflow destination
                 }
                 
@@ -151,8 +151,9 @@ public class WalletService {
         }
         
         public synchronized boolean credit(long millz) {
-            if (balanceMillz + millz > MAX_BALANCE_MILLZ) {
-                return false; // Overflow guard
+            // Overflow guard: check if addition would exceed MAX_BALANCE_MILLZ
+            if (millz > MAX_BALANCE_MILLZ - balanceMillz) {
+                return false; // Would overflow
             }
             balanceMillz += millz;
             logTransaction(new Transaction(millz, "credit"));

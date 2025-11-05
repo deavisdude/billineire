@@ -1,0 +1,102 @@
+{
+  "$schema": "../../schemas/trade.json",
+  "cultureId": "roman",
+  "professions": {
+    "farmer": {
+      "trades": [
+        {
+          "id": "roman_farmer_wheat",
+          "inputs": [
+            { "item": "minecraft:wheat", "count": 20 }
+          ],
+          "outputs": [
+            { "type": "currency", "millz": 50 }
+          ],
+          "contributionToVillage": 100,
+          "reputationGain": 1,
+          "maxUses": -1,
+          "refreshTicks": 1200
+        },
+        {
+          "id": "roman_farmer_carrot",
+          "inputs": [
+            { "item": "minecraft:carrot", "count": 15 }
+          ],
+          "outputs": [
+            { "type": "currency", "millz": 40 }
+          ],
+          "contributionToVillage": 100,
+          "reputationGain": 1,
+          "maxUses": -1,
+          "refreshTicks": 1200
+        }
+      ]
+    },
+    "blacksmith": {
+      "trades": [
+        {
+          "id": "roman_blacksmith_iron",
+          "inputs": [
+            { "item": "minecraft:iron_ingot", "count": 10 }
+          ],
+          "outputs": [
+            { "type": "currency", "millz": 200 }
+          ],
+          "contributionToVillage": 100,
+          "reputationGain": 2,
+          "maxUses": -1,
+          "refreshTicks": 2400
+        },
+        {
+          "id": "roman_blacksmith_tools",
+          "inputs": [
+            { "type": "currency", "millz": 500 }
+          ],
+          "outputs": [
+            { "item": "minecraft:iron_sword", "count": 1, "enchantments": {"sharpness": 1} }
+          ],
+          "contributionToVillage": 0,
+          "reputationGain": 0,
+          "minReputation": 50,
+          "maxUses": 3,
+          "refreshTicks": 24000
+        }
+      ]
+    },
+    "mason": {
+      "trades": [
+        {
+          "id": "roman_mason_stone",
+          "inputs": [
+            { "item": "minecraft:stone", "count": 64 }
+          ],
+          "outputs": [
+            { "type": "currency", "millz": 30 }
+          ],
+          "contributionToVillage": 100,
+          "reputationGain": 1,
+          "maxUses": -1,
+          "refreshTicks": 1200
+        }
+      ]
+    },
+    "trader": {
+      "trades": [
+        {
+          "id": "roman_trader_bread",
+          "inputs": [
+            { "type": "currency", "millz": 20 }
+          ],
+          "outputs": [
+            { "item": "minecraft:bread", "count": 3 }
+          ],
+          "contributionToVillage": 0,
+          "reputationGain": 0,
+          "maxUses": -1,
+          "refreshTicks": 600
+        }
+      ]
+    }
+  },
+  "notes": "Initial Roman culture trade offers for US1 testing. contributionToVillage=100 means 100% of currency from trade goes to active village project."
+}

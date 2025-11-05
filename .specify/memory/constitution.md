@@ -60,15 +60,7 @@ before removal and an upgrade path.
 
 Rationale: Modular design enables parallel development, easier testing, and safe extensibility.
 
-### V. Cultural Authenticity & Ethics
-Represent cultures respectfully and avoid stereotypes. Content MUST be research-informed,
-provide localization hooks, and include opt-out/override mechanisms. A community/content review
-step is REQUIRED for new cultural sets. Include attribution and sources for inspiration where
-appropriate.
-
-Rationale: Authentic, respectful representation increases quality and inclusivity.
-
-### VI. Gameplay Balance & Economy Integrity
+### V. Gameplay Balance & Economy Integrity
 Design balanced progression across cultures and professions. Economy systems MUST have audited
 sources and sinks to prevent inflation/duplication exploits. Reputation changes MUST be earned via
 in-game actions and be server-validated. Dungeons scale difficulty and rewards by player/team
@@ -76,7 +68,7 @@ progression and world state.
 
 Rationale: Balanced mechanics sustain long-term servers and fair multiplayer.
 
-### VII. Extensibility & Data-Driven Content
+### VI. Extensibility & Data-Driven Content
 Prefer data-driven content (datapacks/JSON/registries/tags/loot tables) over code where possible.
 All cultural sets, structures, trades, professions, and dungeon layouts SHOULD be definable via
 data, with validation schemas. Provide stable extension points and minimal plugin interfaces so
@@ -84,7 +76,7 @@ third parties can add content without forking.
 
 Rationale: Data-first design accelerates content updates and community contributions.
 
-### VIII. Observability, Testing, and QA Discipline
+### VII. Observability, Testing, and QA Discipline
 Provide structured logging (with correlation IDs), debug toggles, and performance counters for
 per-system tick time. Automated tests MUST include: unit tests for core logic, contract tests for
 network payloads, cross-play integration tests, and performance regression tests against the Medium
@@ -92,13 +84,13 @@ profile. Ship a headless simulation harness to advance ticks and assert invarian
 
 Rationale: Visibility and rigorous testing prevent regressions in complex simulations.
 
-### IX. Save Compatibility & Migration Safety
+### VIII. Save Compatibility & Migration Safety
 World-save schemas MUST be versioned. Any breaking change requires a forward-only migration with a
 backup step and verification. Never silently drop data. Document downgrade limitations explicitly.
 
 Rationale: Servers depend on safe upgrades over long-lived worlds.
 
-### X. Security & Anti-Exploit Posture
+### IX. Security & Anti-Exploit Posture
 Validate all client inputs. Never trust client-side reputation, currency, or loot claims.
 Rate-limit sensitive interactions. Add server-configurable permissions/ops gates for admin-facing
 tools. Document known exploit mitigations and test for dupe paths in CI where feasible.

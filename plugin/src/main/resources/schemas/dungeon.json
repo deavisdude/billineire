@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/schemas/dungeon.json",
+  "title": "Dungeon Definition",
+  "type": "object",
+  "required": ["id", "layoutRef", "seedStrategy", "enemySets", "lootTables"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+$"
+    },
+    "layoutRef": {
+      "type": "string",
+      "description": "Reference to a layout/template identifier"
+    },
+    "seedStrategy": {
+      "type": "string",
+      "enum": ["world-seed-derived", "fixed", "per-instance"],
+      "description": "How dungeon RNG is seeded"
+    },
+    "difficultyScale": {
+      "type": "object",
+      "properties": {
+        "base": { "type": "number", "minimum": 0 },
+        "perPlayer": { "type": "number", "minimum": 0 },
+        "perWealthTier": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "enemySets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["factionId", "spawnRules"],
+        "properties": {
+          "factionId": { "type": "string" },
+          "spawnRules": {
+            "type": "object",
+            "properties": {
+              "maxMobs": { "type": "integer", "minimum": 0 },
+              "waves": { "type": "integer", "minimum": 1 },
+              "intervalTicks": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "lootTables": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "objectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["kill-boss", "activate-beacons", "clear-waves"] },
+          "count": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

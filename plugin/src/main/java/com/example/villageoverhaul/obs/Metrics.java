@@ -23,12 +23,14 @@ public class Metrics {
     private final Logger logger;
     private final Map<String, Long> counters;
     private final Map<String, TickTimeStats> tickTimeStats;
+    private final Map<UUID, TickTimeStats> villageTickTimeStats; // Per-village metrics for ≤2ms budget
     private boolean debugEnabled;
     
     public Metrics(Logger logger) {
         this.logger = logger;
         this.counters = new ConcurrentHashMap<>();
         this.tickTimeStats = new ConcurrentHashMap<>();
+        this.villageTickTimeStats = new ConcurrentHashMap<>();
         this.debugEnabled = false;
     }
     
@@ -59,6 +61,35 @@ public class Metrics {
     public void recordTickTime(String subsystem, long micros) {
         tickTimeStats.computeIfAbsent(subsystem, k -> new TickTimeStats())
             .record(micros);
+    }
+    
+    /**
+     * Record tick time for a specific village (microseconds)
+     * Constitution: Per-village tick cost ≤ 2ms amortized
+     */
+    public void recordVillageTickTime(UUID villageId, long micros) {
+        villageTickTimeStats.computeIfAbsent(villageId, k -> new TickTimeStats())
+            .record(micros);
+            
+        // Warn if village exceeds 2ms budget (2000 micros)
+        if (micros > 2000) {
+            logger.warning(String.format("Village %s exceeded 2ms tick budget: %d μs", 
+                villageId, micros));
+        }
+    }
+    
+    /**
+     * Get tick time statistics for a specific village
+     */
+    public TickTimeStats getVillageTickTimeStats(UUID villageId) {
+        return villageTickTimeStats.get(villageId);
+    }
+    
+    /**
+     * Get all village tick time stats
+     */
+    public Map<UUID, TickTimeStats> getAllVillageTickTimeStats() {
+        return new HashMap<>(villageTickTimeStats);
     }
     
     /**

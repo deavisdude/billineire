@@ -1,5 +1,10 @@
 package com.example.villageoverhaul.admin;
 
+import com.example.villageoverhaul.VillageOverhaulPlugin;
+import com.example.villageoverhaul.economy.WalletService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
@@ -82,30 +87,60 @@ public class AdminHttpServer {
     private static class WalletsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            String method = exchange.getRequestMethod();
-            String path = exchange.getRequestURI().getPath();
-            
-            // Stub: Return 501 Not Implemented for now
-            String response = "{\"error\":\"Not implemented yet\"}";
-            exchange.sendResponseHeaders(501, response.length());
-            OutputStream os = exchange.getResponseBody();
-            os.write(response.getBytes());
-            os.close();
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String msg = "{\"error\":\"Method Not Allowed\"}";
+                exchange.getResponseHeaders().add("Allow", "GET");
+                exchange.sendResponseHeaders(405, msg.length());
+                try (OutputStream os = exchange.getResponseBody()) { os.write(msg.getBytes()); }
+                return;
+            }
+
+            WalletService walletService = VillageOverhaulPlugin.getInstance().getWalletService();
+            ObjectMapper om = new ObjectMapper();
+            ArrayNode arr = om.createArrayNode();
+            walletService.getAllWallets().forEach((uuid, wallet) -> {
+                ObjectNode node = om.createObjectNode();
+                node.put("ownerId", uuid.toString());
+                node.put("balanceMillz", wallet.getBalanceMillz());
+                arr.add(node);
+            });
+            byte[] bytes = om.createObjectNode().set("wallets", arr).toString().getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
         }
     }
     
     /**
      * Villages endpoints
-     * TODO: Wire to VillageService in Phase 3
+     * GET /v1/villages - List all villages with basic info
      */
     private static class VillagesHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            String response = "{\"villages\":[]}";
-            exchange.sendResponseHeaders(200, response.length());
-            OutputStream os = exchange.getResponseBody();
-            os.write(response.getBytes());
-            os.close();
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String msg = "{\"error\":\"Method Not Allowed\"}";
+                exchange.getResponseHeaders().add("Allow", "GET");
+                exchange.sendResponseHeaders(405, msg.length());
+                try (OutputStream os = exchange.getResponseBody()) { os.write(msg.getBytes()); }
+                return;
+            }
+
+            var villageService = VillageOverhaulPlugin.getInstance().getVillageService();
+            ObjectMapper om = new ObjectMapper();
+            ArrayNode arr = om.createArrayNode();
+            villageService.getAllVillages().forEach(village -> {
+                ObjectNode node = om.createObjectNode();
+                node.put("id", village.getId().toString());
+                node.put("cultureId", village.getCultureId());
+                node.put("name", village.getName());
+                node.put("wealthMillz", village.getWealthMillz());
+                arr.add(node);
+            });
+            byte[] bytes = om.createObjectNode().set("villages", arr).toString().getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
         }
     }
     

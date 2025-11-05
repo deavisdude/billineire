@@ -1,0 +1,68 @@
+{
+  "village": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "cultureId": "roman",
+    "name": "Test Village Alpha",
+    "location": {
+      "world": "world",
+      "x": 0,
+      "y": 64,
+      "z": 0
+    },
+    "wealthMillz": 0,
+    "population": 5
+  },
+  "structures": [
+    {
+      "id": "forum_01",
+      "templateId": "roman_forum_tier1",
+      "location": { "x": 0, "y": 64, "z": 0 },
+      "tier": 1
+    },
+    {
+      "id": "villa_01",
+      "templateId": "roman_villa_s_tier1",
+      "location": { "x": 20, "y": 64, "z": 0 },
+      "tier": 1
+    }
+  ],
+  "projects": [
+    {
+      "id": "project_forum_upgrade",
+      "buildingRef": "forum_01",
+      "name": "Forum Expansion",
+      "costMillz": 10000,
+      "progressMillz": 0,
+      "status": "active",
+      "upgradeTemplate": "roman_forum_tier2",
+      "unlockEffects": [
+        "add_trade_slot",
+        "add_trade_slot"
+      ]
+    }
+  ],
+  "trades": [
+    {
+      "npcId": "trader_01",
+      "profession": "farmer",
+      "offers": [
+        {
+          "inputs": [{ "item": "wheat", "count": 20 }],
+          "outputs": [{ "item": "vo:currency", "millz": 50 }],
+          "contributionPercent": 100
+        }
+      ]
+    },
+    {
+      "npcId": "trader_02",
+      "profession": "blacksmith",
+      "offers": [
+        {
+          "inputs": [{ "item": "iron_ingot", "count": 10 }],
+          "outputs": [{ "item": "vo:currency", "millz": 200 }],
+          "contributionPercent": 100
+        }
+      ]
+    }
+  ]
+}
