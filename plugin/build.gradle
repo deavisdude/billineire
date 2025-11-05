@@ -1,0 +1,119 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'com.example'
+version = '0.1.0-SNAPSHOT'
+description = 'Village Overhaul - Millénaire-inspired village mod for modern Minecraft'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+    
+    // Paper API
+    maven {
+        name = 'papermc'
+        url = 'https://repo.papermc.io/repository/maven-public/'
+    }
+    
+    // Spigot/Bukkit
+    maven {
+        name = 'spigot'
+        url = 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/'
+    }
+    
+    // Vault
+    maven {
+        name = 'jitpack'
+        url = 'https://jitpack.io'
+    }
+    
+    // LuckPerms
+    maven {
+        name = 'luck'
+        url = 'https://repo.lucko.me/'
+    }
+    
+    // WorldGuard/FAWE
+    maven {
+        name = 'enginehub'
+        url = 'https://maven.enginehub.org/repo/'
+    }
+}
+
+dependencies {
+    // Paper API (1.20+)
+    compileOnly 'io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT'
+    
+    // Adventure API (included in Paper but explicit for clarity)
+    compileOnly 'net.kyori:adventure-api:4.14.0'
+    compileOnly 'net.kyori:adventure-text-minimessage:4.14.0'
+    
+    // Vault (economy bridge)
+    compileOnly 'com.github.MilkBowl:VaultAPI:1.7.1'
+    
+    // LuckPerms API
+    compileOnly 'net.luckperms:api:5.4'
+    
+    // WorldGuard (optional, for regions)
+    compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
+    
+    // FAWE (optional, for safe edits)
+    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.8.0') {
+        transitive = false
+    }
+    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Bukkit:2.8.0') {
+        transitive = false
+    }
+    
+    // Jackson for JSON (deterministic parsing)
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.3'
+    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.15.3'
+    
+    // JSON Schema validation
+    implementation 'com.networknt:json-schema-validator:1.0.87'
+    
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testImplementation 'com.github.seeseemelk:MockBukkit-v1.20:3.9.0'
+    testImplementation 'org.mockito:mockito-core:5.7.0'
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+    }
+}
+
+shadowJar {
+    archiveClassifier.set('')
+    
+    // Relocate Jackson to avoid conflicts
+    relocate 'com.fasterxml.jackson', 'com.example.villageoverhaul.libs.jackson'
+    
+    minimize()
+}
+
+tasks.build.dependsOn tasks.shadowJar
+
+processResources {
+    filesMatching('plugin.yml') {
+        expand(
+            'version': project.version,
+            'description': project.description
+        )
+    }
+}

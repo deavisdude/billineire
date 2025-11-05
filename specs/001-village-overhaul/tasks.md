@@ -22,18 +22,18 @@ description: "Task list for implementing Village Overhaul — Plan A (Plugin-fir
 
 **Purpose**: Project initialization and CI wiring
 
-- [ ] T001 Create Gradle plugin project structure in plugin/ per plan.md
-- [ ] T002 Initialize Gradle build with dependencies in `plugin/build.gradle` (Paper API, Adventure, Vault, LuckPerms, WorldGuard, FAWE, Jackson, JUnit, MockBukkit)
-- [ ] T003 Create plugin descriptor at `plugin/src/main/resources/plugin.yml`
-- [ ] T004 [P] Create main plugin class at `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java`
-- [ ] T005 [P] Add Gradle settings and wrapper in `plugin/` (settings.gradle, gradlew, gradlew.bat)
-- [ ] T006 Configure .gitignore and editorconfig for Java/Gradle in repository root
+- [X] T001 Create Gradle plugin project structure in plugin/ per plan.md
+- [X] T002 Initialize Gradle build with dependencies in `plugin/build.gradle` (Paper API, Adventure, Vault, LuckPerms, WorldGuard, FAWE, Jackson, JUnit, MockBukkit)
+- [X] T003 Create plugin descriptor at `plugin/src/main/resources/plugin.yml`
+- [X] T004 [P] Create main plugin class at `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java`
+- [X] T005 [P] Add Gradle settings and wrapper in `plugin/` (settings.gradle, gradlew, gradlew.bat)
+- [X] T006 Configure .gitignore and editorconfig for Java/Gradle in repository root
 
 CI deterministic sim (replace smoke placeholders):
-- [ ] T007 Create headless run script `scripts/ci/sim/run-headless-paper.ps1` to boot Paper with Geyser and plugin
-- [ ] T008 [P] Add N-tick sim runner `scripts/ci/sim/run-scenario.ps1` (loads world seed, advances N ticks)
-- [ ] T009 [P] Implement state-hash assert script `scripts/ci/sim/assert-state.ps1` (economy/projects snapshots)
-- [ ] T010 Update workflow `.github/workflows/compatibility-smoke.yml` to invoke sim scripts and gate on assertions
+- [X] T007 Create headless run script `scripts/ci/sim/run-headless-paper.ps1` to boot Paper with Geyser and plugin
+- [X] T008 [P] Add N-tick sim runner `scripts/ci/sim/run-scenario.ps1` (loads world seed, advances N ticks)
+- [X] T009 [P] Implement state-hash assert script `scripts/ci/sim/assert-state.ps1` (economy/projects snapshots)
+- [X] T010 Update workflow `.github/workflows/compatibility-smoke.yml` to invoke sim scripts and gate on assertions
 
 ---
 
@@ -41,15 +41,15 @@ CI deterministic sim (replace smoke placeholders):
 
 **Purpose**: Core infrastructure required before any user story
 
-- [ ] T011 Implement tick scheduler/engine in `plugin/src/main/java/com/example/villageoverhaul/core/TickEngine.java`
-- [ ] T012 [P] Implement WalletService (Dollaz, Millz int64) in `plugin/src/main/java/com/example/villageoverhaul/economy/WalletService.java`
-- [ ] T013 [P] Implement Persistence (JSON) with versioning in `plugin/src/main/java/com/example/villageoverhaul/persistence/JsonStore.java`
-- [ ] T014 Define JSON schemas in `plugin/src/main/resources/schemas/{culture.json,project.json,contract.json}`
-- [ ] T015 [P] Implement schema validator in `plugin/src/main/java/com/example/villageoverhaul/data/SchemaValidator.java`
-- [ ] T016 Wire Observability (structured logs, tick metrics) in `plugin/src/main/java/com/example/villageoverhaul/obs/`*
-- [ ] T017 [P] Add MockBukkit test harness `plugin/src/test/java/com/example/villageoverhaul/TickHarnessTest.java`
-- [ ] T018 [P] Bootstrap minimal HTTP admin server (for contracts API) in `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
-- [ ] T019 Implement OpenAPI endpoints mapping per `specs/001-village-overhaul/contracts/openapi.yaml`
+- [X] T011 Implement tick scheduler/engine in `plugin/src/main/java/com/example/villageoverhaul/core/TickEngine.java`
+- [X] T012 [P] Implement WalletService (Dollaz, Millz int64) in `plugin/src/main/java/com/example/villageoverhaul/economy/WalletService.java`
+- [X] T013 [P] Implement Persistence (JSON) with versioning in `plugin/src/main/java/com/example/villageoverhaul/persistence/JsonStore.java`
+- [X] T014 Define JSON schemas in `plugin/src/main/resources/schemas/{culture.json,project.json,contract.json}`
+- [X] T015 [P] Implement schema validator in `plugin/src/main/java/com/example/villageoverhaul/data/SchemaValidator.java`
+- [X] T016 Wire Observability (structured logs, tick metrics) in `plugin/src/main/java/com/example/villageoverhaul/obs/`*
+- [X] T017 [P] Add MockBukkit test harness `plugin/src/test/java/com/example/villageoverhaul/TickHarnessTest.java`
+- [X] T018 [P] Bootstrap minimal HTTP admin server (for contracts API) in `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
+- [X] T019 Implement OpenAPI endpoints mapping per `specs/001-village-overhaul/contracts/openapi.yaml`
 
 **Checkpoint**: Foundation ready → begin user stories
 

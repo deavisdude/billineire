@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://villageoverhaul.example.com/schemas/culture.json",
+  "title": "Village Culture",
+  "description": "Defines a village culture with styles, professions, and trades",
+  "type": "object",
+  "required": ["id", "name", "structureSet", "professionSet"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Unique culture identifier (lowercase, alphanumeric, underscores)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50,
+      "description": "Display name (localizable)"
+    },
+    "localizationKey": {
+      "type": "string",
+      "description": "Localization key prefix"
+    },
+    "structureSet": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Structure template IDs for this culture"
+    },
+    "professionSet": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Profession IDs available in this culture"
+    },
+    "styleRules": {
+      "type": "object",
+      "properties": {
+        "blockPalette": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Primary building blocks"
+        },
+        "decorBlocks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "roofStyle": {
+          "type": "string",
+          "enum": ["flat", "peaked", "domed", "tiered"]
+        }
+      }
+    },
+    "attribution": {
+      "type": "string",
+      "description": "Cultural research source/attribution"
+    }
+  }
+}

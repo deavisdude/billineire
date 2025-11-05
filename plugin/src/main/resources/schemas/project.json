@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://villageoverhaul.example.com/schemas/project.json",
+  "title": "Village Project",
+  "description": "A village building project funded by player trades",
+  "type": "object",
+  "required": ["id", "villageId", "buildingRef", "costMillz", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique project ID"
+    },
+    "villageId": {
+      "type": "string",
+      "description": "Owning village ID"
+    },
+    "buildingRef": {
+      "type": "string",
+      "description": "Structure template reference"
+    },
+    "costMillz": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807,
+      "description": "Total cost in Millz (int64)"
+    },
+    "progressMillz": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807,
+      "description": "Current progress in Millz"
+    },
+    "contributors": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "description": "Map of player UUID to contributed Millz"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "active", "complete"],
+      "description": "Project lifecycle status"
+    },
+    "unlockEffects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Effects triggered on completion"
+    },
+    "createdAt": {
+      "type": "integer",
+      "description": "Creation timestamp (epoch millis)"
+    },
+    "completedAt": {
+      "type": "integer",
+      "description": "Completion timestamp (epoch millis)"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+# Java & Gradle
+*.class
+*.jar
+*.war
+*.ear
+*.log
+*.ctxt
+.mtj.tmp/
+*.iml
+*.ipr
+*.iws
+.idea/
+.gradle/
+build/
+out/
+target/
+bin/
+
+# Plugin specific
+plugin/gradle-8.5/
+plugin/gradle-8.5-bin.zip
+
+# IDE
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*.bak
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.secret
+
+# Test artifacts
+test-server/
+test-worlds/
+crash-reports/
+logs/
+
+# Build artifacts
+dist/
+artifacts/
+
+# Dependency caches
+.m2/
+.ivy2/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
