@@ -50,6 +50,64 @@ jobs:
           path: plugin/build/libs/*.jar
           retention-days: 7
 
+  culture-validation:
+    name: Culture Schema Validation
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate culture files
+        shell: pwsh
+        run: ./scripts/ci/sim/validate-cultures.ps1
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: culture-validation-report
+          path: culture-validation-report.json
+          retention-days: 7
+
+  custom-villager-interaction:
+    name: Custom Villager Interaction Test (T019r)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download plugin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: village-overhaul-plugin
+          path: plugin/build/libs/
+
+      - name: Setup headless Paper server
+        shell: pwsh
+        run: ./scripts/ci/sim/run-headless-paper.ps1 -AcceptEula
+
+      - name: Run custom villager interaction test
+        shell: pwsh
+        run: ./scripts/ci/sim/test-custom-villager-interaction.ps1 -Ticks 300
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-villager-test-results
+          path: custom-villager-test-results.json
+          retention-days: 7
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-villager-server-logs
+          path: test-server/test-custom-villager.log
+          retention-days: 7
+
   deterministic-sim:
     name: Deterministic Simulation Tests
     runs-on: ubuntu-latest
