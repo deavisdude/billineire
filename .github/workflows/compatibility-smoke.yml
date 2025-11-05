@@ -1,0 +1,33 @@
+name: Compatibility Smoke Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  smoke:
+    name: Run Compatibility Smoke Matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Display compatibility matrix
+        run: |
+          echo "Compatibility Matrix"
+          echo "===================="
+          cat docs/compatibility-matrix.md
+
+      - name: Java vanilla smoke test (placeholder)
+        shell: pwsh
+        run: ./scripts/ci/smoke/java-vanilla.ps1
+
+      - name: Java + Bedrock bridge smoke test (placeholder)
+        shell: pwsh
+        run: ./scripts/ci/smoke/java-bedrock.ps1
+
+      - name: Java + bridge + mod stack smoke test (placeholder)
+        shell: pwsh
+        run: ./scripts/ci/smoke/java-bridge-mods.ps1

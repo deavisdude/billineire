@@ -1,0 +1,189 @@
+openapi: 3.1.0
+info:
+  title: Village Overhaul Admin/Diagnostics API
+  version: 0.1.0
+  description: >-
+    Minimal REST API to support CI tests, admin ops, and deterministic sims.
+    Not player-facing; plugin remains server-authoritative.
+servers:
+  - url: http://localhost:8080
+    description: Local test harness
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: OK
+  /v1/wallets/{playerId}:
+    get:
+      summary: Get player wallet balance and breakdown
+      parameters:
+        - in: path
+          name: playerId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+  /v1/wallets/transfer:
+    post:
+      summary: Transfer Millz between wallets (admin/test only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '200':
+          description: Transfer result
+  /v1/villages:
+    get:
+      summary: List villages
+      responses:
+        '200':
+          description: Villages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Village'
+  /v1/villages/{id}/projects:
+    get:
+      summary: List projects for a village
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+  /v1/villages/{id}/projects/contribute:
+    post:
+      summary: Contribute Millz to the active project
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContributionRequest'
+      responses:
+        '200':
+          description: Updated project state
+  /v1/contracts/accept:
+    post:
+      summary: Accept a contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptContractRequest'
+      responses:
+        '200':
+          description: Accepted
+  /v1/contracts/{id}/complete:
+    post:
+      summary: Mark contract completed (server-validated)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Completion recorded
+  /v1/properties/purchase:
+    post:
+      summary: Purchase a property (enforces ownership limits and funds)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PropertyPurchaseRequest'
+      responses:
+        '200':
+          description: Purchase successful
+components:
+  schemas:
+    Wallet:
+      type: object
+      properties:
+        ownerId:
+          type: string
+        balanceMillz:
+          type: integer
+          format: int64
+        breakdown:
+          type: object
+          properties:
+            trills:
+              type: integer
+            billz:
+              type: integer
+            millz:
+              type: integer
+    TransferRequest:
+      type: object
+      required: [fromId, toId, amountMillz]
+      properties:
+        fromId: { type: string }
+        toId: { type: string }
+        amountMillz: { type: integer, format: int64, minimum: 1 }
+    Village:
+      type: object
+      properties:
+        id: { type: string }
+        cultureId: { type: string }
+        wealthMillz: { type: integer, format: int64 }
+        population: { type: integer }
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        villageId: { type: string }
+        buildingRef: { type: string }
+        costMillz: { type: integer, format: int64 }
+        progressMillz: { type: integer, format: int64 }
+        status: { type: string, enum: [pending, active, complete] }
+    ContributionRequest:
+      type: object
+      required: [playerId, amountMillz]
+      properties:
+        playerId: { type: string }
+        amountMillz: { type: integer, format: int64, minimum: 1 }
+    AcceptContractRequest:
+      type: object
+      required: [playerId, contractId]
+      properties:
+        playerId: { type: string }
+        contractId: { type: string }
+    PropertyPurchaseRequest:
+      type: object
+      required: [playerId, propertyId]
+      properties:
+        playerId: { type: string }
+        propertyId: { type: string }
