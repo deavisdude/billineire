@@ -1,16 +1,17 @@
 <!--
 Sync Impact Report
-- Version change: N/A → 1.0.0
-- Modified principles: Template placeholders → Concrete Principles I–X
-- Added sections: Principles VI–X; Additional engineering standards; Development workflow & quality gates; Expanded governance
+- Version change: 1.0.0 → 1.1.0
+- Modified sections:
+  - Engineering Standards & Constraints (added "Scripting & CI Portability")
+  - Development Workflow, Review Process, and Quality Gates (added scripting gate)
+- Added sections: None (material expansion of existing sections)
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (Constitution Check gates added)
-	- ✅ .specify/templates/spec-template.md (Constitution Gates Checklist added)
-	- ✅ .specify/templates/tasks-template.md (Constitution-driven task notes added)
-	- ⚠ .specify/templates/commands/* (no commands directory found; N/A)
-- Deferred TODOs:
-	- TODO(RATIFICATION_DATE): Original adoption date unknown; set during first ratification meeting
+	- ✅ .specify/templates/plan-template.md (added scripting/CI portability gate)
+	- ✅ .specify/templates/spec-template.md (gates checklist includes scripting/CI)
+	- ✅ .specify/templates/tasks-template.md (added scripting/CI task type)
+	- ⚠ .specify/templates/commands/* (not present; N/A)
+- Follow-up TODOs: None
 -->
 
 # Spec Billineire Constitution
@@ -113,6 +114,22 @@ Rationale: Multiplayer at scale attracts exploits; prevention protects the econo
 	points; feature flags to soft-disable incompatible modules.
 - Documentation: Public APIs and data schemas MUST be documented and versioned.
 
+### Scripting & CI Portability (Windows PowerShell 5.1 baseline)
+
+All repository scripts and CI helpers MUST be robust across common developer
+environments, with Windows PowerShell 5.1 as the minimum baseline for Windows.
+
+- Prefer ASCII-only log/output in CI. Avoid Unicode glyphs such as checkmark/cross
+	(e.g., ✓, ✗, ⚠). Use ASCII equivalents: OK, X, and !.
+- PowerShell regex patterns MUST be single-quoted to avoid unintended escapes
+	(e.g., use 'npc\.tick_time_ms[:\s]+([0-9]+\.?[0-9]*)').
+- Do not rely on "\d" inside double-quoted strings; prefer explicit classes like
+	[0-9]. Escape square brackets and parentheses as needed when not single-quoted.
+- Keep startup log parsing resilient: prefer a simple 'Done' substring match over
+	highly specific timestamped patterns.
+- Validate scripts with Get-Command -Syntax where possible and ensure they fail
+	fast with clear, ASCII-only error messages.
+
 ## Development Workflow, Review Process, and Quality Gates
 
 Every feature/PR MUST pass the following Constitution Check before merge:
@@ -128,6 +145,11 @@ Every feature/PR MUST pass the following Constitution Check before merge:
 - Observability: Ensure logs/metrics for new systems include identifiers and are behind debug flags.
 - Cultural/Balance: Attach cultural review notes and balance rationale for economy/dungeon changes.
 - Security: Note input validation and permission gates; include anti-exploit checks if applicable.
+
+- Scripting & CI Portability: Verify test/CI scripts are PowerShell 5.1 compatible
+	on Windows, avoid Unicode glyphs in logs, use single-quoted regex patterns with
+	explicit [0-9] character classes, and keep server readiness detection simple
+	(e.g., substring 'Done').
 
 Gate failures require a written justification in the plan’s Complexity Tracking section and an
 explicit follow-up task with an owner and due date.
@@ -147,4 +169,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.0.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-04
+**Version**: 1.1.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-05

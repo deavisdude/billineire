@@ -27,4 +27,9 @@ Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 
 <!-- MANUAL ADDITIONS START -->
 When completing tasks, stop and test your work, then return suggestions and a summary to the user. Do not continue to the next task until instructed.
+Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
+    baseline. Use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), single-quoted
+    regex with explicit [0-9] classes (avoid \d in double-quoted strings), escape
+    [] and () when needed, and favor simple readiness checks (substring 'Done').
+    Validate with `Get-Command -Syntax` in CI to fail fast on parser errors.
 <!-- MANUAL ADDITIONS END -->

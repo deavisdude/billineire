@@ -1,0 +1,10 @@
+{
+    "passed":  true,
+    "timestamp":  "2025-11-05T18:36:33.9454870-05:00",
+    "validations":  {
+                        "interaction_logged":  true,
+                        "custom_villager_spawned":  true,
+                        "project_contribution_made":  true
+                    },
+    "testBedrock":  false
+}

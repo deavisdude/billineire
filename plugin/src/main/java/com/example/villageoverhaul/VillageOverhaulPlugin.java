@@ -2,6 +2,7 @@ package com.example.villageoverhaul;
 
 import com.example.villageoverhaul.admin.AdminHttpServer;
 import com.example.villageoverhaul.commands.ProjectCommands;
+import com.example.villageoverhaul.commands.TestCommands;
 import com.example.villageoverhaul.commands.VillageCommands;
 import com.example.villageoverhaul.core.TickEngine;
 import com.example.villageoverhaul.cultures.CultureService;
@@ -142,8 +143,8 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         villagerAppearanceAdapter = new VillagerAppearanceAdapter(logger);
         logger.info("✓ Villager appearance adapter initialized");
         
-        // Villager interaction controller (Phase 2.6)
-        villagerInteractionController = new VillagerInteractionController(logger, customVillagerService, metrics);
+        // Villager interaction controller (Phase 2.6) - now with US1 integration
+        villagerInteractionController = new VillagerInteractionController(this, logger, customVillagerService, metrics);
         getServer().getPluginManager().registerEvents(villagerInteractionController, this);
         logger.info("✓ Villager interaction controller registered");
         
@@ -152,7 +153,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Don't start yet - will register systems in user story phases
         logger.info("✓ Tick engine initialized (not started)");
         
-        // Trade listener (US1: route trade proceeds to projects)
+        // Trade listener (US1: route trade proceeds to projects for vanilla villagers)
         tradeListener = new TradeListener(this);
         getServer().getPluginManager().registerEvents(tradeListener, this);
         logger.info("✓ Trade listener registered");
@@ -177,6 +178,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         ProjectCommands projectCommands = new ProjectCommands(this);
         getCommand("vo").setExecutor(projectCommands);
         getCommand("vo").setTabCompleter(projectCommands);
+        
+        // Register test commands (for CI/testing only - disable in production via permissions)
+        TestCommands testCommands = new TestCommands(this, customVillagerService, villagerInteractionController);
+        getCommand("votest").setExecutor(testCommands);
+        getCommand("votest").setTabCompleter(testCommands);
+        logger.info("✓ Test commands registered (votest)");
         
         VillageCommands villageCommands = new VillageCommands(this);
         getCommand("villages").setExecutor(villageCommands);

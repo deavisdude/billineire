@@ -45,6 +45,12 @@ For this project, every plan MUST address and prove compliance with these gates:
 - Cultural/Balance (if applicable): Provide cultural review reference and balance rationale.
 - Security/Anti-Exploit: Describe input validation, permissions, and potential exploit surfaces.
 
+- Scripting & CI Portability: Confirm CI/test scripts are Windows PowerShell 5.1
+  compatible, avoid Unicode glyphs in logs (use ASCII: OK/X/!), use single-quoted
+  regex with explicit character classes (e.g., [0-9] instead of \d in double-quoted
+  strings), escape [] when needed, and keep server readiness detection simple (e.g.,
+  substring 'Done').
+
 ## Project Structure
 
 ### Documentation (this feature)

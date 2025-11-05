@@ -18,6 +18,10 @@ commands:
     usage: /vo <subcommand>
     permission: villageoverhaul.admin
     aliases: [villageoverhaul]
+  votest:
+    description: Village Overhaul test commands (CI/testing only)
+    usage: /votest <spawn-villager|trigger-interaction|metrics|performance>
+    permission: villageoverhaul.test
   villages:
     description: List all villages with distances
     usage: /villages
@@ -32,6 +36,9 @@ commands:
 permissions:
   villageoverhaul.admin:
     description: Access to admin commands
+    default: op
+  villageoverhaul.test:
+    description: Access to test commands (for CI automation)
     default: op
   villageoverhaul.use:
     description: Access to player village commands

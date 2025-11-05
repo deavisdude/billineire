@@ -34,6 +34,11 @@ description: "Task list template for feature implementation"
 - Observability: structured logs/metrics and debug flags for new systems
 - Security/balance: input validation, permission checks, exploit/dupe test cases; balance audits
 
+- Scripting/CI: Ensure headless test and CI scripts are Windows PowerShell 5.1
+  compatible, use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), prefer single-quoted
+  regex patterns with explicit [0-9] classes, escape [] when necessary, and use
+  resilient readiness checks (e.g., substring 'Done').
+
 <!-- 
   ============================================================================
   IMPORTANT: The tasks below are SAMPLE TASKS for illustration purposes only.

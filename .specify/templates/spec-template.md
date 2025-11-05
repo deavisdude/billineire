@@ -126,3 +126,7 @@ Confirm the feature satisfies or has a plan for:
 - Observability (logs/metrics/flags added)
 - Cultural/Balance review (if content affects cultures/economy/dungeons)
 - Security/Anti-Exploit (validation, permissions, potential dupes)
+
+- Scripting & CI Portability (PowerShell 5.1-compatible scripts on Windows;
+  ASCII-only logs for CI readability; single-quoted regex with explicit [0-9]
+  classes; avoid fragile 'Done' regexes—prefer simple substring readiness checks)

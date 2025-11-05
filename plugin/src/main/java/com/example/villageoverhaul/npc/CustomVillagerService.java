@@ -195,4 +195,40 @@ public class CustomVillagerService {
         }
         logger.info("Despawned all custom villagers (" + entityIds.size() + ")");
     }
+    
+    /**
+     * Get total count of all active custom villagers across all villages
+     * 
+     * @return Total number of active custom villagers
+     */
+    public int getActiveVillagerCount() {
+        return villagersByEntityId.size();
+    }
+    
+    /**
+     * Convenience method for spawning a custom villager with simplified parameters for testing
+     * 
+     * @param location Spawn location
+     * @param professionId Profession/definition ID
+     * @param villageIdStr Village ID string (will be converted to UUID)
+     * @return Entity UUID of spawned villager, or null if spawn failed
+     */
+    public UUID spawnCustomVillager(Location location, String professionId, String villageIdStr) {
+        // Parse or generate village UUID
+        UUID villageId;
+        try {
+            villageId = UUID.fromString(villageIdStr);
+        } catch (IllegalArgumentException e) {
+            // Generate deterministic UUID from string for test villages
+            villageId = UUID.nameUUIDFromBytes(villageIdStr.getBytes());
+        }
+        
+        // Use "test" as culture ID for test spawns
+        String cultureId = "test";
+        String definitionId = professionId + "_" + cultureId;
+        
+        CustomVillager villager = spawnVillager(definitionId, cultureId, professionId, villageId, location);
+        
+        return (villager != null) ? villager.getEntityId() : null;
+    }
 }

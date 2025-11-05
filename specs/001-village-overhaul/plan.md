@@ -54,6 +54,12 @@ Pre-design gate rationale (Plan A):
 - Cultural/Balance: Culture review checklist per culture; economy sink/source ledger; difficulty scaling guidelines.
 - Security/Anti-Exploit: Input validation; rate limits; permission gates; anti-dupe in wallet/loot; region protections for builds.
 
+- Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
+    baseline. Use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), single-quoted
+    regex with explicit [0-9] classes (avoid \d in double-quoted strings), escape
+    [] and () when needed, and favor simple readiness checks (substring 'Done').
+    Validate with `Get-Command -Syntax` in CI to fail fast on parser errors.
+
 - Custom Villagers — Observability: Add NPC metrics (npc.ticks, npc.tick_time_ms, npc.interactions_per_sec, npc.interaction_denied_rate, npc.open_sessions) and debug toggles for appearance profiles and interaction flow state.
 - Custom Villagers — Security: Enforce interaction rate limits (e.g., ≤2 opens/sec per player), server-side validation of selections, and deny if NPC moved/despawned mid-flow.
 

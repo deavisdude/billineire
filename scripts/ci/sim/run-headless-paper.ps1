@@ -37,7 +37,7 @@ if (!(Test-Path $ServerDir)) {
 # Accept EULA
 if ($AcceptEula) {
     Set-Content -Path "$ServerDir/eula.txt" -Value "eula=true"
-    Write-Host "✓ EULA accepted" -ForegroundColor Green
+    Write-Host "OK EULA accepted" -ForegroundColor Green
 }
 
 # Download Paper if not exists
@@ -52,9 +52,9 @@ if (!(Test-Path $paperJar)) {
     
     try {
         Invoke-WebRequest -Uri $paperUrl -OutFile $paperJar -ErrorAction Stop
-        Write-Host "✓ Paper downloaded successfully" -ForegroundColor Green
+        Write-Host "OK Paper downloaded successfully" -ForegroundColor Green
     } catch {
-        Write-Host "✗ Failed to download Paper from $paperUrl" -ForegroundColor Red
+        Write-Host "X Failed to download Paper from $paperUrl" -ForegroundColor Red
         Write-Host "  Error: $_" -ForegroundColor Red
         exit 1
     }
@@ -72,9 +72,9 @@ if (!(Test-Path $geyserJar)) {
 $voPlugin = "plugin/build/libs/village-overhaul-0.1.0-SNAPSHOT.jar"
 if (Test-Path $voPlugin) {
     Copy-Item $voPlugin -Destination "$ServerDir/plugins/" -Force
-    Write-Host "✓ Village Overhaul plugin copied" -ForegroundColor Green
+    Write-Host "OK Village Overhaul plugin copied" -ForegroundColor Green
 } else {
-    Write-Host "✗ Village Overhaul plugin not found at $voPlugin" -ForegroundColor Red
+    Write-Host "X Village Overhaul plugin not found at $voPlugin" -ForegroundColor Red
     Write-Host "  Run 'cd plugin && ./gradlew build' first" -ForegroundColor Yellow
     exit 1
 }
@@ -88,12 +88,18 @@ enable-command-block=true
 gamemode=creative
 difficulty=peaceful
 spawn-monsters=false
+enable-rcon=true
+rcon.port=25575
+rcon.password=test123
+broadcast-rcon-to-ops=false
 "@
 Set-Content -Path "$ServerDir/server.properties" -Value $serverProps
 
+Write-Host "OK RCON enabled (password: test123, port: 25575)" -ForegroundColor Green
+
 # Verify Paper jar exists
 if (!(Test-Path $paperJar)) {
-    Write-Host "✗ Paper jar not found after setup" -ForegroundColor Red
+    Write-Host "X Paper jar not found after setup" -ForegroundColor Red
     exit 1
 }
 
