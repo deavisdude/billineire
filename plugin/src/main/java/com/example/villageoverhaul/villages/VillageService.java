@@ -18,9 +18,9 @@ public class VillageService {
     /**
      * Register a new village
      */
-    public Village createVillage(String cultureId, String name) {
+    public Village createVillage(String cultureId, String name, String worldName, int x, int y, int z) {
         UUID id = UUID.randomUUID();
-        Village village = new Village(id, cultureId, name);
+        Village village = new Village(id, cultureId, name, worldName, x, y, z);
         villages.put(id, village);
         return village;
     }
@@ -42,8 +42,8 @@ public class VillageService {
     /**
      * Load village from persistence
      */
-    public void loadVillage(UUID id, String cultureId, String name, long wealthMillz) {
-        Village village = new Village(id, cultureId, name);
+    public void loadVillage(UUID id, String cultureId, String name, long wealthMillz, String worldName, int x, int y, int z) {
+        Village village = new Village(id, cultureId, name, worldName, x, y, z);
         village.addWealth(wealthMillz);
         villages.put(id, village);
     }

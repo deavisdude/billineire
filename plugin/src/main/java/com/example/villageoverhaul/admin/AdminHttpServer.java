@@ -135,6 +135,11 @@ public class AdminHttpServer {
                 node.put("cultureId", village.getCultureId());
                 node.put("name", village.getName());
                 node.put("wealthMillz", village.getWealthMillz());
+                // Location metadata for diagnostics
+                node.put("world", village.getWorldName());
+                node.put("x", village.getX());
+                node.put("y", village.getY());
+                node.put("z", village.getZ());
                 arr.add(node);
             });
             byte[] bytes = om.createObjectNode().set("villages", arr).toString().getBytes();

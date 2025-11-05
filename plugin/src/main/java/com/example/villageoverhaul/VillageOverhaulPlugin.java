@@ -8,6 +8,7 @@ import com.example.villageoverhaul.economy.WalletService;
 import com.example.villageoverhaul.obs.Metrics;
 import com.example.villageoverhaul.persistence.JsonStore;
 import com.example.villageoverhaul.villages.VillageService;
+import com.example.villageoverhaul.worldgen.VillageWorldgenAdapter;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.util.logging.Logger;
 
@@ -37,6 +38,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private CultureService cultureService;
     private AdminHttpServer adminServer;
     private VillageService villageService;
+    private VillageWorldgenAdapter worldgenAdapter;
     
     @Override
     public void onEnable() {
@@ -112,6 +114,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
             logger.warning("Failed to start admin HTTP server: " + e.getMessage());
             logger.warning("  (This is optional for CI testing)");
         }
+
+        // Worldgen adapter: seed a deterministic test village for US1 readiness
+        worldgenAdapter = new VillageWorldgenAdapter(this);
+        getServer().getPluginManager().registerEvents(worldgenAdapter, this);
+        // In test/CI contexts, worlds may already be loaded: attempt immediate seed
+        worldgenAdapter.seedIfPossible();
     }
     
     /**
@@ -147,4 +155,6 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public CultureService getCultureService() { return cultureService; }
     
     public VillageService getVillageService() { return villageService; }
+
+    public VillageWorldgenAdapter getWorldgenAdapter() { return worldgenAdapter; }
 }
