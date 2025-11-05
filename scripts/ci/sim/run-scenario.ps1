@@ -101,6 +101,20 @@ while ($elapsed -lt $maxWaitSeconds) {
     Start-Sleep -Seconds 2
     $elapsed += 2
     
+    # Check if process died early
+    if ($serverProcess.HasExited) {
+        Write-Host "✗ Server process exited unexpectedly" -ForegroundColor Red
+        if (Test-Path "$ServerDir/server.log") {
+            Write-Host "Server log:" -ForegroundColor Yellow
+            Get-Content "$ServerDir/server.log" -Tail 50
+        }
+        if (Test-Path "$ServerDir/server-error.log") {
+            Write-Host "Server errors:" -ForegroundColor Yellow
+            Get-Content "$ServerDir/server-error.log" -Tail 50
+        }
+        exit 1
+    }
+    
     if (Test-Path "$ServerDir/server.log") {
         $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
         if ($logContent -match "Done \([\d.]+s\)!") {
@@ -108,20 +122,11 @@ while ($elapsed -lt $maxWaitSeconds) {
             Write-Host "✓ Server started successfully" -ForegroundColor Green
             break
         }
-    }
-    
-    # Check if process died
-    if ($serverProcess.HasExited) {
-        Write-Host "✗ Server process exited unexpectedly" -ForegroundColor Red
-        if (Test-Path "$ServerDir/server.log") {
-            Write-Host "Server log:" -ForegroundColor Yellow
-            Get-Content "$ServerDir/server.log" -Tail 20
+        
+        # Check for common startup issues
+        if ($logContent -match "(?i)(failed|error|exception)") {
+            Write-Host "⚠ Potential startup issue detected in logs" -ForegroundColor Yellow
         }
-        if (Test-Path "$ServerDir/server-error.log") {
-            Write-Host "Server errors:" -ForegroundColor Yellow
-            Get-Content "$ServerDir/server-error.log" -Tail 20
-        }
-        exit 1
     }
     
     Write-Host "  Waiting for server initialization... ($elapsed/$maxWaitSeconds seconds)" -ForegroundColor DarkGray
@@ -129,7 +134,26 @@ while ($elapsed -lt $maxWaitSeconds) {
 
 if (!$serverReady) {
     Write-Host "✗ Server did not start within $maxWaitSeconds seconds" -ForegroundColor Red
-    Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+    
+    # Dump logs for debugging
+    if (Test-Path "$ServerDir/server.log") {
+        Write-Host "=== Server Log (last 100 lines) ===" -ForegroundColor Yellow
+        Get-Content "$ServerDir/server.log" -Tail 100
+    } else {
+        Write-Host "No server.log file found" -ForegroundColor Red
+    }
+    
+    if (Test-Path "$ServerDir/server-error.log") {
+        Write-Host "=== Server Error Log ===" -ForegroundColor Yellow
+        Get-Content "$ServerDir/server-error.log"
+    }
+    
+    # Kill the server process if still running
+    if (!$serverProcess.HasExited) {
+        Write-Host "Terminating server process..." -ForegroundColor Yellow
+        Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    
     exit 1
 }
 
