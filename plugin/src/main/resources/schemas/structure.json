@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://villageoverhaul.example.com/schemas/structure.json",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/structure.json",
   "title": "Village Structure",
   "description": "Defines a village building structure template with placement and requirements",
   "type": "object",

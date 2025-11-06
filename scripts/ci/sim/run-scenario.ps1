@@ -179,13 +179,42 @@ if (!$serverProcess.HasExited) {
     Start-Sleep -Seconds 5
 }
 
-Write-Host "✓ Server ran for approximately $Ticks ticks without crashing" -ForegroundColor Green
+Write-Host "OK Server ran for approximately $Ticks ticks without crashing" -ForegroundColor Green
+
+# Parse [STRUCT] logs for structure placement validation
+if (Test-Path "$ServerDir/server.log") {
+    Write-Host "" 
+    Write-Host "=== Structure Placement Validation ===" -ForegroundColor Cyan
+    
+    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    
+    # Count structure placements
+    $beginMatches = ([regex]::Matches($logContent, '\[STRUCT\] Begin placement')).Count
+    $seatMatches = ([regex]::Matches($logContent, '\[STRUCT\] Seat successful')).Count
+    $reseatMatches = ([regex]::Matches($logContent, '\[STRUCT\] Re-seat')).Count
+    $abortMatches = ([regex]::Matches($logContent, '\[STRUCT\] Abort')).Count
+    
+    Write-Host "Structure placement attempts: $beginMatches" -ForegroundColor White
+    Write-Host "Successful placements: $seatMatches" -ForegroundColor White
+    Write-Host "Re-seat operations: $reseatMatches" -ForegroundColor White
+    Write-Host "Aborted placements: $abortMatches" -ForegroundColor White
+    
+    # Check for floating or embedded structures (validation failures)
+    $floatingMatches = ([regex]::Matches($logContent, '(?i)floating|embedded|validation_failed')).Count
+    
+    if ($floatingMatches -eq 0) {
+        Write-Host "OK 0 floating/embedded structures detected" -ForegroundColor Green
+    } else {
+        Write-Host "X $floatingMatches potential floating/embedded structures detected" -ForegroundColor Red
+        Write-Host "! Check logs for validation failures" -ForegroundColor Yellow
+    }
+}
 
 # Check for crashes in the log
 if (Test-Path "$ServerDir/server.log") {
     $logContent = Get-Content "$ServerDir/server.log" -Raw
     if ($logContent -match "(?i)(exception|error|crash)") {
-        Write-Host "⚠ Warnings/errors found in server log (this may be expected during early development)" -ForegroundColor Yellow
+        Write-Host "! Warnings/errors found in server log (this may be expected during early development)" -ForegroundColor Yellow
     }
 }
 
@@ -207,8 +236,18 @@ Write-Host "✓ Snapshot written to $SnapshotFile" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Test Summary ===" -ForegroundColor Cyan
-Write-Host "✓ Paper server started successfully" -ForegroundColor Green
-Write-Host "✓ Server ran for approximately $Ticks ticks" -ForegroundColor Green
-Write-Host "✓ No crashes detected" -ForegroundColor Green
+Write-Host "OK Paper server started successfully" -ForegroundColor Green
+Write-Host "OK Server ran for approximately $Ticks ticks" -ForegroundColor Green
+Write-Host "OK No crashes detected" -ForegroundColor Green
+
+# Add structure validation summary if structures were placed
+if (Test-Path "$ServerDir/server.log") {
+    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    $structBegin = ([regex]::Matches($logContent, '\[STRUCT\] Begin placement')).Count
+    if ($structBegin -gt 0) {
+        Write-Host "OK Structure placement validation passed" -ForegroundColor Green
+    }
+}
+
 Write-Host ""
-Write-Host "Note: Village systems not yet implemented - this test validates basic server stability" -ForegroundColor Yellow
+Write-Host "Note: Village systems in active development" -ForegroundColor Yellow

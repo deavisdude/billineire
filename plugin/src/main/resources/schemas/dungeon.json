@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://example.com/schemas/dungeon.json",
+  "$id": "https://davisodom.com/schemas/dungeon.json",
   "title": "Dungeon Definition",
   "type": "object",
   "required": ["id", "layoutRef", "seedStrategy", "enemySets", "lootTables"],

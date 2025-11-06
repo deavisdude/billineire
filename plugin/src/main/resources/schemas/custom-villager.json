@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://villageoverhaul.example.com/schemas/custom-villager.json",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/custom-villager.json",
   "title": "CustomVillager",
   "description": "Schema for culture-profession Custom Villagers with appearance and interaction configuration",
   "type": "object",

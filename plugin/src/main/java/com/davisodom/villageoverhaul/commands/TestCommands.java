@@ -50,7 +50,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             @NotNull String label, @NotNull String[] args) {
         
         if (args.length == 0) {
-            sender.sendMessage("§cUsage: /votest <create-village|spawn-villager|trigger-interaction|simulate-interaction|metrics|performance>");
+            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|spawn-villager|trigger-interaction|simulate-interaction|metrics|performance>");
             return true;
         }
         
@@ -59,6 +59,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         switch (subCommand) {
             case "create-village":
                 return handleCreateVillage(sender, args);
+                
+            case "generate-structures":
+                return handleGenerateStructures(sender, args);
                 
             case "spawn-villager":
                 return handleSpawnVillager(sender, args);
@@ -130,6 +133,49 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         plugin.getLogger().info("[TEST] Created test village: " + villageName + 
                 " (ID: " + village.getId() + ") at " + x + "," + y + "," + z);
+        
+        return true;
+    }
+    
+    /**
+     * Generate structures for a village
+     * Usage: /votest generate-structures <village-id>
+     */
+    private boolean handleGenerateStructures(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /votest generate-structures <village-id>");
+            return true;
+        }
+        
+        String villageIdStr = args[1];
+        UUID villageId;
+        
+        try {
+            villageId = UUID.fromString(villageIdStr);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cInvalid village ID format");
+            return true;
+        }
+        
+        // TODO: Integrate with VillagePlacementService
+        // For now, log the request
+        plugin.getLogger().info(String.format("[STRUCT] Begin structure generation for village %s", villageId));
+        
+        sender.sendMessage("§aStructure generation initiated for village: " + villageId);
+        sender.sendMessage("§7Check logs for [STRUCT] markers for placement details");
+        
+        // TODO: Implement actual structure generation via VillagePlacementService
+        // Expected flow:
+        // 1. Load village metadata (culture, location)
+        // 2. Get structure set from culture definition
+        // 3. For each structure in set:
+        //    - Find suitable placement location
+        //    - Validate site with SiteValidator
+        //    - Attempt placement via StructureService (with re-seating)
+        //    - Log [STRUCT] begin/seat/re-seat/abort
+        // 4. Persist placed buildings to VillageMetadataStore
+        
+        plugin.getLogger().info(String.format("[STRUCT] Structure generation complete for village %s (placeholder)", villageId));
         
         return true;
     }

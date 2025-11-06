@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://villageoverhaul.example.com/schemas/project.json",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/project.json",
   "title": "Village Project",
   "description": "A village building project funded by player trades",
   "type": "object",

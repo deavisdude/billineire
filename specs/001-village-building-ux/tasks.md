@@ -52,14 +52,14 @@ description: "Task list for Village Overhaul — Structures First"
 
 **Independent Test**: Generate for sampled seeds; assert 0 floating/embedded; entrances have interior air-space
 
-- [ ] T013 [US1] Implement site validation (foundation/interior clearance) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
-- [ ] T014 [P] [US1] Implement minor terraforming utils (light grading/filling, vegetation trim) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
-- [ ] T015 [US1] Implement `StructureServiceImpl` (load template, seat/re-seat/abort, deterministic order) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-- [ ] T016 [P] [US1] Add FAWE-backed placement path (if FAWE present) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-- [ ] T017 [US1] Integrate seating into `VillagePlacementServiceImpl` in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
-- [ ] T018 [US1] Extend test command: `votest generate-structures <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
-- [ ] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-- [ ] T020 [US1] Update harness parsing to assert "0 floating/embedded" in `scripts/ci/sim/run-scenario.ps1`
+- [X] T013 [US1] Implement site validation (foundation/interior clearance) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
+- [X] T014 [P] [US1] Implement minor terraforming utils (light grading/filling, vegetation trim) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+- [X] T015 [US1] Implement `StructureServiceImpl` (load template, seat/re-seat/abort, deterministic order) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+- [X] T016 [P] [US1] Add FAWE-backed placement path (if FAWE present) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+- [X] T017 [US1] Integrate seating into `VillagePlacementServiceImpl` in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+- [X] T018 [US1] Extend test command: `votest generate-structures <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
+- [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+- [X] T020 [US1] Update harness parsing to assert "0 floating/embedded" in `scripts/ci/sim/run-scenario.ps1`
 
 **Checkpoint**: US1 independently verifiable via headless harness
 
