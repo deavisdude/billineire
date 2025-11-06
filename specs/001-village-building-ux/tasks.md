@@ -34,13 +34,13 @@ description: "Task list for Village Overhaul — Structures First"
 
 **Purpose**: Core services and persistence required by all stories
 
-- [ ] T006 Define `VillagePlacementService` interface in `plugin/src/main/java/com/example/villageoverhaul/villages/VillagePlacementService.java`
-- [ ] T007 [P] Define `StructureService` interface in `plugin/src/main/java/com/example/villageoverhaul/worldgen/StructureService.java`
-- [ ] T008 [P] Define `PathService` interface in `plugin/src/main/java/com/example/villageoverhaul/worldgen/PathService.java`
-- [ ] T009 Implement persistence holders for main building/path metadata in `plugin/src/main/java/com/example/villageoverhaul/villages/VillageMetadataStore.java`
-- [ ] T010 [P] Add data objects for Building/PathNetwork in `plugin/src/main/java/com/example/villageoverhaul/model/`
-- [ ] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/example/villageoverhaul/DebugFlags.java`
-- [ ] T012 Add admin test commands skeleton in `plugin/src/main/java/com/example/villageoverhaul/commands/TestCommands.java`
+- [X] T006 Define `VillagePlacementService` interface in `plugin/src/main/java/com/example/villageoverhaul/villages/VillagePlacementService.java`
+- [X] T007 [P] Define `StructureService` interface in `plugin/src/main/java/com/example/villageoverhaul/worldgen/StructureService.java`
+- [X] T008 [P] Define `PathService` interface in `plugin/src/main/java/com/example/villageoverhaul/worldgen/PathService.java`
+- [X] T009 Implement persistence holders for main building/path metadata in `plugin/src/main/java/com/example/villageoverhaul/villages/VillageMetadataStore.java`
+- [X] T010 [P] Add data objects for Building/PathNetwork in `plugin/src/main/java/com/example/villageoverhaul/model/`
+- [X] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/example/villageoverhaul/DebugFlags.java`
+- [X] T012 Add admin test commands skeleton in `plugin/src/main/java/com/example/villageoverhaul/commands/TestCommands.java`
 
 **Checkpoint**: Services and DTOs exist; admin commands compile; ready to implement US1
 
