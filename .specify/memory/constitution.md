@@ -1,17 +1,17 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0
+- Version change: 1.1.0 → 1.2.0
 - Modified sections:
-  - Engineering Standards & Constraints (added "Scripting & CI Portability")
-  - Development Workflow, Review Process, and Quality Gates (added scripting gate)
-- Added sections: None (material expansion of existing sections)
+  - Core Principles (added new principle: "Village Building & Player Onboarding")
+  - Development Workflow, Review Process, and Quality Gates (added village-building gate)
+- Added sections: "Village Building & Player Onboarding" (Principle X)
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (added scripting/CI portability gate)
-	- ✅ .specify/templates/spec-template.md (gates checklist includes scripting/CI)
-	- ✅ .specify/templates/tasks-template.md (added scripting/CI task type)
-	- ⚠ .specify/templates/commands/* (not present; N/A)
-- Follow-up TODOs: None
+	- ✅ .specify/templates/plan-template.md (add village-building compliance gate when applicable)
+	- ✅ .specify/templates/spec-template.md (add checklist item for village-building & UX when applicable)
+	- ✅ .specify/templates/tasks-template.md (add constitution-driven task type for village building & UX)
+	- ⚠ README.md/docs/* (optional: reference new village-building rules where relevant)
+- Follow-up TODOs: Consider lightweight developer guide in docs/ covering main-building designation rules and signage examples
 -->
 
 # Spec Billineire Constitution
@@ -98,6 +98,30 @@ tools. Document known exploit mitigations and test for dupe paths in CI where fe
 
 Rationale: Multiplayer at scale attracts exploits; prevention protects the economy and reputation.
 
+### X. Village Building & Player Onboarding
+Village construction and player-facing UX MUST follow deterministic, grounded placement rules and
+provide clear wayfinding:
+
+- Grounded Placement: Spawn/expand village buildings only on solid, loadable terrain with
+	collision-safe clearance. No floating/embedded structures. Validate foundation blocks and ensure
+	interior air-space before placement; abort or re-seat if invalid.
+- Inter-Building Paths: Generate simple, traversable paths connecting key village buildings. Paths
+	MUST avoid placing blocks that break player or mob movement and SHOULD prefer existing terrain.
+- Main Building: Each culture MUST designate a single "main building" type used for first-contact
+	UX. Persist this designation in data and ensure only one is active per village.
+- Signage for Projects: The main building MUST surface current village projects and material
+	requirements via in-world signage or UI-equivalent, server-side authoritative and localized via
+	the language/Adventure API.
+- Greeter Villager: On player entry into the main building area, a designated greeter villager (or
+	equivalent server-driven prompt) MUST introduce the village, surface active projects, and provide
+	a clear next action. Triggering MUST be server-side and rate-limited; no client-only logic.
+- Performance/Determinism: All placement, pathing, and triggers MUST be chunk-gated and
+	deterministic from world seed/state. Heavy calculations MUST be budgeted under Performance
+	Principles and never block the main thread beyond budget.
+
+Rationale: Grounded placement, simple paths, and an explicit main-building greeter create a
+coherent onboarding experience without sacrificing determinism or performance on large servers.
+
 ## Engineering Standards & Constraints
 
 - Coding standards: consistent naming, null-safety, and immutable data where practical for shared
@@ -169,4 +193,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.1.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-05
+**Version**: 1.2.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-05

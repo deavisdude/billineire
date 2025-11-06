@@ -7,20 +7,49 @@
 
 ## User Scenarios & Testing *(mandatory)*
 
-<!--
-  IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
-  Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
-  you should still have a viable MVP (Minimum Viable Product) that delivers value.
-  
-  Assign priorities (P1, P2, P3, etc.) to each story, where P1 is the most critical.
-  Think of each story as a standalone slice of functionality that can be:
-  - Developed independently
-  - Tested independently
-  - Deployed independently
-  - Demonstrated to users independently
--->
+> Reprioritized to unblock progress: structure generation first. Onboarding now follows after
+> buildings and paths exist. Trade-funded projects remain core but come after placement.
 
-### User Story 1 - Trade-Funded Village Projects (Priority: P1)
+### User Story 1 - Structure Generation & Placement (Priority: P1)
+
+The system generates culture-defined village structures with grounded placement (no floating or
+embedded buildings). Invalid sites are re-seated or skipped.
+
+**Independent Test**: Run generation for sampled seeds/chunks and assert zero floating/embedded
+placements and valid interior air-space for entrances and rooms.
+
+**Acceptance Scenarios**:
+
+1. Given uneven or steep terrain, When a building attempts to place, Then foundation blocks are
+  validated and interior air-space is confirmed before final placement.
+2. Given an invalid site (lava/water/void/unloadable), When placement is evaluated, Then the system
+  re-seats to a nearby valid site or aborts without placing a broken structure.
+3. Given mildly uneven terrain around an otherwise valid site, When seating a building, Then minor,
+  localized terraforming (e.g., light grading/filling, vegetation trimming) MAY be applied to
+  achieve natural-looking placement without creating large artificial platforms or cliff cuts.
+
+---
+
+### User Story 2 - Path Network & Main Building (Priority: P1)
+
+The village connects key buildings with simple, traversable paths and designates exactly one main
+building per village per culture for onboarding.
+
+**Independent Test**: After generation, compute connectivity between key buildings and verify a
+minimum path coverage; validate exactly one main building is persisted per village. Paths may apply
+minor smoothing (steps/slabs/light grading) where necessary, avoiding block spam and unnatural
+boardwalks where terrain suffices.
+
+**Acceptance Scenarios**:
+
+1. Given a set of key buildings, When the village finishes generating, Then paths connect them with
+  no blocks that impede movement.
+2. Given culture data, When villages are generated, Then exactly one main building is designated
+  per village instance and persisted.
+
+---
+
+### User Story 3 - Trade-Funded Village Projects (Priority: P1)
 
 Players trade with Custom Villagers (culture-specific) using a currency economy; proceeds fund village "projects"
 (e.g., house upgrade, blacksmith expansion). Players see project goals, contribution progress, and resulting
@@ -40,7 +69,24 @@ building upgrade without any other systems enabled (no reputation or dungeons re
 
 ---
 
-### User Story 2 - Reputation & Contracts (Priority: P1)
+### User Story 4 - Guided Onboarding (Priority: P2)
+
+When a player enters the main building, a greeter (or server-driven prompt) introduces the village
+and surfaces active projects with material requirements via signage or equivalent UI.
+
+**Independent Test**: In headless simulation, teleport a player into the main building area and
+assert that a greeter prompt occurs and signage content is visible/logged.
+
+**Acceptance Scenarios**:
+
+1. Given a generated village with a designated main building, When a player enters the main
+  building area, Then a greeter introduces the village and references current projects.
+2. Given active village projects with material needs, When the player is in the main building,
+  Then signage lists each project with item counts and brief instructions.
+
+---
+
+### User Story 5 - Reputation & Contracts (Priority: P2)
 
 Players earn village reputation through trading and completing contracts posted by the village (e.g., provision
 deliveries, defense events, dungeon clearing). Higher reputation unlocks unique items, professions, and property
@@ -60,7 +106,7 @@ verify purchase eligibility without enabling inter-village relations.
 
 ---
 
-### User Story 3 - Dungeons & Custom Enemies (Priority: P2)
+### User Story 6 - Dungeons & Custom Enemies (Priority: P3)
 
 Villages issue contracts to clear nearby procedurally generated dungeons populated by custom enemies. Difficulty and
 rewards scale with player/team progression and village wealth.
@@ -79,7 +125,7 @@ village reputation changes without enabling inter-village relations.
 
 ---
 
-### User Story 4 - Inter-Village Relationships (Priority: P2)
+### User Story 7 - Inter-Village Relationships (Priority: P3)
 
 Villages maintain relationships (ally, neutral, rival) that players can influence via contracts and trade routes.
 Relationships affect prices, contract availability, and event frequency.
@@ -98,7 +144,7 @@ verify price modifiers without enabling property purchases.
 
 ---
 
-### User Story 5 - Property Purchasing (Priority: P3)
+### User Story 8 - Property Purchasing (Priority: P4)
 
 Players with sufficient currency and reputation can purchase lots or fully furnished homes inside villages and gain
 storage plus cosmetic customization rights.
@@ -139,6 +185,13 @@ server restarts.
   currency/project side effects.
 - Bedrock fallback visuals: If a Java-only visual is unavailable to Bedrock clients, a fallback attire/marker MUST be
   used without desync.
+
+- Terrain extremes near village sites: steep slopes, cliffs, caves, water/lava surfaces
+- Partially loaded chunks during generation or onboarding triggers
+- Protected regions/claims that disallow placement
+- Main building destroyed post-generation: designation persistence and re-onboarding behavior
+- Terraforming limits: minor, localized adjustments only; avoid heavy flattening, artificial mesas,
+  or cliff shearing; always respect protected regions
 
 ## Requirements *(mandatory)*
 
@@ -200,6 +253,28 @@ server restarts.
   - **FR-016e (Performance)**: NPC AI and interaction logic MUST stay within the Medium profile budgets; per-NPC tick
     cost must be observable.
 
+- **FR-017 (Structures - Grounded Placement)**: Buildings MUST only place on solid, loadable terrain with
+  collision-safe clearance; interior air-space MUST be validated. No floating/embedded structures.
+  Minor, localized terraforming (e.g., light grading, filling small gaps, vegetation trimming) is
+  acceptable to achieve natural-looking placement; avoid large artificial platforms or cliff cuts.
+- **FR-018 (Structures - Invalid Site Handling)**: If site validation fails (fluid, void, obstructed, unloadable),
+  the system MUST re-seat within a bounded search or abort without placing.
+- **FR-019 (Paths)**: Generate simple, traversable paths connecting key buildings; avoid blocks that impede movement
+  and prefer existing terrain. Minor smoothing (steps/slabs/brief grading) is acceptable where
+  necessary; avoid excessive block spam or unnatural boardwalks over terrain that is already
+  traversable.
+- **FR-020 (Main Building)**: Each culture MUST define a single main building type for onboarding; each generated
+  village MUST persist exactly one active main building of that type.
+- **FR-021 (Signage)**: The main building MUST surface current village projects and material requirements via
+  in-world signage or equivalent UI; content MUST be server-authoritative and localizable.
+- **FR-022 (Greeter Trigger)**: On player entry into the main building area, a greeter villager or server-driven
+  prompt MUST introduce the village, highlight active projects, and offer a next step; triggers MUST be rate-limited
+  and server-side.
+- **FR-023 (Deterministic Structures)**: Placement, path generation, and main-building selection MUST be deterministic
+  from world/feature seeds and current state; repeated runs with the same inputs MUST yield identical results.
+- **FR-024 (Observability - Structures)**: Add logs/metrics to validate placement checks, path coverage, main-building
+  designation, signage content presence, and greeter trigger events.
+
 *NEEDS CLARIFICATION markers kept ≤ 3 as required.*
 
 ### Key Entities *(include if feature involves data)*
@@ -241,6 +316,15 @@ server restarts.
 - **SC-005 (Stability)**: Save/load cycles across 3 server restarts retain village states, ownership, and relations
   without data loss.
 
+- **SC-006 (Structures - Integrity)**: 0 floating or embedded building placements across 100 sampled seeds/chunk sites.
+- **SC-007 (Main Building Presence)**: 100% of generated villages have exactly one main building designated and
+  persisted.
+- **SC-008 (Onboarding SLA)**: 95% of player entries into a main building receive a greeter prompt within 2 seconds of
+  arrival, without client-side mods.
+- **SC-009 (Path Connectivity)**: ≥90% path connectivity between key buildings with no movement-blocking placements.
+- **SC-010 (Deterministic Structures)**: Identical outputs for buildings/paths/designations across two runs with the
+  same seeds and inputs.
+
 ## Constitution Gates Checklist *(fill before implementation)*
 
 Confirm the feature satisfies or has a plan for:
@@ -255,6 +339,13 @@ Confirm the feature satisfies or has a plan for:
 - Cultural/Balance review: Cultural authenticity review checklist required for each culture set; economy audited for
   sources/sinks.
 - Security/Anti-Exploit: Input validation, rate limits, anti-dupe tests for currency/loot.
+
+- Scripting & CI Portability: Verify test/CI scripts are PowerShell 5.1 compatible on Windows,
+  use ASCII-only logs, single-quoted regex with explicit [0-9] classes, and simple 'Done' readiness
+  checks.
+- Village Building & UX (if village-related): Grounded building placement, inter-building paths,
+  culture-defined main building, signage for projects/requirements, and greeter behavior on
+  main-building entry are addressed.
 
 ## Clarifications
 

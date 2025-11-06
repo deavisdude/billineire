@@ -39,6 +39,10 @@ description: "Task list template for feature implementation"
   regex patterns with explicit [0-9] classes, escape [] when necessary, and use
   resilient readiness checks (e.g., substring 'Done').
 
+- Village building & UX: grounded building placement checks, path generation between buildings,
+  main-building designation/persistence, signage for active projects and material requirements,
+  and greeter villager trigger behavior on main-building entry (server-side, rate-limited).
+
 <!-- 
   ============================================================================
   IMPORTANT: The tasks below are SAMPLE TASKS for illustration purposes only.

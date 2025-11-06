@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2025-11-04
 
 ## Active Technologies
+- Java 17 (Paper 1.20+); optional Kotlin 1.9 (JVM 17) + Paper API; Adventure API (signage/messages); Jackson/Gson for JSON; FAWE (001-village-building-ux)
+- World-save for placed blocks; plugin JSON for cultures/structure sets; persistent (001-village-building-ux)
 
 - Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17) + Paper API (or Purpur fork), Geyser + Floodgate, Vault API, LuckPerms API, WorldGuard + FAWE (optional), MythicMobs (optional), Adventure API, Jackson/Gson for JSON (001-village-overhaul)
 
@@ -22,6 +24,7 @@ tests/
 Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 
 ## Recent Changes
+- 001-village-building-ux: Added Java 17 (Paper 1.20+); optional Kotlin 1.9 (JVM 17) + Paper API; Adventure API (signage/messages); Jackson/Gson for JSON; FAWE
 
 - 001-village-overhaul: Added Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17) + Paper API (or Purpur fork), Geyser + Floodgate, Vault API, LuckPerms API, WorldGuard + FAWE (optional), MythicMobs (optional), Adventure API, Jackson/Gson for JSON
 

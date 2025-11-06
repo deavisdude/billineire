@@ -51,6 +51,10 @@ For this project, every plan MUST address and prove compliance with these gates:
   strings), escape [] when needed, and keep server readiness detection simple (e.g.,
   substring 'Done').
 
+- Village Building & UX (if village-related): Demonstrate grounded building placement
+  (no floating/embedded), inter-building paths, a culture-defined main building, clear
+  project signage/requirements, and greeter villager behavior on main-building entry.
+
 ## Project Structure
 
 ### Documentation (this feature)

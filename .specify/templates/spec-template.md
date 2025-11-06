@@ -130,3 +130,7 @@ Confirm the feature satisfies or has a plan for:
 - Scripting & CI Portability (PowerShell 5.1-compatible scripts on Windows;
   ASCII-only logs for CI readability; single-quoted regex with explicit [0-9]
   classes; avoid fragile 'Done' regexes—prefer simple substring readiness checks)
+
+- Village Building & UX (if village-related): Grounded building placement, inter-building
+  paths, culture-defined main building, signage for projects/requirements, and greeter
+  villager behavior on main-building entry are addressed.
