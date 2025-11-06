@@ -78,6 +78,27 @@ if ($ExpectedFile -and (Test-Path $ExpectedFile)) {
     Write-Host "✓ Determinism check complete" -ForegroundColor Green
 }
 
+# Validate structure placement logs (if present)
+# Look for [STRUCT] log markers in server.log for observability
+$serverLogPath = "test-server/server.log"
+if (Test-Path $serverLogPath) {
+    $logContent = Get-Content $serverLogPath -Raw -ErrorAction SilentlyContinue
+    
+    # Check for structure placement events
+    if ($logContent -match '\[STRUCT\]') {
+        $structLogs = ($logContent | Select-String -Pattern '\[STRUCT\]' -AllMatches).Matches.Count
+        Write-Host "OK Found $structLogs [STRUCT] log entries" -ForegroundColor Green
+        
+        # Validate no error-level structure logs
+        if ($logContent -match '\[STRUCT\].*(?i)(error|fail|exception)') {
+            Write-Host "X Structure placement errors detected in logs" -ForegroundColor Red
+            $passed = $false
+        }
+    } else {
+        Write-Host "! No [STRUCT] logs found (expected if no structures placed)" -ForegroundColor DarkGray
+    }
+}
+
 # Report results
 if ($passed) {
     Write-Host ""

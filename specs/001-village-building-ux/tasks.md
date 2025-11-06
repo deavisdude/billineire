@@ -22,11 +22,11 @@ description: "Task list for Village Overhaul — Structures First"
 
 **Purpose**: Ensure build and CI harness are ready to exercise structure generation flows
 
-- [ ] T001 Verify Gradle build for plugin in `plugin/build.gradle` and produce JAR to `plugin/build/libs/`
-- [ ] T002 [P] Add structure schema stub in `plugin/src/main/resources/schemas/structure.json`
-- [ ] T003 [P] Create package folders for worldgen services in `plugin/src/main/java/com/example/villageoverhaul/worldgen/`
-- [ ] T004 [P] Create package folders for placement/path services in `plugin/src/main/java/com/example/villageoverhaul/villages/`
-- [ ] T005 Ensure CI harness scripts recognize new [STRUCT] logs in `scripts/ci/sim/run-scenario.ps1`
+- [X] T001 Verify Gradle build for plugin in `plugin/build.gradle` and produce JAR to `plugin/build/libs/`
+- [X] T002 [P] Add structure schema stub in `plugin/src/main/resources/schemas/structure.json`
+- [X] T003 [P] Create package folders for worldgen services in `plugin/src/main/java/com/example/villageoverhaul/worldgen/`
+- [X] T004 [P] Create package folders for placement/path services in `plugin/src/main/java/com/example/villageoverhaul/villages/`
+- [X] T005 Ensure CI harness scripts recognize new [STRUCT] logs in `scripts/ci/sim/run-scenario.ps1`
 
 ---
 
