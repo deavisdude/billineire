@@ -3,7 +3,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
-group = 'com.example'
+group = 'com.davisodom'
 version = '0.1.0-SNAPSHOT'
 description = 'Village Overhaul - Millénaire-inspired village mod for modern Minecraft'
 
@@ -102,7 +102,7 @@ shadowJar {
     archiveClassifier.set('')
     
     // Relocate Jackson to avoid conflicts
-    relocate 'com.fasterxml.jackson', 'com.example.villageoverhaul.libs.jackson'
+    relocate 'com.fasterxml.jackson', 'com.davisodom.villageoverhaul.libs.jackson'
     
     minimize()
 }

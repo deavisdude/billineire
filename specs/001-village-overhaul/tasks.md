@@ -25,7 +25,7 @@ description: "Task list for implementing Village Overhaul — Plan A (Plugin-fir
 - [X] T001 Create Gradle plugin project structure in plugin/ per plan.md
 - [X] T002 Initialize Gradle build with dependencies in `plugin/build.gradle` (Paper API, Adventure, Vault, LuckPerms, WorldGuard, FAWE, Jackson, JUnit, MockBukkit)
 - [X] T003 Create plugin descriptor at `plugin/src/main/resources/plugin.yml`
-- [X] T004 [P] Create main plugin class at `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java`
+- [X] T004 [P] Create main plugin class at `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
 - [X] T005 [P] Add Gradle settings and wrapper in `plugin/` (settings.gradle, gradlew, gradlew.bat)
 - [X] T006 Configure .gitignore and editorconfig for Java/Gradle in repository root
 
@@ -41,14 +41,14 @@ CI deterministic sim (replace smoke placeholders):
 
 **Purpose**: Core infrastructure required before any user story
 
-- [X] T011 Implement tick scheduler/engine in `plugin/src/main/java/com/example/villageoverhaul/core/TickEngine.java`
-- [X] T012 [P] Implement WalletService (Dollaz, Millz int64) in `plugin/src/main/java/com/example/villageoverhaul/economy/WalletService.java`
-- [X] T013 [P] Implement Persistence (JSON) with versioning in `plugin/src/main/java/com/example/villageoverhaul/persistence/JsonStore.java`
+- [X] T011 Implement tick scheduler/engine in `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
+- [X] T012 [P] Implement WalletService (Dollaz, Millz int64) in `plugin/src/main/java/com/davisodom/villageoverhaul/economy/WalletService.java`
+- [X] T013 [P] Implement Persistence (JSON) with versioning in `plugin/src/main/java/com/davisodom/villageoverhaul/persistence/JsonStore.java`
 - [X] T014 Define JSON schemas in `plugin/src/main/resources/schemas/{culture.json,project.json,contract.json}`
-- [X] T015 [P] Implement schema validator in `plugin/src/main/java/com/example/villageoverhaul/data/SchemaValidator.java`
-- [X] T016 Wire Observability (structured logs, tick metrics) in `plugin/src/main/java/com/example/villageoverhaul/obs/`*
-- [X] T017 [P] Add MockBukkit test harness `plugin/src/test/java/com/example/villageoverhaul/TickHarnessTest.java`
-- [X] T018 [P] Bootstrap minimal HTTP admin server (for contracts API) in `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
+- [X] T015 [P] Implement schema validator in `plugin/src/main/java/com/davisodom/villageoverhaul/data/SchemaValidator.java`
+- [X] T016 Wire Observability (structured logs, tick metrics) in `plugin/src/main/java/com/davisodom/villageoverhaul/obs/`*
+- [X] T017 [P] Add MockBukkit test harness `plugin/src/test/java/com/davisodom/villageoverhaul/TickHarnessTest.java`
+- [X] T018 [P] Bootstrap minimal HTTP admin server (for contracts API) in `plugin/src/main/java/com/davisodom/villageoverhaul/admin/AdminHttpServer.java`
 - [X] T019 Implement OpenAPI endpoints mapping per `specs/001-village-overhaul/contracts/openapi.yaml`
 
 **Checkpoint**: Foundation ready → begin user stories
@@ -61,7 +61,7 @@ CI deterministic sim (replace smoke placeholders):
 
 - [X] T019a Implement minimal read-only Admin API mappings per OpenAPI (wallets/villages) in `admin/AdminHttpServer.java`
 - [X] T019b [P] Add dungeon schema `plugin/src/main/resources/schemas/dungeon.json` and wire into validator
-- [X] T019c [P] Scaffold CultureService to load/validate cultures in `plugin/src/main/java/com/example/villageoverhaul/cultures/CultureService.java`
+- [X] T019c [P] Scaffold CultureService to load/validate cultures in `plugin/src/main/java/com/davisodom/villageoverhaul/cultures/CultureService.java`
 - [X] T019d [P] Add culture datapack scaffolding under `plugin/src/main/resources/datapacks/villageoverhaul/cultures/`
 - [X] T019e Seeded test village fixture (FAWE/world placement or prebuilt structure) in `tests/fixtures/` with one upgrade path
 - [X] T019f Minimal trade offers per initial culture for US1 test in `datapacks/.../trades/`
@@ -79,7 +79,7 @@ CI deterministic sim (replace smoke placeholders):
 **Purpose**: Introduce culture-profession NPCs with custom appearance and interactions; maintain Bedrock parity.
 
 - [X] T019k [P] Define schema `plugin/src/main/resources/schemas/custom-villager.json` (cultureId, professionId, appearanceProfile, dialogueKeys, spawnRules); wire into `SchemaValidator`.
-- [X] T019l [P] Implement `CustomVillagerService.java` in `plugin/src/main/java/com/example/villageoverhaul/npc/` (spawn/despawn, persist, find-by-village, caps).
+- [X] T019l [P] Implement `CustomVillagerService.java` in `plugin/src/main/java/com/davisodom/villageoverhaul/npc/` (spawn/despawn, persist, find-by-village, caps).
 - [X] T019m [P] Implement `VillagerAppearanceAdapter.java` in `npc/` (attire/armor/colors/nametags; optional Java resource-pack hooks; Bedrock-safe fallbacks).
 - [X] T019n Intercept vanilla trading in `economy/TradeListener.java` or `npc/VillagerInteractionController.java`: cancel vanilla UI for Custom Villagers and route to custom flow.
 - [X] T019o Implement `VillagerInteractionController.java` in `npc/` (chat/actionbar prompts; inventory GUI fallback; server-side validation; rate limits).
@@ -109,12 +109,12 @@ CI deterministic sim (replace smoke placeholders):
 
 ### Implementation
 
-- [X] T020 [P] [US1] Create models: Village, Project in `plugin/src/main/java/com/example/villageoverhaul/projects/`
-- [X] T021 [P] [US1] Implement ProjectService in `plugin/src/main/java/com/example/villageoverhaul/projects/ProjectService.java`
-- [X] T022 [US1] Implement Treasury integration (trade → contribution) in `plugin/src/main/java/com/example/villageoverhaul/economy/TradeListener.java`
+- [X] T020 [P] [US1] Create models: Village, Project in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/`
+- [X] T021 [P] [US1] Implement ProjectService in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+- [X] T022 [US1] Implement Treasury integration (trade → contribution) in `plugin/src/main/java/com/davisodom/villageoverhaul/economy/TradeListener.java`
 - [X] T023 [P] [US1] Implement deterministic project progress + audit log in `ProjectService`
-- [X] T024 [US1] Implement upgrade executor (FAWE/WorldGuard integration) in `plugin/src/main/java/com/example/villageoverhaul/projects/UpgradeExecutor.java`
-- [X] T025 [US1] Add admin command `/vo project status` in `plugin/src/main/java/com/example/villageoverhaul/commands/ProjectCommands.java`
+- [X] T024 [US1] Implement upgrade executor (FAWE/WorldGuard integration) in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/UpgradeExecutor.java`
+- [X] T025 [US1] Add admin command `/vo project status` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`
 
 ### Optional tests (if requested)
 
@@ -132,8 +132,8 @@ CI deterministic sim (replace smoke placeholders):
 
 ### Implementation
 
-- [ ] T028 [P] [US2] Implement ReputationService in `plugin/src/main/java/com/example/villageoverhaul/reputation/ReputationService.java`
-- [ ] T029 [P] [US2] Implement Contract model + service in `plugin/src/main/java/com/example/villageoverhaul/contracts/`
+- [ ] T028 [P] [US2] Implement ReputationService in `plugin/src/main/java/com/davisodom/villageoverhaul/reputation/ReputationService.java`
+- [ ] T029 [P] [US2] Implement Contract model + service in `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/`
 - [ ] T030 [US2] Server-side validation pipeline for contract completion in `contracts/ContractService.java`
 - [ ] T031 [US2] Admin API endpoints: accept/complete per OpenAPI in `admin/AdminHttpServer.java`
 - [ ] T032 [US2] Hook rewards to WalletService (atomic credit) in `economy/WalletService.java`
@@ -154,7 +154,7 @@ CI deterministic sim (replace smoke placeholders):
 ### Implementation
 
 - [ ] T034 [P] [US3] Add structure templates under `plugin/src/main/resources/datapacks/villageoverhaul/dungeons/`
-- [ ] T035 [P] [US3] Implement DungeonsService (seeded layouts) in `plugin/src/main/java/com/example/villageoverhaul/dungeons/DungeonsService.java`
+- [ ] T035 [P] [US3] Implement DungeonsService (seeded layouts) in `plugin/src/main/java/com/davisodom/villageoverhaul/dungeons/DungeonsService.java`
 - [ ] T036 [US3] Enemy spawn/behavior (plugin-native) in `dungeons/EnemyManager.java` (optional MythicMobs adapter)
 - [ ] T037 [US3] Reward disbursement path (atomic) in `contracts/ContractService.java`
 
@@ -173,7 +173,7 @@ CI deterministic sim (replace smoke placeholders):
 
 ### Implementation
 
-- [ ] T039 [P] [US4] Implement Relationship model/service in `plugin/src/main/java/com/example/villageoverhaul/relations/RelationshipService.java`
+- [ ] T039 [P] [US4] Implement Relationship model/service in `plugin/src/main/java/com/davisodom/villageoverhaul/relations/RelationshipService.java`
 - [ ] T040 [US4] Apply price modifiers and contract availability in `contracts/ContractService.java`
 - [ ] T041 [US4] Add hysteresis/cooldowns to relation changes in `relations/RelationshipService.java`
 
@@ -188,7 +188,7 @@ CI deterministic sim (replace smoke placeholders):
 
 ### Implementation
 
-- [ ] T042 [P] [US5] Implement Property model/service in `plugin/src/main/java/com/example/villageoverhaul/property/PropertyService.java`
+- [ ] T042 [P] [US5] Implement Property model/service in `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`
 - [ ] T043 [US5] Enforce one-per-size limits and funds transfer in `property/PropertyService.java`
 - [ ] T044 [US5] Create regions and permissions via WorldGuard/LuckPerms in `property/PropertyAclAdapter.java`
 - [ ] T045 [US5] Admin command `/vo property buy` and status in `commands/PropertyCommands.java`
@@ -240,4 +240,5 @@ CI deterministic sim (replace smoke placeholders):
 ### Incremental Delivery
 - Deliver US1 (P1) → US2 (P1) → US3/US4 (P2) → US5 (P3)
 - Each story independently testable per its checkpoint
+
 

@@ -79,7 +79,7 @@ specs/001-village-building-ux/
 ```text
 plugin/
 ├── src/
-│  ├── main/java/com/example/...        # services, commands, placement, pathing
+│  ├── main/java/com/davisodom/...        # services, commands, placement, pathing
 │  └── main/resources/                  # cultures/, schemas/, plugin.yml
 └── build.gradle
 
@@ -95,3 +95,4 @@ scripts/ci/sim/                         # headless Paper harness + RCON helpers
 ## Complexity Tracking
 
 No Constitution violations planned for this phase.
+

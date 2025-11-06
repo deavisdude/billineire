@@ -190,8 +190,8 @@ Created performance test script: **`scripts/ci/sim/test-npc-performance.ps1`**
 **Phase 2.6 Complete** ✅
 
 ## Files Changed
-- `plugin/src/main/java/com/example/villageoverhaul/npc/VillagerInteractionController.java`
-- `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/npc/VillagerInteractionController.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
 - `scripts/ci/sim/test-custom-villager-interaction.ps1` (new)
 - `scripts/ci/sim/test-npc-performance.ps1` (new)
 - `tests/perf/README.md` (new)
@@ -208,3 +208,4 @@ BUILD SUCCESSFUL in 9s
 **Status**: ✅ **COMPLETE**  
 **Phase**: 2.6 (Custom Villagers Foundation)  
 **Ready for**: Phase 3 (User Story 1 - Trade-Funded Village Projects)
+

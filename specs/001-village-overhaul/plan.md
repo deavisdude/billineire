@@ -84,7 +84,7 @@ specs/001-village-overhaul/
 ```text
 plugin/
 ├── src/main/java/
-│   └── com/example/villageoverhaul/
+│   └── com/davisodom/villageoverhaul/
 │       ├── VillageOverhaulPlugin.java
 │       ├── economy/
 │       ├── projects/
@@ -110,3 +110,4 @@ tests/
 ## Complexity Tracking
 
 No Constitution violations at this stage.
+
