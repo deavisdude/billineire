@@ -1,0 +1,85 @@
+version: 2
+updates:
+  # Gradle dependencies (Java/Maven)
+  - package-ecosystem: "gradle"
+    directory: "/plugin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "deavisdude"
+    labels:
+      - "dependencies"
+      - "gradle"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # Group Paper API and related Minecraft dependencies
+      paper-ecosystem:
+        patterns:
+          - "io.papermc.paper:*"
+          - "org.spigotmc:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group Adventure API dependencies
+      adventure:
+        patterns:
+          - "net.kyori:adventure-*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group Jackson dependencies
+      jackson:
+        patterns:
+          - "com.fasterxml.jackson.*:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group testing dependencies
+      testing:
+        patterns:
+          - "org.junit.jupiter:*"
+          - "org.mockito:*"
+          - "com.github.seeseemelk:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group WorldEdit/WorldGuard ecosystem
+      worldedit-ecosystem:
+        patterns:
+          - "com.sk89q.worldguard:*"
+          - "com.fastasyncworldedit:*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "deavisdude"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      # Group all GitHub Actions updates together
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
