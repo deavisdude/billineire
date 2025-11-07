@@ -69,6 +69,14 @@ public class GenerateCommand {
             seedArg = null;
         }
         
+        // Immediate feedback to user
+        sender.sendMessage("§a✓ Village generation command received");
+        sender.sendMessage("§7  Culture: §f" + cultureId);
+        sender.sendMessage("§7  Name: §f" + villageName);
+        if (seedArg != null) {
+            sender.sendMessage("§7  Seed: §f" + seedArg);
+        }
+        
         // Validate culture exists
         if (!plugin.getCultureService().all().stream().anyMatch(c -> c.getId().equals(cultureId))) {
             sender.sendMessage("§cUnknown culture: " + cultureId);
@@ -93,10 +101,9 @@ public class GenerateCommand {
             sender.sendMessage("§7Searching for suitable terrain near world spawn...");
         }
         
-        // Create temporary metadata store to check if this is the first village
-        // Note: This uses same approach as placeVillage - needs T012l for shared store
-        VillageMetadataStore tempStore = new VillageMetadataStore(plugin);
-        boolean isFirstVillage = isFirstVillage(world, tempStore);
+        // Use shared metadata store (T012l: singleton for cross-session enforcement)
+        VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        boolean isFirstVillage = isFirstVillage(world, metadataStore);
         int spawnProximityRadius = plugin.getSpawnProximityRadius();
         
         // Adjust search strategy based on whether this is first village
@@ -106,7 +113,7 @@ public class GenerateCommand {
             sender.sendMessage("§7First village: searching within " + spawnProximityRadius + " blocks of spawn...");
         } else if (!isFirstVillage) {
             // Subsequent villages: find nearest existing village and search near it
-            Location nearestVillage = findNearestVillageLocation(world, searchOrigin, tempStore);
+            Location nearestVillage = findNearestVillageLocation(world, searchOrigin, metadataStore);
             if (nearestVillage != null) {
                 searchOrigin = nearestVillage;
                 sender.sendMessage("§7Subsequent village: searching near existing village at " + 
@@ -117,9 +124,10 @@ public class GenerateCommand {
         // Search for suitable terrain (async to avoid blocking)
         final Location finalSearchOrigin = searchOrigin;
         final World finalWorld = world;
+        final int minVillageSpacing = plugin.getMinVillageSpacing();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Location suitableLocation = findSuitableVillageLocation(finalWorld, finalSearchOrigin, 
-                    isFirstVillage ? spawnProximityRadius : 512);
+                    isFirstVillage ? spawnProximityRadius : 512, metadataStore, minVillageSpacing);
             
             if (suitableLocation == null) {
                 sender.sendMessage("§cNo suitable terrain found. Try a different location.");
@@ -151,15 +159,11 @@ public class GenerateCommand {
                     
                     UUID villageId = village.getId();
                     
-                    // Set up placement service
-                    VillageMetadataStore metadataStore = new VillageMetadataStore(plugin);
+                    // Set up placement service with shared metadata store (T012l)
                     VillagePlacementService placementService = new VillagePlacementServiceImpl(plugin, metadataStore);
                     
-                    // Register village in metadata store
-                    metadataStore.registerVillage(villageId, cultureId, 
-                        new Location(world, baseX, baseY + 1, baseZ), System.currentTimeMillis());
-                    
                     // Log start
+                    // Note: Village registration now happens INSIDE placeVillage() after spacing validation
                     logger.info("[STRUCT] User-triggered village generation: '" + villageName + "' (culture=" + 
                         cultureId + ", seed=" + villageSeed + ")");
                     sender.sendMessage("§7Generating village '" + villageName + "' (ID: " + villageId + ")...");
@@ -215,13 +219,17 @@ public class GenerateCommand {
     /**
      * Search for suitable flat terrain for village placement.
      * Adapted from VillageWorldgenAdapter with similar criteria.
+     * For subsequent villages, starts search beyond minVillageSpacing radius.
      * 
      * @param world Target world
      * @param start Starting search location
      * @param maxRadius Maximum search radius in blocks
+     * @param metadataStore Metadata store to check existing villages
+     * @param minVillageSpacing Minimum spacing requirement
      * @return Suitable location or null if none found
      */
-    private Location findSuitableVillageLocation(World world, Location start, int maxRadius) {
+    private Location findSuitableVillageLocation(World world, Location start, int maxRadius, 
+            VillageMetadataStore metadataStore, int minVillageSpacing) {
         logger.info("[STRUCT] Searching for suitable terrain within " + maxRadius + " blocks...");
         
         int startX = start.getBlockX();
@@ -229,21 +237,34 @@ public class GenerateCommand {
         int checkRadius = 24; // Check 24 block radius for flatness
         int sampleInterval = 24; // Check every 24 blocks in spiral
         
+        // For subsequent villages, start search beyond minVillageSpacing
+        boolean isFirstVillage = isFirstVillage(world, metadataStore);
+        int startRadius = isFirstVillage ? 16 : (minVillageSpacing + 32);
+        
         // Spiral search pattern
-        for (int radius = 16; radius <= Math.min(maxRadius, 512); radius += sampleInterval) {
+        for (int radius = startRadius; radius <= Math.min(maxRadius, 512); radius += sampleInterval) {
             // Check 8 points around the circle at this radius
             for (int i = 0; i < 8; i++) {
                 double angle = (i / 8.0) * 2 * Math.PI;
                 int x = startX + (int)(radius * Math.cos(angle));
                 int z = startZ + (int)(radius * Math.sin(angle));
                 
-                // Check if this location is suitable
-                if (isTerrainSuitable(world, x, z, checkRadius)) {
-                    int y = world.getHighestBlockYAt(x, z);
-                    logger.info("[STRUCT] Found suitable terrain at distance " + radius + " blocks: " +
-                        "(" + x + ", " + y + ", " + z + ")");
-                    return new Location(world, x, y, z);
+                // Check if this location is suitable for terrain
+                if (!isTerrainSuitable(world, x, z, checkRadius)) {
+                    continue;
                 }
+                
+                int y = world.getHighestBlockYAt(x, z);
+                Location candidate = new Location(world, x, y, z);
+                
+                // Check inter-village spacing
+                if (!checkInterVillageSpacing(candidate, metadataStore, minVillageSpacing)) {
+                    continue;
+                }
+                
+                logger.info("[STRUCT] Found suitable terrain at distance " + radius + " blocks: " +
+                    "(" + x + ", " + y + ", " + z + ")");
+                return candidate;
             }
         }
         
@@ -348,6 +369,42 @@ public class GenerateCommand {
         }
         
         return nearest;
+    }
+    
+    /**
+     * Check if proposed village location violates minimum inter-village spacing.
+     * Used in GenerateCommand pre-check (before placeVillage() is called).
+     * 
+     * @param proposedOrigin Proposed village origin
+     * @param metadataStore Metadata store with village data
+     * @param minVillageSpacing Minimum spacing requirement (border-to-border)
+     * @return true if spacing is acceptable, false if violated
+     */
+    private boolean checkInterVillageSpacing(Location proposedOrigin, VillageMetadataStore metadataStore, int minVillageSpacing) {
+        World world = proposedOrigin.getWorld();
+        
+        // Create temporary border for proposed location (initial size before any buildings)
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+            proposedOrigin.getBlockX(), proposedOrigin.getBlockX(),
+            proposedOrigin.getBlockZ(), proposedOrigin.getBlockZ());
+        
+        // Check against all existing villages in same world
+        for (VillageMetadataStore.VillageMetadata existingVillage : metadataStore.getAllVillages()) {
+            if (!existingVillage.getOrigin().getWorld().equals(world)) {
+                continue;
+            }
+            
+            VillageMetadataStore.VillageBorder existingBorder = existingVillage.getBorder();
+            int distance = proposedBorder.getDistanceTo(existingBorder);
+            
+            if (distance < minVillageSpacing) {
+                logger.fine(String.format("[STRUCT] Rejecting site at %s: distance %d to village %s violates minVillageSpacing=%d",
+                    formatLocation(proposedOrigin), distance, existingVillage.getVillageId(), minVillageSpacing));
+                return false;
+            }
+        }
+        
+        return true;
     }
     
     /**

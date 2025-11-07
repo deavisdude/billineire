@@ -119,9 +119,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         // Check inter-village spacing (Constitution v1.5.0, Principle XII)
         // Reject sites within minVillageSpacing of any existing village border
-        if (!checkInterVillageSpacing(origin, minVillageSpacing)) {
-            LOGGER.warning(String.format("[STRUCT] Village placement rejected: site at %s violates minVillageSpacing=%d with existing village",
-                    formatLocation(origin), minVillageSpacing));
+        InterVillageSpacingResult spacingResult = checkInterVillageSpacingDetailed(origin, minVillageSpacing);
+        if (!spacingResult.acceptable) {
+            LOGGER.warning(String.format("[STRUCT] Village placement rejected: site at %s violates minVillageSpacing=%d " +
+                    "(rejectedVillageSites.minDistance=%d, existingVillage=%s)",
+                    formatLocation(origin), minVillageSpacing, spacingResult.actualDistance, spacingResult.violatingVillageId));
             return Optional.empty();
         }
         
@@ -129,6 +131,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Skip redundant validation here to avoid false negatives
         
         UUID villageId = UUID.randomUUID();
+        
+        // Register village in metadata store AFTER spacing validation passes
+        // This prevents the village from rejecting itself during spacing checks
+        metadataStore.registerVillage(villageId, cultureId, origin, seed);
         
         // TODO: Load culture definition and structure set
         // For now, use culture-appropriate structures based on loaded schematics
@@ -784,6 +790,42 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     /**
+     * Check inter-village spacing with detailed metrics for observability.
+     * (Constitution v1.5.0, Principle XII - Observability)
+     * 
+     * @param proposedOrigin Proposed village origin (center)
+     * @param minDistance Minimum border-to-border distance required
+     * @return InterVillageSpacingResult with acceptance status and metrics
+     */
+    private InterVillageSpacingResult checkInterVillageSpacingDetailed(Location proposedOrigin, int minDistance) {
+        // Create a temporary border for the proposed village at its origin (point)
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+                proposedOrigin.getBlockX(), proposedOrigin.getBlockX(),
+                proposedOrigin.getBlockZ(), proposedOrigin.getBlockZ()
+        );
+        
+        // Check against all existing villages in the same world
+        for (VillageMetadataStore.VillageMetadata existingVillage : metadataStore.getAllVillages()) {
+            // Skip villages in different worlds
+            if (!existingVillage.getOrigin().getWorld().equals(proposedOrigin.getWorld())) {
+                continue;
+            }
+            
+            VillageMetadataStore.VillageBorder existingBorder = existingVillage.getBorder();
+            
+            // Check if borders are within minimum distance
+            if (proposedBorder.isWithinDistance(existingBorder, minDistance)) {
+                int actualDistance = proposedBorder.getDistanceTo(existingBorder);
+                LOGGER.fine(String.format("[STRUCT] Inter-village spacing violation: proposed=%s, existing=%s (village=%s), distance=%d, required=%d",
+                        formatLocation(proposedOrigin), existingBorder, existingVillage.getVillageId(), actualDistance, minDistance));
+                return new InterVillageSpacingResult(false, actualDistance, existingVillage.getVillageId());
+            }
+        }
+        
+        return new InterVillageSpacingResult(true, Integer.MAX_VALUE, null); // No violations
+    }
+    
+    /**
      * Check if this is the first village in the world.
      * 
      * @param world Target world
@@ -852,6 +894,21 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     // ==================== Inner Classes ====================
+    
+    /**
+     * Result of inter-village spacing check with observability metrics.
+     */
+    private static class InterVillageSpacingResult {
+        final boolean acceptable;
+        final int actualDistance;
+        final UUID violatingVillageId;
+        
+        InterVillageSpacingResult(boolean acceptable, int actualDistance, UUID violatingVillageId) {
+            this.acceptable = acceptable;
+            this.actualDistance = actualDistance;
+            this.violatingVillageId = violatingVillageId;
+        }
+    }
     
     private static class GridPosition {
         final int x;

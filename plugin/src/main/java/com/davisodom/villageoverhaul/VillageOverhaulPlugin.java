@@ -16,8 +16,10 @@ import com.davisodom.villageoverhaul.obs.Metrics;
 import com.davisodom.villageoverhaul.persistence.JsonStore;
 import com.davisodom.villageoverhaul.projects.ProjectGenerator;
 import com.davisodom.villageoverhaul.projects.ProjectService;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.villages.VillageService;
 import com.davisodom.villageoverhaul.worldgen.VillageWorldgenAdapter;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.util.logging.Logger;
 
@@ -52,6 +54,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private CultureService cultureService;
     private AdminHttpServer adminServer;
     private VillageService villageService;
+    private VillageMetadataStore metadataStore;
     private VillageWorldgenAdapter worldgenAdapter;
     private ProjectService projectService;
     private ProjectGenerator projectGenerator;
@@ -68,7 +71,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         instance = this;
         logger = getLogger();
         
-        logger.info("Village Overhaul v" + getDescription().getVersion() + " starting...");
+        logger.info("Village Overhaul v" + getPluginMeta().getVersion() + " starting...");
         
         // Load configuration
         saveDefaultConfig();
@@ -142,6 +145,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         villageService = new VillageService();
         logger.info("✓ Village service initialized");
         
+        // Metadata store (Phase 2.1: inter-village spacing enforcement)
+        metadataStore = new VillageMetadataStore(this);
+        logger.info("✓ Village metadata store initialized");
+        
         // Project service (US1)
         projectService = new ProjectService(logger);
         logger.info("✓ Project service initialized");
@@ -194,22 +201,32 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         
         // Register commands
         ProjectCommands projectCommands = new ProjectCommands(this);
-        getCommand("vo").setExecutor(projectCommands);
-        getCommand("vo").setTabCompleter(projectCommands);
+        PluginCommand voCmd = getCommand("vo");
+        if (voCmd != null) {
+            voCmd.setExecutor(projectCommands);
+            voCmd.setTabCompleter(projectCommands);
+        }
         
-        // Register test commands (for CI/testing only - disable in production via permissions)
         TestCommands testCommands = new TestCommands(this, customVillagerService, villagerInteractionController);
-        getCommand("votest").setExecutor(testCommands);
-        getCommand("votest").setTabCompleter(testCommands);
-        logger.info("✓ Test commands registered (votest)");
+        PluginCommand votestCmd = getCommand("votest");
+        if (votestCmd != null) {
+            votestCmd.setExecutor(testCommands);
+            votestCmd.setTabCompleter(testCommands);
+        }
         
         VillageCommands villageCommands = new VillageCommands(this);
-        getCommand("villages").setExecutor(villageCommands);
-        getCommand("villages").setTabCompleter(villageCommands);
-        getCommand("village").setExecutor(villageCommands);
-        getCommand("village").setTabCompleter(villageCommands);
+        PluginCommand villagesCmd = getCommand("villages");
+        if (villagesCmd != null) {
+            villagesCmd.setExecutor(villageCommands);
+            villagesCmd.setTabCompleter(villageCommands);
+        }
+        PluginCommand villageCmd = getCommand("village");
+        if (villageCmd != null) {
+            villageCmd.setExecutor(villageCommands);
+            villageCmd.setTabCompleter(villageCommands);
+        }
         
-        logger.info("✓ Commands registered");
+        logger.info("Village Overhaul enabled successfully!");
     }
     
     /**
@@ -245,6 +262,8 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public CultureService getCultureService() { return cultureService; }
     
     public VillageService getVillageService() { return villageService; }
+    
+    public VillageMetadataStore getMetadataStore() { return metadataStore; }
 
     public VillageWorldgenAdapter getWorldgenAdapter() { return worldgenAdapter; }
     

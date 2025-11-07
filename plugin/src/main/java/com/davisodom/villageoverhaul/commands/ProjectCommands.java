@@ -43,7 +43,13 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            return false; // Show usage
+            // Show help when no subcommand provided
+            sender.sendMessage("§6Village Overhaul Commands:");
+            sender.sendMessage("  §7/vo generate <culture> <name> [seed] §f- Generate a village");
+            sender.sendMessage("  §7/vo project list [villageId] §f- List projects");
+            sender.sendMessage("  §7/vo project status <projectId> §f- Show project status");
+            sender.sendMessage("  §7/vo villager list [villageId] §f- List villagers");
+            return true;
         }
         
         String subcommand = args[0].toLowerCase();
@@ -57,6 +63,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                 return handleVillagerCommand(sender, Arrays.copyOfRange(args, 1, args.length));
             default:
                 sender.sendMessage("§cUnknown subcommand: " + subcommand);
+                sender.sendMessage("§7Type /vo for help");
                 return false;
         }
     }

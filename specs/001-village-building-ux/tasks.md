@@ -182,13 +182,19 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - Logs show spawn distance for first village, nearest village distance for subsequent
     - Note: Full effectiveness requires T012l (shared metadata store) for cross-session detection
 
-- [ ] T012k [Foundational] Observability for inter-village enforcement
+- [X] T012k [Foundational] Observability for inter-village enforcement
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
   - Description: Emit structured logs/metrics for inter-village rejections and border-limited expansions.
   - Acceptance:
     - Logs include counters like `rejectedVillageSites.minDistance=NN` and border expansion clips.
+  - Implementation:
+    - Created `InterVillageSpacingResult` inner class with fields: `boolean acceptable`, `int actualDistance`, `UUID violatingVillageId`
+    - Implemented `checkInterVillageSpacingDetailed()` method returning detailed spacing check results
+    - Enhanced `placeVillage()` logging to include: `rejectedVillageSites.minDistance=%d, existingVillage=%s`
+    - Structured logs now show: site location, minVillageSpacing config, actual distance to violating village, and violating village UUID
+    - FINE-level logs include detailed rejection info: `"Rejecting site at %s: distance %d to village %s violates minVillageSpacing=%d"`
 
-- [ ] T012l [Foundational] Implement shared VillageMetadataStore singleton
+- [X] T012l [Foundational] Implement shared VillageMetadataStore singleton
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`
   - Description: Create singleton VillageMetadataStore instance in VillageOverhaulPlugin lifecycle (initialize in onEnable, cleanup in onDisable). Expose via `getMetadataStore()` getter. Update all callers (VillagePlacementServiceImpl, GenerateCommand, VillageWorldgenAdapter) to use shared instance instead of creating new instances. This enables inter-village spacing checks to work across all command invocations and worldgen events.
   - Acceptance:
@@ -197,6 +203,15 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - Inter-village spacing enforcement works across multiple `/vo generate` invocations
     - Villages persist in metadata store across placements (until server restart)
     - No duplicate metadata store instances created
+  - Implementation:
+    - Added `import com.davisodom.villageoverhaul.villages.VillageMetadataStore;` to VillageOverhaulPlugin
+    - Added `private VillageMetadataStore metadataStore;` field to VillageOverhaulPlugin
+    - Initialized in `initializeFoundation()`: `metadataStore = new VillageMetadataStore(this);`
+    - Added public getter: `public VillageMetadataStore getMetadataStore() { return metadataStore; }`
+    - GenerateCommand updated: `VillageMetadataStore metadataStore = plugin.getMetadataStore();` (replaces `new VillageMetadataStore(plugin)`)
+    - VillageWorldgenAdapter updated: `VillageMetadataStore metadataStore = plugin.getMetadataStore();` (replaces `new VillageMetadataStore(plugin)`)
+    - All callers now use shared singleton instance via `plugin.getMetadataStore()`
+    - BUILD SUCCESSFUL with all 14 tests passing (6 TickHarnessTest, 8 EconomyAntiDupeTest)
 
 **Checkpoint**: Inter-village rules enforced and observable; borders persisted; ready for US1.
 

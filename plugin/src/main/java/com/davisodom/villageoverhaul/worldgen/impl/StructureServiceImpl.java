@@ -244,7 +244,8 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info(String.format("[STRUCT] Seat attempt %d/%d: structure='%s', location=%s, seed=%d",
                     attempt + 1, MAX_RESEAT_ATTEMPTS, template.id, formatLocation(currentOrigin), seed));
             
-            // Attempt minor terraforming to prepare site
+            // Attempt minor terraforming to prepare site (T012f: relaxed tolerance)
+            // If terraforming fails, continue anyway - Paper API structures can handle minor terrain variations
             boolean terraformed = TerraformingUtil.prepareSite(
                     world,
                     currentOrigin,
@@ -254,12 +255,12 @@ public class StructureServiceImpl implements StructureService {
             );
             
             if (!terraformed) {
-                LOGGER.info(String.format("[STRUCT] Re-seat required: structure='%s', attempt=%d/%d, location=%s, seed=%d, reason=terraforming_failed",
-                        template.id, attempt + 1, MAX_RESEAT_ATTEMPTS, formatLocation(currentOrigin), seed));
-                continue;
+                LOGGER.fine(String.format("[STRUCT] Terraforming not ideal at attempt %d, but continuing with placement",
+                        attempt + 1));
+                // Don't immediately reject - try placement anyway
             }
             
-            // Site prepared - perform actual placement
+            // Site prepared (or acceptable) - perform actual placement
             boolean placed = performActualPlacement(template, world, currentOrigin, seed);
             
             if (placed) {
