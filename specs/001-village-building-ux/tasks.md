@@ -106,6 +106,67 @@ validations remain, with minimal unit tests for core algorithms where useful.
 
 ---
 
+## Phase 4.5: US2 Stabilization & Terrain Integration (Priority: P1)
+
+Purpose: Fix rooftop paths, floating path slabs, treetop dirt, unused terraforming, and rotation variety while keeping the current stable build intact. These tasks target minimal, safe changes with clear acceptance criteria and tests.
+
+- [ ] T021b [US2] Register and avoid building footprints in pathfinding
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/PathService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+	- Description: Add a method to register building bounds (minX..maxX, minY..maxY, minZ..maxZ) with the path service per village, and treat any node inside these bounds as an obstacle during A*; populate from actual placed buildings right before path generation.
+	- Acceptance:
+		- 0 blocks of any path are placed on top of structure materials (roof/walls/floors) when buildings are adjacent.
+		- Path generation logs show "avoided N building tiles" when applicable.
+
+- [ ] T021c [US2] Reinstate 3D terrain-following (±1 Y per step) with natural terrain whitelist
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
+	- Description: Restore 3D A* (consider Y) with a whitelist of natural ground (grass/dirt/stone/sand/gravel/packed_ice/snow) so paths will not route over man-made blocks (wood/planks/bricks/terracotta/concrete/wool). Keep MAX_NODES and distance caps as before.
+	- Acceptance:
+		- Paths follow gentle slopes; no flat floating spans across ledges.
+		- Paths refuse to climb onto non-natural blocks; rooftop crossings eliminated.
+
+- [ ] T022a [P] [US2] Fix floating slabs/stairs in PathEmitter
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
+	- Description: When smoothing, only place slab/stair if (a) target block is path material and (b) the block below is solid natural terrain; otherwise downgrade to full block at ground or skip smoothing step. Remove any previously placed slab that would end up floating.
+	- Acceptance:
+		- No slabs/stairs render with air directly beneath; zero "floating slab" sightings in smoke test.
+
+- [ ] T014b [P] [US1] Prevent dirt mounds on treetops during grading
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+	- Description: Before fill/grade, treat leaves/logs as non-foundation; never place dirt on top of leaf/log blocks. Prefer trimming foliage and seeking true ground (soil/stone) or skipping fill for that column.
+	- Acceptance:
+		- After structure placement or path emission, no dirt columns cap tree leaves; canopy remains natural or trimmed, not buried.
+
+- [ ] T015b [US1] Roll back unused terraforming when a seating attempt is abandoned
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+	- Description: When seating attempts fail and the algorithm re-seats elsewhere, revert prior grading/trim/fill in that attempt (simple block-change journal scoped to the attempt). Commit changes only on final successful seat.
+	- Acceptance:
+		- No stray graded patches or dirt fills remain at rejected sites; logs show "terraform rollback applied" for aborted seats.
+
+- [ ] T017b [P] [US1] Diversify building rotation while preserving footprint accuracy
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+	- Description: Use per-building mixed seed (e.g., hash of villageId, structureId, index) for 0/90/180/270; ensure the same rotation is used for both footprint computation and paste. Do not allow vertical flips.
+	- Acceptance:
+		- In a 5-building village, at least two distinct rotations occur consistently; no overlaps; structures remain grounded.
+
+- [ ] T026e [P] [US2] Headless test: "no rooftop paths"
+	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+	- Description: Detect any path block whose underlying or target block is non-natural and belongs to a building footprint; fail if found. Capture a small world snapshot or log hash.
+
+- [ ] T026f [P] [US2] Headless test: "no floating smoothing blocks"
+	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+	- Description: Scan emitted path segments; assert slabs/stairs have solid under-support or are replaced by full blocks.
+
+- [ ] T026g [P] [US1] Headless test: "no treetop dirt mounds"
+	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+	- Description: In the affected area, ensure no dirt/grass blocks sit directly atop leaf/log blocks introduced by grading.
+
+- [ ] T026h [P] [US1] Headless test: "terraform rollback on abort"
+	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+	- Description: Simulate a forced re-seat; assert no net block changes remain at the first attempt location after rollback.
+
+**Checkpoint**: US2 stabilization goals met — zero rooftop crossings, no floating slabs, no treetop mounds, and clean re-seat behavior. Rotational variety present with accurate footprints.
+
+
 ## Phase 6: User Story 4 — Guided Onboarding (Priority: P2)
 
 **Goal**: Greeter prompt and signage at main building entry
