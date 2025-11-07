@@ -37,4 +37,6 @@ Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
     Validate with `Get-Command -Syntax` in CI to fail fast on parser errors.
 
 When completing a task, if a playtest makes sense, suggest it to the user along with a guide on how to test the most recent changes.
+
+Do not leave TODO comments in code snippets. Instead create a complete User Story/Task(s) for any unfinished work.
 <!-- MANUAL ADDITIONS END -->
