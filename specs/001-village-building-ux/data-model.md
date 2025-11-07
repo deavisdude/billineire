@@ -15,6 +15,11 @@ Date: 2025-11-05
 - schemaVersion: int
  - asyncPlacementEnabled: bool
  - structureRegistryRef: string (e.g., CustomStructures key) (optional)
+ - minBuildingSpacing: int (loaded from config at creation time)
+ - minVillageSpacing: int (loaded from config at creation time)
+ - border: { minX: int, maxX: int, minZ: int, maxZ: int } (dynamic, expands with construction)
+ - lastBorderUpdateTick: long
+ - borderExpansionBlockedDirs: set<enum {NORTH,SOUTH,EAST,WEST}> (neighbor proximity clipping)
 
 ### Building
 - id: UUID
@@ -30,6 +35,7 @@ Date: 2025-11-05
 ### MainBuilding (logical designation)
 - buildingId: UUID (references Building)
 - designationAt: timestamp
+ - isSpawnProximal: bool (true when first village near spawn)
 
 ### PathNetwork
 - id: UUID
@@ -39,6 +45,7 @@ Date: 2025-11-05
 - traversableBlocks: set<string>
  - waypoints: [{ id, x, y, z }]
  - plannerConcurrencyCap: int
+ - registeredBuildingBounds: [ { villageId, minX, maxX, minZ, maxZ } ] (obstacles for pathfinding)
 
 ### ProjectSignage
 - id: UUID
@@ -84,6 +91,7 @@ Date: 2025-11-05
 - Village 1..* Building
 - Village 1..1 PathNetwork
 - Village 0..1 MainBuilding
+ - Village (neighbors): implicit relationship derived from overlapping or near (within 2*minVillageSpacing) border proximity
 - MainBuilding 1..1 Building
 - Village 0..1 ProjectSignage (current view)
 - Village 0..* Builder
@@ -99,8 +107,14 @@ Date: 2025-11-05
  - Builder state transitions MUST follow the defined state machine; progress checkpoints persisted
  - Pathfinding searches SHOULD be local (≈10 blocks). Longer routes MUST use waypoint segments,
 	 cache paths, invalidate on terrain changes, and respect plannerConcurrencyCap
+ - Village border expansions MUST NOT violate minVillageSpacing vs any neighbor (border-to-border)
+ - First village MUST be within configurable spawn proximity range but not centered exactly on spawn (avoid spawn griefing)
+ - Subsequent village placements MUST select the nearest valid site (≥ minVillageSpacing) to at least one existing village border
+ - Border clipping directions MUST reflect neighbor proximity; expansion attempts into blocked directions aborted or deferred
 
 ## Notes
 - Persist schemaVersion for forward-only migration safety (see Constitution)
  - WorldEdit API is the standard for structure manipulation (FAWE preferred when available)
  - Prefer registering structures with a shared registry (e.g., CustomStructures) when integrated
+ - Border representation kept axis-aligned for deterministic computation and cheap intersection
+ - Potential future enhancement: polygonal borders once path networks and terrain shaping justify complexity

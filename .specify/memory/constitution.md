@@ -1,19 +1,19 @@
 <!--
 Sync Impact Report
-- Version change: 1.3.0 → 1.4.0
+- Version change: 1.4.0 → 1.5.0
 - Modified sections:
-	- X. Village Building & Player Onboarding (clarified grounded placement scope and cross-reference to terrain/cartography)
-- Added sections:
-	- XII. Terrain Suitability, Spacing, and Cartography (NON-NEGOTIABLE)
+	- XII. Terrain Suitability, Spacing, and Cartography → expanded to include Inter-Village Minimum Distance, Spawn Proximity bias, and Dynamic Borders
+- Added sections: None
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (expand Village Building & UX gate with water avoidance, spacing, non-overlap, and live map)
-	- ✅ .specify/templates/spec-template.md (expand Constitution Gates checklist with the same constraints)
-	- ✅ .specify/templates/tasks-template.md (expand constitution-driven task types for terrain constraints and village map GUI)
-	- N/A .specify/templates/commands/* (directory not present)
-	- ⚠ README.md / docs/* (add brief note on Village Map UI and terrain constraints)
+	- ✅ .specify/templates/plan-template.md (add Inter-Village Spacing & Borders gate: default 200 blocks, border-to-border, spawn-proximal placement, dynamic borders)
+	- ✅ .specify/templates/spec-template.md (add checklist item for inter-village spacing/borders with default 200 and deterministic enforcement)
+	- ✅ .specify/templates/tasks-template.md (add constitution-driven task type for inter-village spacing enforcement and dynamic border updates)
+	- N/A .specify/templates/commands/* (no specific commands templates present)
+	- ⚠ README.md / docs/* (note village inter-spacing rules and border dynamics)
 - Follow-up TODOs:
 	- TODO(DOCS_VILLAGE_MAP): Add docs/quickstart section describing the "Village Map" sign interaction and GUI parity for Bedrock.
+	- TODO(DOCS_VILLAGE_SPACING): Document inter-village minimum distance (default 200), spawn-proximal placement, and dynamic border behavior in docs/.
 -->
 
 # Spec Billineire Constitution
@@ -174,6 +174,30 @@ maintain a live, server-authoritative cartographic model:
 - Observability: Emit structured logs when placements skip due to water/spacing/overlap, including
 	counts and coordinates where safe. Provide metrics for rejected sites and map update latency.
 
+Inter-Village Placement & Borders:
+
+- Inter-Village Minimum Distance: Villages MUST maintain a configurable minimum border-to-border
+	distance from any other village. Default: 200 blocks. Enforcement is bidirectional: both new
+	placements and subsequent expansions MUST respect this distance on both sides, measured between
+	current dynamic borders (not just seeds/centers).
+- Spawn Proximity Preference: The first/early villages MUST start near (but not at) world spawn.
+	Village search SHOULD begin near spawn and pick the nearest valid site that does not violate the
+	minimum inter-village distance.
+- Proximity-to-Existing Bias: After the first village, new villages SHOULD generate as close as
+	possible to an existing village without violating the minimum distance. Search procedures SHOULD
+	prefer the smallest feasible distance to the nearest neighbor’s border while remaining ≥ min
+	distance.
+- Dynamic Borders: Village borders MUST expand as new buildings and construction projects are
+	completed. Border growth MUST be persisted and recalculated deterministically. Expansion MUST be
+	limited in any direction where another village’s border exists within the configured minimum
+	distance. The cartographic model MUST expose current borders for both enforcement and UX.
+- Determinism & Configurability: The inter-village minimum distance MUST be configurable and have a
+	sensible default (200). Site searches MUST be deterministic from world seed and inputs for both
+	user-invoked and natural generation flows.
+- Observability: Emit structured logs and counters for inter-village rejections (e.g.,
+	`rejectedVillageSites.minDistance=N`) and border-limited expansions. Include coordinates where
+	safe and summary metrics per generation event.
+
 Rationale: Explicit terrain constraints prevent immersion-breaking placements, spacing ensures
 readable and navigable villages, and a live cartographic view improves player UX without breaking
 determinism or performance budgets.
@@ -287,4 +311,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.4.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-07
+**Version**: 1.5.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-07

@@ -100,7 +100,7 @@ validations remain, with minimal unit tests for core algorithms where useful.
     - Village-level placement metrics logged: "Placement metrics for village X: attempts=N, rejected: terrain=N (fluid/steep/blocked), spacing=N, overlap=N, avgRejected=X.XX"
     - Per-position FINEST logging for rejection reasons (cheapest check first pattern)
   - **Tolerance Adjustment (2025-11-07)**: Relaxed zero-tolerance terrain checks after playtest showed 625+ attempts with 0 placements
-    - **Hard veto**: ANY fluid tiles = reject (water avoidance per Constitution v1.4.0)
+    - **Hard veto**: ANY fluid tiles = reject (water avoidance per Constitution v1.5.0)
     - **Soft tolerance**: Up to 20% of samples can be steep/blocked (allows natural terrain variation)
     - `MAX_SLOPE_DELTA`: 2 → 4 blocks (gentle hills acceptable)
     - Sample density: every 2 blocks → every 4 blocks (4x performance improvement)
@@ -108,6 +108,49 @@ validations remain, with minimal unit tests for core algorithms where useful.
     - See `T012f-relaxed-tolerance.md` for detailed analysis
 
 **Checkpoint**: Services and DTOs exist; admin commands compile; ready to implement US1
+
+---
+
+## Phase 2.1: Foundational — Inter-Village Spacing & Borders (Priority: P1)
+
+**Purpose**: Enforce village-level spacing (border-to-border, default 200 blocks), establish dynamic
+border tracking, and align site selection with spawn proximity and nearest-neighbor bias.
+
+- [ ] T012g [Foundational] Add configurable minimum village spacing
+  - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
+  - Description: Introduce `village.minVillageSpacing` (default: 200). Load on enable and expose via config service.
+  - Acceptance:
+    - Config key present with default if missing.
+    - `/vo generate` and natural gen reference this value in logs.
+
+- [ ] T012h [Foundational] Persist and update dynamic village borders
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Represent village border as axis-aligned bounds; expand deterministically on building placement; persist and expose getters.
+  - Acceptance:
+    - After building placements, border bounds expand to include all footprints.
+    - Border persisted and retrievable across restarts.
+
+- [ ] T012i [Foundational] Enforce inter-village spacing during village site search
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
+  - Description: During site selection (user-invoked and natural), reject candidate sites whose border would violate `minVillageSpacing` vs any existing village border (border-to-border, bidirectional).
+  - Acceptance:
+    - Attempted placements within `minVillageSpacing` are rejected with `[STRUCT]` logs indicating `rejectedVillageSites.minDistance`.
+    - Successful placements always satisfy min border distance.
+
+- [ ] T012j [Foundational] Spawn-proximal initial placement & nearest-neighbor bias
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Bias first/early villages to spawn proximity (not exact spawn). For subsequent villages, prefer the nearest valid site to existing borders while respecting the minimum distance.
+  - Acceptance:
+    - First village placed within a configured radius of spawn (not exactly at spawn).
+    - Subsequent villages placed at the smallest valid distance ≥ `minVillageSpacing`.
+
+- [ ] T012k [Foundational] Observability for inter-village enforcement
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Emit structured logs/metrics for inter-village rejections and border-limited expansions.
+  - Acceptance:
+    - Logs include counters like `rejectedVillageSites.minDistance=NN` and border expansion clips.
+
+**Checkpoint**: Inter-village rules enforced and observable; borders persisted; ready for US1.
 
 ---
 
@@ -275,6 +318,25 @@ Purpose: Fix rooftop paths, floating path slabs, treetop dirt, unused terraformi
     - Terrain classification totals reflect environment.
 	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
 	- Description: Simulate a forced re-seat; assert no net block changes remain at the first attempt location after rollback.
+
+- [ ] T026m [P] [US1] Headless test: "inter-village spacing enforcement"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Attempt to place a second village within `minVillageSpacing` of the first; assert rejection; then place just beyond and assert success.
+  - Acceptance:
+    - Harness fails if any village borders are closer than configured spacing.
+    - Log contains `rejectedVillageSites.minDistance=NN` metric.
+
+- [ ] T026n [P] [US1] Headless test: "spawn-proximal initial village"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: With a fresh world, assert the first village is generated within the configured spawn proximity range (not at exact spawn).
+  - Acceptance:
+    - Test prints distance to spawn and threshold; fails if outside range or equals 0.
+
+- [ ] T026o [P] [US1] Headless test: "nearest-neighbor bias"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: With an existing village, request a new village and assert its distance to the nearest neighbor’s border is minimized subject to the spacing constraint.
+  - Acceptance:
+    - Reported distance is within a small epsilon of `minVillageSpacing`.
 
 **Checkpoint**: US2 stabilization goals met — zero rooftop crossings, no floating slabs, no treetop mounds, and clean re-seat behavior. Rotational variety present with accurate footprints.
 

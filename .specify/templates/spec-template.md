@@ -135,6 +135,11 @@ Confirm the feature satisfies or has a plan for:
   paths, culture-defined main building, signage for projects/requirements, and greeter
   villager behavior on main-building entry are addressed.
 
+- Inter-Village Spacing & Borders (if village-related): Configurable minimum border-to-border
+  distance (default 200) enforced bidirectionally; spawn-proximal initial village; subsequent
+  villages biased to be as close as possible without violating min distance; dynamic border
+  expansion clipped when neighboring border lies within threshold; deterministic calculations.
+
 - Structure Integration & NPC Construction (if applicable): WorldEdit/FAWE for structure
   load/rotate/paste with footprint validation, async preparation and batched main-thread
   placement, deterministic builder state machine with visible progress and persisted

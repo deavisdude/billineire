@@ -9,7 +9,8 @@ onboarding (greeter/signage) following after main-building designation.
 ## Summary
 
 Primary requirement: Generate culture-defined village structures with grounded placement (no
-floating/embedded), connect key buildings with paths, and designate exactly one main building per
+floating/embedded), connect key buildings with paths, enforce inter-village minimum spacing with
+dynamic borders, and designate exactly one main building per
 village (per culture) as the onboarding anchor. Technical approach: data-driven structures with
 site validation (foundation + interior air checks), minor localized terraforming allowed for
 natural placement, 2D path generation with light smoothing (steps/slabs) and no block spam, all
@@ -36,6 +37,15 @@ deterministic from world/feature seeds and chunk-gated to respect tick budgets.
 **Scale/Scope**: Up to 50 loaded villages, 500 active villagers, and many structures/paths active
   concurrently in the Medium profile
 
+Configuration highlights:
+- village.minBuildingSpacing: default 8 blocks (inter-building)
+- village.minVillageSpacing: default 200 blocks (border-to-border, bidirectional enforcement)
+  - First/early village search biased near (but not at) spawn
+  - Subsequent villages biased to be as close as possible to an existing village while respecting
+    minVillageSpacing
+  - Borders are dynamic and expand with construction; expansions are clipped where a neighbor’s
+    border is within minVillageSpacing
+
 ## Constitution Check
 
 Must-pass gates and how we satisfy them for this phase:
@@ -61,6 +71,11 @@ Must-pass gates and how we satisfy them for this phase:
   regex [0-9] classes; readiness via substring 'Done'.
 - Village Building & UX: Grounded placement; inter-building paths; one main building per village;
   signage for projects/requirements; greeter behavior on main-building entry.
+
+- Inter-Village Spacing & Borders: Enforce configurable minimum border-to-border distance between
+  villages (default 200). First/early villages start near spawn (not at exact spawn), and later
+  villages are placed as close as possible to existing borders without violating the minimum.
+  Borders expand dynamically with construction and are clipped near neighboring borders.
 
 - Structure Integration & NPC Construction: Use WorldEdit/FAWE for structure load/rotate/paste
   with footprint validation. All large structure preparation is asynchronous; block mutations are
@@ -103,7 +118,8 @@ scripts/ci/sim/                         # headless Paper harness + RCON helpers
 - StructureService: load/rotate/paste structures via WorldEdit/FAWE, validate sites, minor terraforming,
   async preparation with main-thread batched commits
 - PathService: connect key buildings with natural paths (smoothing allowed)
-- VillagePlacementService: drive end-to-end seating + main-building designation
+- VillagePlacementService: drive end-to-end seating + main-building designation, village site search
+  with inter-village spacing enforcement (border-to-border), spawn/nearest-neighbor bias
 - BuilderService: state machine orchestration (see Research) and visible row/layer placement
 - MaterialManager: coordinate builder inventory with storage/warehouse (server-authoritative)
 - TestCommands: admin endpoints to simulate generation and validate outputs

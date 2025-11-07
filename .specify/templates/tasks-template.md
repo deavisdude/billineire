@@ -43,6 +43,11 @@ description: "Task list template for feature implementation"
   main-building designation/persistence, signage for active projects and material requirements,
   and greeter villager trigger behavior on main-building entry (server-side, rate-limited).
 
+- Village worldgen spacing & borders: enforce configurable inter-village minimum distance
+  (default 200 blocks) with border-to-border checks, spawn-proximal initial placement, bias
+  toward nearest neighbor without violating spacing, and dynamic border updates that limit
+  expansion near neighboring borders.
+
 - Structure integration & NPC construction: WorldEdit/FAWE integration, structure loading
   subsystem, asynchronous placement engine with batched main-thread commits, deterministic
   builder state machine (IDLE → WALKING_TO_BUILDING → REQUESTING_MATERIALS → GATHERING_MATERIALS

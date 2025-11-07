@@ -25,6 +25,19 @@ Spec: ../001-village-overhaul/spec.md
 - Parity (Java/Bedrock): Use Adventure API for signage text; avoid client-only visuals; ensure functional parity.
 - Protections: If WorldGuard present, treat regions disallowing placement as invalid sites.
 
+### Village Site Selection & Borders
+
+- Inter-Village Minimum Distance: Enforce a configurable border-to-border spacing (default 200 blocks)
+  between villages. Enforcement is bidirectional and measured using dynamic borders, not just centers.
+- Spawn Proximity: First/early villages are placed near (but not at) world spawn to improve player onboarding and reduce travel.
+- Nearest-Neighbor Bias: For subsequent villages, the search chooses a site as close as possible to an
+  existing village border while respecting the minimum distance.
+- Dynamic Borders: Village borders expand deterministically with new construction projects (based on
+  aggregated building footprints). Expansion is clipped in directions where a neighbor’s border exists within
+  `minVillageSpacing`. Borders are persisted and exposed to UX (e.g., map/signage).
+- Determinism & Performance: Searches seeded from world seed; chunk-gated scans; cheap axis-aligned border
+  representation for intersection checks, with potential future polygonal refinement.
+
 ## NPC Builder Architecture (Minecolonies Pattern)
 
 State machine with persisted checkpoints and visible progress:
@@ -52,6 +65,9 @@ Integration with structure generation:
   balances natural aesthetics with predictable, safe edits.
 - A* on a heightmap is simple, fast enough, and easy to smooth with slabs/steps without heavy terrain changes.
 - Seed composition ensures reproducible outputs per world/village while allowing diversity across villages.
+ - Inter-village spacing preserves readable, navigable world layouts and prevents village overlap.
+   Spawn-proximal initial placement improves early gameplay; nearest-neighbor bias keeps world scale compact
+   without violating spacing rules.
 
 ## Alternatives Considered
 

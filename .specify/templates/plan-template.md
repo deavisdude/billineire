@@ -55,6 +55,13 @@ For this project, every plan MUST address and prove compliance with these gates:
   (no floating/embedded), inter-building paths, a culture-defined main building, clear
   project signage/requirements, and greeter villager behavior on main-building entry.
 
+- Inter-Village Spacing & Borders (if village-related): Define how the plan enforces a
+  configurable minimum border-to-border distance between villages (default 200 blocks),
+  ensures first/early villages start near (but not at) spawn, biases subsequent villages to be
+  as close as possible to existing borders without violating the min distance, and maintains
+  deterministic, dynamically expanding borders that limit growth where a neighbor’s border is
+  within the configured distance.
+
 - Structure Integration & NPC Construction (if applicable): Plan for WorldEdit/FAWE-based
   structure load/rotate/paste with footprint validation; asynchronous preparation with
   main-thread batched placement; deterministic builder state machine with visible row/layer
