@@ -57,6 +57,7 @@ The plugin JAR will be in `plugin/build/libs/village-overhaul-*.jar`
 - **[Data Model](specs/001-village-overhaul/data-model.md)** - Entity relationships and validation rules
 - **[Compatibility Matrix](docs/compatibility-matrix.md)** - Supported server profiles and smoke tests
 - **[Cultural Review Checklist](docs/culture-review.md)** - Ensuring authentic cultural representation
+- **[Code Quality & Security Setup](docs/code-quality-security-setup.md)** - SonarQube and CodeQL configuration
 
 ## 🎯 Roadmap
 
