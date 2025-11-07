@@ -241,11 +241,12 @@ public class VillageWorldgenAdapter implements Listener {
         int yVariation = maxY - minY;
         double waterPercent = (double) waterBlocks / totalChecks;
         
-        // Criteria for suitable terrain:
-        // - Y variation <= 15 blocks (relaxed for more placement opportunities)
+        // Criteria for suitable terrain (aligned with structure placement validation):
+        // - Y variation <= 8 blocks (must match structure placement MAX_SLOPE_DELTA)
         // - Less than 30% water coverage
         // - Not too high or too low (between Y 50 and Y 120)
-        boolean flatEnough = yVariation <= 15;
+        // Tightened from 15 to 8 blocks to match TerrainClassifier MAX_SLOPE_DELTA
+        boolean flatEnough = yVariation <= 8;
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         

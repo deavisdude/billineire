@@ -152,12 +152,16 @@ public class PathServiceImpl implements PathService {
         
         int startX = start.getBlockX();
         int startZ = start.getBlockZ();
-        int startY = world.getHighestBlockYAt(startX, startZ);
+        int startY = findGroundLevel(world, startX, startZ);
         
         int endX = end.getBlockX();
         int endZ = end.getBlockZ();
         // endY stored for potential future use in 3D pathfinding
-        // int endY = world.getHighestBlockYAt(endX, endZ);
+        // int endY = findGroundLevel(world, endX, endZ);
+        
+        LOGGER.info(String.format("[PATH] A* search start: from (%d,%d,%d) to (%d,%d), distance=%.1f",
+                startX, startY, startZ, endX, endZ, 
+                Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endZ - startZ, 2))));
         
         PathNode startNode = new PathNode(startX, startY, startZ);
         startNode.gScore = 0;
@@ -167,6 +171,8 @@ public class PathServiceImpl implements PathService {
         allNodes.put(startNode.key(), startNode);
         
         int nodesExplored = 0;
+        int obstaclesEncountered = 0;
+        double maxTerrainCostSeen = 0.0;
         
         while (!openSet.isEmpty() && nodesExplored < MAX_NODES_EXPLORED) {
             PathNode current = openSet.poll();
@@ -174,6 +180,7 @@ public class PathServiceImpl implements PathService {
             
             // Check if we reached the goal
             if (Math.abs(current.x - endX) <= 2 && Math.abs(current.z - endZ) <= 2) {
+                LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes", nodesExplored));
                 return reconstructPath(current);
             }
             
@@ -187,8 +194,8 @@ public class PathServiceImpl implements PathService {
                     int neighborX = current.x + dx;
                     int neighborZ = current.z + dz;
                     
-                    // Get height at neighbor position
-                    int neighborY = world.getHighestBlockYAt(neighborX, neighborZ);
+                    // Get height at neighbor position (find ground beneath vegetation)
+                    int neighborY = findGroundLevel(world, neighborX, neighborZ);
                     
                     String neighborKey = neighborX + "," + neighborZ;
                     if (closedSet.contains(neighborKey)) {
@@ -200,8 +207,11 @@ public class PathServiceImpl implements PathService {
                     Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
                     double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
                     
+                    maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
+                    
                     // Skip if terrain is impassable
                     if (movementCost >= OBSTACLE_COST) {
+                        obstaclesEncountered++;
                         continue;
                     }
                     
@@ -226,7 +236,9 @@ public class PathServiceImpl implements PathService {
             }
         }
         
-        LOGGER.fine(String.format("[STRUCT] A* search exhausted: explored=%d nodes", nodesExplored));
+        String reason = nodesExplored >= MAX_NODES_EXPLORED ? "node limit reached" : "no path exists";
+        LOGGER.warning(String.format("[PATH] A* FAILED: %s (explored=%d/%d, obstacles=%d, maxCost=%.1f)",
+                reason, nodesExplored, MAX_NODES_EXPLORED, obstaclesEncountered, maxTerrainCostSeen));
         return null; // No path found
     }
     
@@ -280,10 +292,29 @@ public class PathServiceImpl implements PathService {
             cost += WATER_COST;
         }
         
-        // Check for solid obstacles
-        if (type.isSolid() && type != Material.GRASS_BLOCK && type != Material.DIRT && 
-            type != Material.STONE && type != Material.SAND) {
-            return OBSTACLE_COST;
+        // Allow paths through most natural materials
+        // Only veto truly impassable blocks (structures, ores, bedrock)
+        if (type.isSolid()) {
+            // Allow: grass, dirt, stone, sand, gravel, vegetation
+            if (type == Material.GRASS_BLOCK || type == Material.DIRT || 
+                type == Material.STONE || type == Material.SAND || 
+                type == Material.GRAVEL || type == Material.COARSE_DIRT ||
+                type == Material.PODZOL || type == Material.CLAY ||
+                type.name().contains("LOG") || type.name().contains("LEAVES")) {
+                return cost; // Passable natural terrain
+            }
+            
+            // Veto artificial/rare blocks (ores, structures, bedrock)
+            if (type == Material.BEDROCK || 
+                type.name().contains("ORE") ||
+                type.name().contains("PLANKS") ||
+                type.name().contains("BRICKS") ||
+                type.name().contains("COBBLESTONE")) {
+                return OBSTACLE_COST;
+            }
+            
+            // Default: slightly increased cost for other solid blocks
+            cost += 2.0;
         }
         
         return cost;
@@ -473,6 +504,59 @@ public class PathServiceImpl implements PathService {
         // Note: This is a simplified calculation
         // Full implementation would require building locations and main building reference
         return network.getSegments().isEmpty() ? 0.0 : 1.0;
+    }
+    
+    /**
+     * Find the actual ground level at a position, searching down from the highest block to find solid ground.
+     * This ignores vegetation (leaves, grass, flowers) and finds the actual solid foundation beneath.
+     * Same logic as used in structure placement to ensure consistent ground detection.
+     * 
+     * @param world World to search
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @return Ground level Y coordinate
+     */
+    private int findGroundLevel(World world, int x, int z) {
+        int highestY = world.getHighestBlockYAt(x, z);
+        Block highestBlock = world.getBlockAt(x, highestY, z);
+        Material highestType = highestBlock.getType();
+        
+        // If highest block is vegetation (leaves, grass), search down to find ground
+        boolean isVegetation = highestType == Material.OAK_LEAVES || 
+                highestType == Material.BIRCH_LEAVES ||
+                highestType == Material.SPRUCE_LEAVES ||
+                highestType == Material.JUNGLE_LEAVES ||
+                highestType == Material.ACACIA_LEAVES ||
+                highestType == Material.DARK_OAK_LEAVES ||
+                highestType == Material.MANGROVE_LEAVES ||
+                highestType == Material.CHERRY_LEAVES ||
+                highestType == Material.SHORT_GRASS || 
+                highestType == Material.TALL_GRASS ||
+                highestType == Material.FERN ||
+                highestType == Material.LARGE_FERN;
+        
+        if (!isVegetation && highestType.isSolid()) {
+            // Highest block is already solid ground
+            return highestY;
+        }
+        
+        // Search downward up to 20 blocks to find solid ground beneath vegetation
+        for (int y = highestY - 1; y > highestY - 20 && y > world.getMinHeight(); y--) {
+            Block current = world.getBlockAt(x, y, z);
+            Material currentType = current.getType();
+            
+            // Found solid ground
+            if (currentType.isSolid() && !currentType.isAir() && currentType != Material.OAK_LEAVES &&
+                    currentType != Material.BIRCH_LEAVES && currentType != Material.SPRUCE_LEAVES &&
+                    currentType != Material.JUNGLE_LEAVES && currentType != Material.ACACIA_LEAVES &&
+                    currentType != Material.DARK_OAK_LEAVES && currentType != Material.MANGROVE_LEAVES &&
+                    currentType != Material.CHERRY_LEAVES) {
+                return y;
+            }
+        }
+        
+        // Fallback: if we didn't find ground in search range, use original highest block
+        return highestY;
     }
     
     /**

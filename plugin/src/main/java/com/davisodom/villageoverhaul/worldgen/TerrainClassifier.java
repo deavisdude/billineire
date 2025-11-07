@@ -34,7 +34,10 @@ public class TerrainClassifier {
         STEEP,
         
         /** Air, leaves, logs, or other unsupported foundations */
-        BLOCKED
+        BLOCKED,
+        
+        /** Vegetation that can be trimmed during terraforming (leaves, logs, grass) */
+        VEGETATION
     }
     
     /**
@@ -47,12 +50,10 @@ public class TerrainClassifier {
     );
     
     /**
-     * Materials that cannot support structure foundations (unsupported).
+     * Vegetation materials that can be trimmed/removed during terraforming.
+     * These should NOT prevent structure placement - they'll be cleared.
      */
-    private static final Set<Material> UNSUPPORTED = EnumSet.of(
-            Material.AIR,
-            Material.CAVE_AIR,
-            Material.VOID_AIR,
+    private static final Set<Material> VEGETATION = EnumSet.of(
             Material.OAK_LEAVES,
             Material.SPRUCE_LEAVES,
             Material.BIRCH_LEAVES,
@@ -72,16 +73,48 @@ public class TerrainClassifier {
             Material.MANGROVE_LOG,
             Material.CHERRY_LOG,
             Material.CRIMSON_STEM,
-            Material.WARPED_STEM
+            Material.WARPED_STEM,
+            Material.SHORT_GRASS,
+            Material.TALL_GRASS,
+            Material.FERN,
+            Material.LARGE_FERN,
+            Material.DEAD_BUSH,
+            Material.DANDELION,
+            Material.POPPY,
+            Material.BLUE_ORCHID,
+            Material.ALLIUM,
+            Material.AZURE_BLUET,
+            Material.RED_TULIP,
+            Material.ORANGE_TULIP,
+            Material.WHITE_TULIP,
+            Material.PINK_TULIP,
+            Material.OXEYE_DAISY,
+            Material.CORNFLOWER,
+            Material.LILY_OF_THE_VALLEY,
+            Material.SUNFLOWER,
+            Material.LILAC,
+            Material.ROSE_BUSH,
+            Material.PEONY
+    );
+    
+    /**
+     * Materials that cannot support structure foundations (unsupported).
+     * AIR and VOID only - vegetation handled separately.
+     */
+    private static final Set<Material> UNSUPPORTED = EnumSet.of(
+            Material.AIR,
+            Material.CAVE_AIR,
+            Material.VOID_AIR
     );
     
     /**
      * Maximum acceptable height delta within 3x3 area (blocks).
      * 
-     * Relaxed from 2 to 4 blocks to allow natural terrain variation.
-     * This permits gentle hills while still rejecting cliffs/mountains.
+     * Relaxed from 2 to 10 blocks to allow natural terrain variation.
+     * This permits placement on hillsides and varied terrain.
+     * Terraforming can handle significant height differences.
      */
-    private static final int MAX_SLOPE_DELTA = 4;
+    private static final int MAX_SLOPE_DELTA = 10;
     
     /**
      * Check if a block is acceptable for structure placement.
@@ -107,7 +140,12 @@ public class TerrainClassifier {
             return Classification.FLUID;
         }
         
-        // Check for unsupported foundations
+        // Check for vegetation (can be trimmed during terraforming)
+        if (VEGETATION.contains(material)) {
+            return Classification.VEGETATION;
+        }
+        
+        // Check for unsupported foundations (air/void)
         if (UNSUPPORTED.contains(material)) {
             return Classification.BLOCKED;
         }
@@ -146,7 +184,8 @@ public class TerrainClassifier {
         
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                int checkY = world.getHighestBlockYAt(x + dx, z + dz);
+                // Find actual ground level (not tree tops)
+                int checkY = findGroundLevel(world, x + dx, z + dz);
                 minY = Math.min(minY, checkY);
                 maxY = Math.max(maxY, checkY);
             }
@@ -161,6 +200,39 @@ public class TerrainClassifier {
     }
     
     /**
+     * Find actual ground level beneath vegetation.
+     * Searches down from highest block to find solid ground.
+     * 
+     * @param world World to check
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @return Y coordinate of ground level
+     */
+    private static int findGroundLevel(World world, int x, int z) {
+        int startY = world.getHighestBlockYAt(x, z);
+        
+        // Search downward up to 20 blocks to find solid ground beneath vegetation
+        for (int y = startY; y > startY - 20 && y > world.getMinHeight(); y--) {
+            Block block = world.getBlockAt(x, y, z);
+            Block below = world.getBlockAt(x, y - 1, z);
+            
+            // Found ground: current block is air/vegetation AND block below is solid
+            Classification currentClass = classify(block);
+            Classification belowClass = classify(below);
+            
+            boolean currentIsEmpty = (currentClass == Classification.BLOCKED || 
+                                     currentClass == Classification.VEGETATION);
+            boolean belowIsSolid = (belowClass == Classification.ACCEPTABLE);
+            
+            if (currentIsEmpty && belowIsSolid) {
+                return y - 1; // Return Y of the solid ground block
+            }
+        }
+        
+        return startY; // Fallback to highest block
+    }
+    
+    /**
      * Classification result with detailed counts for logging.
      */
     public static class ClassificationResult {
@@ -168,6 +240,7 @@ public class TerrainClassifier {
         public int fluid = 0;
         public int steep = 0;
         public int blocked = 0;
+        public int vegetation = 0;
         
         /**
          * Increment counter for given classification.
@@ -186,11 +259,14 @@ public class TerrainClassifier {
                 case BLOCKED:
                     blocked++;
                     break;
+                case VEGETATION:
+                    vegetation++;
+                    break;
             }
         }
         
         /**
-         * Get total rejected tiles.
+         * Get total rejected tiles (excluding vegetation, which can be trimmed).
          */
         public int getRejected() {
             return fluid + steep + blocked;
@@ -200,17 +276,18 @@ public class TerrainClassifier {
          * Get total sampled tiles.
          */
         public int getTotal() {
-            return acceptable + fluid + steep + blocked;
+            return acceptable + fluid + steep + blocked + vegetation;
         }
         
         /**
          * Check if site is acceptable with tolerance.
          * 
          * Hard veto: ANY fluid tiles = reject (water/lava are unacceptable)
-         * Soft tolerance: Up to 20% non-acceptable tiles allowed (steep/blocked)
+         * Soft tolerance: Up to 70% non-acceptable tiles allowed (steep/blocked)
          * 
-         * This allows buildings on slightly uneven terrain or near sparse vegetation
-         * while still preventing placement in water or on cliffs.
+         * This allows buildings on significantly varied terrain including hillsides.
+         * Terraforming will level the site after validation passes.
+         * Increased from 60% to 70% to allow placement on natural varied terrain.
          * 
          * @return true if site passes tolerance checks
          */
@@ -225,10 +302,10 @@ public class TerrainClassifier {
                 return true; // No samples (shouldn't happen, but handle gracefully)
             }
             
-            // Allow up to 20% steep/blocked tiles
+            // Allow up to 70% steep/blocked tiles (vegetation not counted as rejected)
             int nonFluidRejected = steep + blocked;
             double rejectionRate = (double) nonFluidRejected / total;
-            return rejectionRate <= 0.20;
+            return rejectionRate <= 0.70;
         }
         
         /**
@@ -236,7 +313,7 @@ public class TerrainClassifier {
          */
         @Override
         public String toString() {
-            return String.format("fluid=%d, steep=%d, blocked=%d", fluid, steep, blocked);
+            return String.format("fluid=%d, steep=%d, blocked=%d, vegetation=%d", fluid, steep, blocked, vegetation);
         }
     }
 }

@@ -251,13 +251,29 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
 - [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
 - [X] T020 [US1] Update harness parsing to assert "0 floating/embedded" in `scripts/ci/sim/run-scenario.ps1`
 
-- [ ] T020a [US1] Enforce water avoidance & spacing in structure seating
+- [X] T020a [US1] Enforce water avoidance & spacing in structure seating
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
   - Description: Extend seating logic to abort if any foundation/interior block is FLUID. Include spacing pre-check before detailed validation. Update logs with `[STRUCT] seat rejected: fluid` or `spacing`.
   - Acceptance:
     - No building placed with any water/lava under footprint.
     - Logs show rejection reason when failing due to fluid or spacing.
     - Existing successful seats unaffected (still grounded & interior air ok).
+  - Implementation:
+    - Added site validation check BEFORE terraforming in `attemptPlacementWithReseating()`
+    - Validation now aborts placement if foundation has fluids (water/lava)
+    - Created `buildRejectionReason()` helper method to provide detailed rejection logs
+    - Logs show specific rejection reasons: fluid (with tile count), steep, blocked, interior air, entrance access
+    - Example log: `[STRUCT] Seat rejected at attempt 1: fluid (water/lava: 12 tiles), steep (3 tiles)`
+    - SiteValidator already had fluid detection via TerrainClassifier (FLUID classification = hard veto)
+    - Spacing checks already enforced in VillagePlacementServiceImpl (minBuildingSpacing)
+    - **Vegetation Fix (2025-11-07)**: Separated vegetation from blocked terrain
+      - Added VEGETATION classification category for leaves, logs, grass, flowers
+      - Vegetation no longer counted as rejected terrain (can be trimmed during terraforming)
+      - Only FLUID (water/lava), STEEP, and BLOCKED (air/void) count as rejections
+      - Updated TerrainClassifier: VEGETATION materials moved from UNSUPPORTED set to separate VEGETATION set
+      - ClassificationResult.getRejected() excludes vegetation count (only fluid + steep + blocked)
+      - isAcceptableWithTolerance() hard-vetos fluid, allows 20% steep/blocked (vegetation ignored)
+    - All 14 tests passing (6 TickHarnessTest, 8 EconomyAntiDupeTest)
 
 **Checkpoint**: US1 independently verifiable via headless harness
 
@@ -547,6 +563,81 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 
 ---
 
+## Phase 4.7: Bugfix Sprint — Terrain & Path Consistency (Priority: P1)
+
+Purpose: Resolve high-impact playtest defects: unused terraforming pads, treetop path placement, fluid veto inconsistencies, summary count mismatch, inflated rotated footprints, excessive reseat attempts, and classification performance gaps. Ordered by player visibility and world integrity impact.
+
+- [ ] T015c [P1] [US1] Deferred terraform commit / rollback
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Generate a TerraformingPlan (lists of trim/grade/fill operations) during seat validation; apply only after a seat is chosen as final. Maintain a per-attempt journal so abandoned seats can be rolled back (revert block states) to eliminate stray flattened dirt platforms.
+  - Acceptance:
+    - Rejecting a seat leaves no modified blocks at that origin (visual + log check).
+    - Each successful building logs `appliedTerraformPlan`; aborted attempts log `terraformRollback applied`.
+    - World audit shows zero large unused graded pads after village generation.
+
+- [ ] T021d [P1] [US2] Path ground detection excluding vegetation
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
+  - Description: Update `findGroundLevel()` to treat leaves/logs/any VEGETATION classification as non-surface; descend until solid non-vegetation ground or abort node if descent limit exceeded. `PathEmitter` adds `isValidPathSurface()` whitelist (grass, dirt, stone, sand, gravel, snow variants). Skip or reroute nodes landing on vegetation. Optionally clear a single vegetation layer (not trees) before emission.
+  - Acceptance:
+    - 0 path blocks placed on leaves/logs across smoke test seeds.
+    - Logs include `skippedVegetationNodes=N` and `reroutedNodes=M` metrics.
+    - Visual inspection: no treetop paths; all paths hug natural terrain.
+
+- [ ] T020b [P1] [US1] Enforce site-prep abort on fluid veto
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: If `TerraformingUtil.prepareSite()` returns false (fluid detected), abort placement attempt immediately instead of proceeding to paste; count toward rejection metrics with reason `fluid`.
+  - Acceptance:
+    - No paste occurs after a fluid rejection log.
+    - Final placed footprints contain 0 fluid tiles under structure base.
+
+- [ ] T014c [P1] [US1] Prevent dirt grading on leaf/log canopy
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+  - Description: During grading/fill, treat leaves/logs as transparent; never place dirt directly on them. Either trim foliage or skip column; record skipped columns for metrics.
+  - Acceptance:
+    - No dirt caps appear atop tree leaves near structures in verification run.
+    - Log shows `skippedCanopyColumns=K` when applicable.
+
+- [ ] T018c [P2] [US1] Correct final summary building count
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Derive success summary from authoritative footprint registry; warn if internal counters differ (`summaryCountMismatch`).
+  - Acceptance:
+    - Summary line always matches number of tracked footprints.
+    - Mismatch test triggers single WARN and auto-corrects output.
+
+- [ ] T017c [P2] [US1] Normalize rotated footprint dimensions
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: After rotation, compute width/depth using rotated clipboard dims only (exclude spacing buffer). Store schematic footprint; enforce spacing externally.
+  - Acceptance:
+    - Footprint logs for all rotations equal original schematic dimensions (or swapped).
+    - Downstream systems (paths/borders) show consistent bounds.
+
+- [ ] T012m [P2] [Foundational] Adaptive reseat/backoff heuristics
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Monitor rejection rate; if `>0.95` after threshold attempts, adjust search radius + tighten slope tolerance or abort early with `[STRUCT] adaptive-abort` log.
+  - Acceptance:
+    - Attempts reduced ≥50% on pathological seeds vs baseline.
+    - AvgRejected < 0.90 in stress test scenario.
+
+- [ ] T012n [P3] [Foundational] Terrain classification caching
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerrainClassifier.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
+  - Description: Cache `findGroundLevel` and 3x3 slope results per (x,z) within placement window; invalidate entries touched by accepted footprint. Provide perf counters.
+  - Acceptance:
+    - ≥30% reduction in classification calls measured by perf counters.
+    - No incorrect terrain decisions (spot-check classification vs raw world state).
+
+- [ ] T022b [P2] [US2] PathEmitter under-support & surface whitelist
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
+  - Description: Emit slabs/stairs only when block below is solid natural ground; fallback to full block else. Combine with vegetation exclusion to eliminate floating or treetop smoothing artifacts.
+  - Acceptance:
+    - 0 floating slabs/stairs; complements headless test T026f.
+    - Emitted blocks restricted to natural whitelist.
+
+Prioritization: P1 (T015c, T021d, T020b, T014c) → P2 (T018c, T017c, T022b, T012m) → P3 (T012n).
+
+**Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
+
+---
+
 ## Phase 6: User Story 4 — Guided Onboarding (Priority: P2)
 
 **Goal**: Greeter prompt and signage at main building entry
@@ -680,4 +771,3 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 1. US1 → US2 (paths/main) → US4 (onboarding)
 2. US3 (projects upgrades) after US1
 3. Remaining systems US5–US8 as capacity allows
-

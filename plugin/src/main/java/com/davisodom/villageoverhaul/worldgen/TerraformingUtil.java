@@ -103,21 +103,26 @@ public class TerraformingUtil {
     
     /**
      * Trim vegetation in the footprint area.
-     * Removes tall grass, flowers, and other decorative plants.
+     * Removes tall grass, flowers, and small plants at ground level only.
+     * Does NOT trim trees/tall vegetation above ground - structure will overlay them.
      * 
      * @param world Target world
      * @param origin Southwest corner of footprint
      * @param width Footprint width (X)
      * @param depth Footprint depth (Z)
-     * @param height Maximum height to check
+     * @param height Maximum height to check (UNUSED - kept for API compatibility)
      * @return Number of blocks trimmed
      */
     public static int trimVegetation(World world, Location origin, int width, int depth, int height) {
         int trimmedCount = 0;
         
+        // Only trim 0-2 blocks above ground level (grass, flowers, small plants)
+        // This prevents clearing entire tree columns which creates visible patches
+        int maxTrimHeight = 3; // Relative to origin Y
+        
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
-                for (int y = 0; y < height; y++) {
+                for (int y = 0; y < maxTrimHeight; y++) {
                     Block block = world.getBlockAt(
                             origin.getBlockX() + x,
                             origin.getBlockY() + y,
@@ -133,7 +138,7 @@ public class TerraformingUtil {
         }
         
         if (trimmedCount > 0) {
-            LOGGER.fine(String.format("[STRUCT] Trimmed %d vegetation blocks at %s", trimmedCount, origin));
+            LOGGER.fine(String.format("[STRUCT] Trimmed %d vegetation blocks at %s (ground level only)", trimmedCount, origin));
         }
         
         return trimmedCount;
@@ -305,31 +310,29 @@ public class TerraformingUtil {
         LOGGER.fine(String.format("[STRUCT] Preparing site at %s (%dx%dx%d), footprint=%d, large=%s, maxBlocks=%d", 
                 origin, width, depth, height, footprintArea, isLargeStructure, maxBlocks));
         
-        // Step 0: Check for water in footprint - reject if > 20% of footprint is water
+        // Step 0: HARD VETO on ANY water in footprint or surrounding area
+        // Check footprint + 2-block margin to prevent water flow into building
         int waterBlocks = 0;
-        int maxWaterBlocks = (width * depth) / 5; // 20% threshold
+        int checkMargin = 2; // Check 2 blocks beyond footprint edges
         
-        for (int x = 0; x < width; x++) {
-            for (int z = 0; z < depth; z++) {
+        for (int x = -checkMargin; x < width + checkMargin; x++) {
+            for (int z = -checkMargin; z < depth + checkMargin; z++) {
                 Location checkLoc = origin.clone().add(x, 0, z);
                 int y = world.getHighestBlockYAt(checkLoc);
                 Material surfaceMat = world.getBlockAt(checkLoc.getBlockX(), y, checkLoc.getBlockZ()).getType();
                 
-                if (surfaceMat == Material.WATER) {
+                if (surfaceMat == Material.WATER || surfaceMat == Material.LAVA) {
                     waterBlocks++;
-                    if (waterBlocks > maxWaterBlocks) {
-                        LOGGER.info(String.format("[STRUCT] Site rejected at %s: too much water (%d/%d blocks, max %d)",
-                                origin, waterBlocks, footprintArea, maxWaterBlocks));
-                        return false;
-                    }
+                    // Immediate rejection - ANY water/lava = site unsuitable
+                    LOGGER.info(String.format("[STRUCT] Site rejected at %s: fluid detected (%s at %d, %d, %d)",
+                            origin, surfaceMat, checkLoc.getBlockX(), y, checkLoc.getBlockZ()));
+                    return false;
                 }
             }
         }
         
-        if (waterBlocks > 0) {
-            LOGGER.fine(String.format("[STRUCT] Site has %d water blocks (%.1f%%), within acceptable threshold",
-                    waterBlocks, (waterBlocks * 100.0) / footprintArea));
-        }
+        LOGGER.fine(String.format("[STRUCT] Site has no water/lava in footprint or margin (checked %d blocks)", 
+                (width + 2 * checkMargin) * (depth + 2 * checkMargin)));
         
         // Step 1: Always trim vegetation (trees inside buildings are bad)
         int trimmed = trimVegetation(world, origin, width, depth, height);

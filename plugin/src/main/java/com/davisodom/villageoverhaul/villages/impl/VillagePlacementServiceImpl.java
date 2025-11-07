@@ -584,6 +584,40 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     /**
+     * Find the actual ground level at a position, searching down from the highest block to find solid ground.
+     * This ignores vegetation (leaves, grass, flowers) and finds the actual solid foundation beneath.
+     * 
+     * @param world World to search
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @return Ground level Y coordinate
+     */
+    private int findGroundLevel(World world, int x, int z) {
+        int startY = world.getHighestBlockYAt(x, z);
+        
+        // Search downward up to 20 blocks to find solid ground beneath vegetation
+        for (int y = startY; y > startY - 20 && y > world.getMinHeight(); y--) {
+            Block block = world.getBlockAt(x, y, z);
+            Block below = world.getBlockAt(x, y - 1, z);
+            
+            // Found ground: current block is air/vegetation AND block below is solid (not air/vegetation)
+            TerrainClassifier.Classification currentClass = TerrainClassifier.classify(block);
+            TerrainClassifier.Classification belowClass = TerrainClassifier.classify(below);
+            
+            boolean currentIsEmpty = (currentClass == TerrainClassifier.Classification.BLOCKED || 
+                                     currentClass == TerrainClassifier.Classification.VEGETATION);
+            boolean belowIsSolid = (belowClass == TerrainClassifier.Classification.ACCEPTABLE);
+            
+            if (currentIsEmpty && belowIsSolid) {
+                return y; // Foundation will be placed at Y-1 (on the solid block)
+            }
+        }
+        
+        // Fallback: use highest block if no solid ground found (shouldn't happen in normal terrain)
+        return startY;
+    }
+    
+    /**
      * Check terrain suitability for a building footprint.
      * Samples foundation area and classifies terrain to detect water, steep slopes, etc.
      * 
@@ -668,7 +702,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     
                     int candidateX = origin.getBlockX() + dx;
                     int candidateZ = origin.getBlockZ() + dz;
-                    int candidateY = world.getHighestBlockYAt(candidateX, candidateZ);
+                    
+                    // Find actual ground level (beneath vegetation)
+                    int candidateY = findGroundLevel(world, candidateX, candidateZ);
                     
                     Location candidateLocation = new Location(world, candidateX, candidateY, candidateZ);
                     
@@ -737,20 +773,22 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * Check if two footprints have minimum spacing between them.
      * Spacing is measured as the minimum distance between any edges of the AABBs.
      * 
+     * CRITICAL FIX: Both axes must maintain minimum spacing to prevent corner-to-corner overlap.
+     * Previous logic using Math.min() allowed buildings to touch at corners when one axis = 0.
+     * 
      * @param a First footprint
      * @param b Second footprint
      * @param minSpacing Minimum required spacing
      * @return true if spacing >= minSpacing, false otherwise
      */
     private boolean hasMinimumSpacing(Footprint a, Footprint b, int minSpacing) {
-        // Calculate horizontal and vertical distances between AABBs
+        // Calculate horizontal and vertical distances between AABBs (edge-to-edge)
         int horizontalDist = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)));
         int verticalDist = Math.max(0, Math.max(a.z - (b.z + b.depth), b.z - (a.z + a.depth)));
         
-        // Minimum distance is the smaller of the two (closest edge)
-        int minDist = Math.max(horizontalDist, verticalDist);
-        
-        return minDist >= minSpacing;
+        // BOTH axes must maintain minimum spacing (prevents corner-to-corner overlap)
+        // Buildings can only be adjacent if separated by minSpacing on BOTH X and Z axes
+        return horizontalDist >= minSpacing && verticalDist >= minSpacing;
     }
     
     /**

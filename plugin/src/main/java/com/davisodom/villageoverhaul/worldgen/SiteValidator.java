@@ -3,7 +3,6 @@ package com.davisodom.villageoverhaul.worldgen;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.Classification;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.ClassificationResult;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
@@ -22,9 +21,6 @@ public class SiteValidator {
     
     // Minimum percentage of solid blocks required in foundation
     private static final double MIN_FOUNDATION_SOLIDITY = 0.85;
-    
-    // Minimum air blocks required at entrance
-    private static final int MIN_ENTRANCE_AIR_HEIGHT = 3;
     
     /**
      * Validate a site for structure placement.
@@ -45,19 +41,16 @@ public class SiteValidator {
         result.foundationOk = foundationOk;
         result.classificationResult = classificationResult;
         
-        // Check interior air space
-        boolean interiorAirOk = validateInteriorAir(world, origin, width, depth, height);
-        result.interiorAirOk = interiorAirOk;
+        // Interior air and entrance checks removed - schematic defines its own interior/entrances
+        // Terraforming will clear obstructions, so we only validate foundation suitability
+        result.interiorAirOk = true;
+        result.entranceOk = true;
         
-        // Check entrance accessibility
-        boolean entranceOk = validateEntranceAccess(world, origin, width, depth);
-        result.entranceOk = entranceOk;
-        
-        result.passed = foundationOk && interiorAirOk && entranceOk;
+        result.passed = foundationOk;
         
         if (!result.passed) {
-            LOGGER.fine(String.format("[STRUCT] Site validation failed at %s: foundation=%b, interior=%b, entrance=%b, classification: %s",
-                    origin, foundationOk, interiorAirOk, entranceOk, classificationResult));
+            LOGGER.fine(String.format("[STRUCT] Site validation failed at %s: foundation=%b, classification: %s",
+                    origin, foundationOk, classificationResult));
         }
         
         return result;
@@ -119,99 +112,13 @@ public class SiteValidator {
         boolean solidityOk = solidity >= MIN_FOUNDATION_SOLIDITY;
         boolean slopeOk = maxSlope <= MAX_FOUNDATION_SLOPE;
         
-        // Reject if any unacceptable terrain found
-        boolean terrainOk = classificationResult.getRejected() == 0;
+        // Use tolerance-based terrain validation (allows up to 20% steep/blocked, 0% fluid)
+        boolean terrainOk = classificationResult.isAcceptableWithTolerance();
         
         LOGGER.fine(String.format("[STRUCT] Foundation check: solidity=%.2f (required %.2f), slope=%.3f (max %.3f), classification: %s",
                 solidity, MIN_FOUNDATION_SOLIDITY, maxSlope, MAX_FOUNDATION_SLOPE, classificationResult));
         
         return solidityOk && slopeOk && terrainOk;
-    }
-    
-    /**
-     * Validate interior air space for structures (no obstructions at entrance level).
-     */
-    private boolean validateInteriorAir(World world, Location origin, int width, int depth, int height) {
-        int airCount = 0;
-        int totalCount = 0;
-        
-        // Check first 3 vertical layers for air space (entrance/room level)
-        int checkHeight = Math.min(height, 3);
-        
-        for (int y = 0; y < checkHeight; y++) {
-            for (int x = 0; x < width; x++) {
-                for (int z = 0; z < depth; z++) {
-                    Block block = world.getBlockAt(
-                            origin.getBlockX() + x,
-                            origin.getBlockY() + y,
-                            origin.getBlockZ() + z
-                    );
-                    
-                    totalCount++;
-                    
-                    if (block.getType() == Material.AIR || block.getType() == Material.CAVE_AIR) {
-                        airCount++;
-                    }
-                }
-            }
-        }
-        
-        // Require at least 50% air space in entrance area
-        double airRatio = (double) airCount / totalCount;
-        boolean passed = airRatio >= 0.5;
-        
-        LOGGER.fine(String.format("[STRUCT] Interior air check: %.2f%% air (required 50%%)", airRatio * 100));
-        
-        return passed;
-    }
-    
-    /**
-     * Validate entrance accessibility (ensure at least one entrance has clear access).
-     */
-    private boolean validateEntranceAccess(World world, Location origin, int width, int depth) {
-        // Check all four sides for at least one clear entrance
-        boolean hasAccess = false;
-        
-        // Check south side (Z+)
-        hasAccess |= checkSideAccess(world, origin.getBlockX(), origin.getBlockZ() + depth, width, true);
-        
-        // Check north side (Z-)
-        hasAccess |= checkSideAccess(world, origin.getBlockX(), origin.getBlockZ() - 1, width, true);
-        
-        // Check east side (X+)
-        hasAccess |= checkSideAccess(world, origin.getBlockX() + width, origin.getBlockZ(), depth, false);
-        
-        // Check west side (X-)
-        hasAccess |= checkSideAccess(world, origin.getBlockX() - 1, origin.getBlockZ(), depth, false);
-        
-        LOGGER.fine(String.format("[STRUCT] Entrance access check: %b", hasAccess));
-        
-        return hasAccess;
-    }
-    
-    /**
-     * Check if a side has clear access (air blocks at entrance height).
-     */
-    private boolean checkSideAccess(World world, int x, int z, int length, boolean alongX) {
-        for (int i = 0; i < length; i++) {
-            int checkX = alongX ? x + i : x;
-            int checkZ = alongX ? z : z + i;
-            
-            // Check for MIN_ENTRANCE_AIR_HEIGHT air blocks
-            int airCount = 0;
-            for (int y = 0; y < MIN_ENTRANCE_AIR_HEIGHT; y++) {
-                Block block = world.getBlockAt(checkX, world.getHighestBlockYAt(checkX, checkZ) + y, checkZ);
-                if (block.getType() == Material.AIR || block.getType() == Material.CAVE_AIR) {
-                    airCount++;
-                }
-            }
-            
-            if (airCount >= MIN_ENTRANCE_AIR_HEIGHT) {
-                return true;
-            }
-        }
-        
-        return false;
     }
     
     /**

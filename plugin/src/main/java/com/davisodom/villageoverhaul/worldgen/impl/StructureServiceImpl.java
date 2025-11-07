@@ -244,8 +244,34 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info(String.format("[STRUCT] Seat attempt %d/%d: structure='%s', location=%s, seed=%d",
                     attempt + 1, MAX_RESEAT_ATTEMPTS, template.id, formatLocation(currentOrigin), seed));
             
-            // Attempt minor terraforming to prepare site (T012f: relaxed tolerance)
-            // If terraforming fails, continue anyway - Paper API structures can handle minor terrain variations
+            // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
+            // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validating site for '%s' at %s", 
+                    template.id, formatLocation(currentOrigin)));
+            SiteValidator.ValidationResult siteValidation = siteValidator.validateSite(
+                    world,
+                    currentOrigin,
+                    template.dimensions[0],
+                    template.dimensions[2],
+                    template.dimensions[1]
+            );
+            
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validation result - passed=%b, foundationOk=%b, interiorAirOk=%b, entranceOk=%b",
+                    siteValidation.passed, siteValidation.foundationOk, 
+                    siteValidation.interiorAirOk, siteValidation.entranceOk));
+            
+            // Hard reject if foundation has fluids or fails validation
+            if (!siteValidation.passed) {
+                String rejectionReason = buildRejectionReason(siteValidation);
+                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: %s",
+                        attempt + 1, rejectionReason));
+                continue; // Try next re-seat attempt
+            }
+            
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, preparing site");
+            
+            // Prepare site with terraforming BEFORE placement
+            // Once validation passes, we're committed to this site
             boolean terraformed = TerraformingUtil.prepareSite(
                     world,
                     currentOrigin,
@@ -254,14 +280,24 @@ public class StructureServiceImpl implements StructureService {
                     template.dimensions[1]
             );
             
-            if (!terraformed) {
-                LOGGER.fine(String.format("[STRUCT] Terraforming not ideal at attempt %d, but continuing with placement",
-                        attempt + 1));
-                // Don't immediately reject - try placement anyway
-            }
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
             
-            // Site prepared (or acceptable) - perform actual placement
+            // Site prepared - perform actual placement
+            // After terraforming, placement MUST succeed (already committed to this site)
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
+                    template.id, formatLocation(currentOrigin)));
             boolean placed = performActualPlacement(template, world, currentOrigin, seed);
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
+                    placed, template.id));
+            
+            if (!placed) {
+                // This should NEVER happen after successful validation and terraforming
+                // Log as ERROR since we've already modified the world
+                LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
+                        template.id, formatLocation(currentOrigin)));
+                // Continue to next attempt, but world is already modified (unavoidable)
+                continue;
+            }
             
             if (placed) {
                 if (attempt > 0) {
@@ -299,12 +335,18 @@ public class StructureServiceImpl implements StructureService {
      * Uses FAWE/WorldEdit if available and schematic is loaded, otherwise falls back to Paper API.
      */
     private boolean performActualPlacement(StructureTemplate template, World world, Location origin, long seed) {
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement - clipboard=%s, faweAvailable=%b",
+                (template.clipboard != null ? "present" : "null"), faweAvailable));
+        
         // If template has a schematic loaded, use WorldEdit/FAWE placement
         if (template.clipboard != null && faweAvailable) {
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeWorldEdit for '%s'", template.id));
             return placeWorldEdit(template, world, origin, seed);
         } else if (faweAvailable) {
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeFAWE for '%s'", template.id));
             return placeFAWE(template, world, origin, seed);
         } else {
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placePaperAPI for '%s'", template.id));
             return placePaperAPI(template, world, origin, seed);
         }
     }
@@ -313,35 +355,44 @@ public class StructureServiceImpl implements StructureService {
      * Place structure using WorldEdit/FAWE with actual schematic data.
      */
     private boolean placeWorldEdit(StructureTemplate template, World world, Location origin, long seed) {
-        LOGGER.fine(String.format("[STRUCT] Using WorldEdit placement for '%s'", template.id));
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: placeWorldEdit ENTRY for '%s' at %s", 
+                template.id, formatLocation(origin)));
         
         try {
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Adapting world to WorldEdit");
             com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(world);
             
-            // Find ground level
-            int groundY = findGroundLevel(world, origin);
-            BlockVector3 weOrigin = BlockVector3.at(origin.getBlockX(), groundY, origin.getBlockZ());
+            // Use the validated and terraformed origin Y coordinate directly
+            // (Do NOT recalculate ground level - that would ignore our site preparation)
+            BlockVector3 weOrigin = BlockVector3.at(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ());
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: weOrigin=%s", weOrigin));
             
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Creating EditSession");
             try (EditSession editSession = WorldEdit.getInstance().newEditSession(weWorld)) {
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Creating ClipboardHolder");
                 ClipboardHolder holder = new ClipboardHolder(template.clipboard);
                 
                 // Apply deterministic rotation based on seed
                 Random random = new Random(seed);
                 int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Rotation=%d degrees", rotationDegrees));
                 if (rotationDegrees > 0) {
                     AffineTransform transform = new AffineTransform();
                     holder.setTransform(holder.getTransform().combine(transform.rotateY(rotationDegrees)));
                 }
                 
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Building paste operation");
                 // Paste structure
                 Operation operation = holder.createPaste(editSession)
                     .to(weOrigin)
                     .ignoreAirBlocks(false)
                     .build();
                 
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Calling Operations.complete()");
                 Operations.complete(operation);
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Operations.complete() finished successfully");
                 
-                LOGGER.fine(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
+                LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
                 
                 // Foundation backfilling disabled - let structures sit naturally on terrain
                 // Previous aggressive backfilling created visible dirt walls and terracing
@@ -357,12 +408,16 @@ public class StructureServiceImpl implements StructureService {
                 LOGGER.fine(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
                 */
                 
+                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
                 return true;
             }
             
         } catch (Exception e) {
+            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Exception caught in placeWorldEdit: %s", 
+                    e.getClass().getName()));
             LOGGER.warning(String.format("[STRUCT] WorldEdit placement failed for '%s': %s", 
                     template.id, e.getMessage()));
+            e.printStackTrace();
             return placePaperAPI(template, world, origin, seed);
         }
     }
@@ -938,6 +993,44 @@ public class StructureServiceImpl implements StructureService {
         TRIMMABLE_VEGETATION.add(Material.JUNGLE_LEAVES);
         TRIMMABLE_VEGETATION.add(Material.ACACIA_LEAVES);
         TRIMMABLE_VEGETATION.add(Material.DARK_OAK_LEAVES);
+    }
+    
+    /**
+     * Build a human-readable rejection reason from validation result.
+     * 
+     * @param result Site validation result
+     * @return String describing why the site was rejected
+     */
+    private String buildRejectionReason(SiteValidator.ValidationResult result) {
+        List<String> reasons = new ArrayList<>();
+        
+        if (!result.foundationOk) {
+            // Check classification result for specific terrain issues
+            if (result.classificationResult != null) {
+                if (result.classificationResult.fluid > 0) {
+                    reasons.add(String.format("fluid (water/lava: %d tiles)", result.classificationResult.fluid));
+                }
+                if (result.classificationResult.steep > 0) {
+                    reasons.add(String.format("steep (%d tiles)", result.classificationResult.steep));
+                }
+                if (result.classificationResult.blocked > 0) {
+                    reasons.add(String.format("blocked (%d tiles)", result.classificationResult.blocked));
+                }
+            }
+            if (reasons.isEmpty()) {
+                reasons.add("foundation (solidity/slope)");
+            }
+        }
+        
+        if (!result.interiorAirOk) {
+            reasons.add("interior (insufficient air space)");
+        }
+        
+        if (!result.entranceOk) {
+            reasons.add("entrance (no clear access)");
+        }
+        
+        return String.join(", ", reasons);
     }
     
     /**
