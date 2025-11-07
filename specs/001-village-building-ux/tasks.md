@@ -187,6 +187,129 @@ Purpose: Fix rooftop paths, floating path slabs, treetop dirt, unused terraformi
 
 **Checkpoint**: US2 stabilization goals met — zero rooftop crossings, no floating slabs, no treetop mounds, and clean re-seat behavior. Rotational variety present with accurate footprints.
 
+---
+
+## Phase 4.6: Test Coverage Improvement (Priority: P1)
+
+Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core worldgen and placement logic. Each test task targets specific classes with clear coverage goals and MockBukkit/harness integration.
+
+### Core Worldgen Coverage (Target: 70%+)
+
+- [ ] T027a [P] [QA] Unit tests for `PathServiceImpl` (A* pathfinding core)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImplTest.java`
+  - Coverage Target: 70% lines, 60% branches (220 lines, 122 conditions)
+  - Description: Test A* pathfinding with mock World; verify straight-line path, obstacle avoidance, max-node cap, distance limits, deterministic seed behavior, and waypoint caching. Use MockBukkit World with preset terrain heightmap.
+  - Acceptance:
+    - `findPathAStar` tested with flat terrain, obstacles, water/lava penalties, and unreachable targets.
+    - `generatePathNetwork` tested with 2-5 buildings; assert connectivity ratio ≥90% for reachable pairs.
+    - Deterministic: same seed produces identical path node sequences.
+
+- [ ] T027b [P] [QA] Unit tests for `PathEmitter` (block placement and smoothing)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitterTest.java`
+  - Coverage Target: 65% lines, 55% branches (90 lines, 58 conditions)
+  - Description: Test path block emission with stairs/slabs; verify no floating slabs, height transitions respect ±1, and surface replacement logic. Use MockBukkit World.
+  - Acceptance:
+    - `emitPath` places blocks on valid surface; skips air/void.
+    - Smoothing adds slabs/stairs only when block below is solid.
+    - No blocks placed above structure materials (when building mask provided).
+
+- [ ] T027c [QA] Unit tests for `StructureServiceImpl` (schematic loading and placement)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImplTest.java`
+  - Coverage Target: 60% lines, 50% branches (388 lines, 286 conditions)
+  - Description: Test placeholder structure loading, Paper API procedural builds (Roman house/workshop/market/bathhouse), rotation determinism, and re-seating logic. Mock TerraformingUtil and SiteValidator for isolation.
+  - Acceptance:
+    - `loadPlaceholderStructures` populates 6 templates with correct dimensions.
+    - `placeStructure` with seed produces deterministic rotation (0/90/180/270).
+    - Re-seating attempts up to MAX_RESEAT_ATTEMPTS when terraforming fails.
+    - `buildRomanHouse` creates walls/floor/roof at expected coordinates.
+
+- [ ] T027d [P] [QA] Unit tests for `VillagePlacementServiceImpl` (dynamic placement and collision)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`
+  - Coverage Target: 65% lines, 55% branches (222 lines, 84 conditions)
+  - Description: Test dynamic structure placement with footprint tracking, overlap detection, spiral search, and deterministic ordering. Mock StructureService and PathService.
+  - Acceptance:
+    - `placeVillageStructures` places 5 structures with zero overlaps (via Footprint tracking).
+    - `findNonOverlappingPosition` returns valid location within MAX_PLACEMENT_ATTEMPTS or null.
+    - `getCultureStructures` returns deterministic structure IDs for same seed.
+    - Footprint calculation accounts for rotation (actualOrigin is corner, not center).
+
+- [ ] T027e [P] [QA] Unit tests for `TerraformingUtil` (grading, trimming, backfilling)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtilTest.java`
+  - Coverage Target: 60% lines, 50% branches (186 lines, 108 conditions)
+  - Description: Test site preparation, vegetation trimming, foundation backfilling, and rollback. Use MockBukkit World with preset terrain.
+  - Acceptance:
+    - `prepareSite` flattens mild slopes (≤2 blocks variance) and trims vegetation.
+    - `trimVegetation` removes grass/leaves but not logs/solid blocks; returns trim count.
+    - `backfillFoundation` fills air gaps under structure perimeter only (not full footprint).
+    - No dirt placed on top of leaf/log blocks (T014b constraint).
+
+- [ ] T027f [P] [QA] Unit tests for `SiteValidator` (foundation and clearance checks)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/SiteValidatorTest.java`
+  - Coverage Target: 65% lines, 55% branches (83 lines, 60 conditions)
+  - Description: Test foundation solidity checks, interior clearance, slope validation. Use MockBukkit World.
+  - Acceptance:
+    - `validateSite` returns `foundationOk=true` for flat stone/dirt, `false` for water/lava/ice.
+    - `interiorOk=true` when interior has ≥60% air; `false` when blocked by trees/structures.
+    - Slope check passes for ≤2 block variance, fails for cliffs/steep hills.
+
+### Model and State Coverage (Target: 60%+)
+
+- [ ] T027g [P] [QA] Unit tests for data models (`Building`, `PathNetwork`, `PlacementQueue`, `Project`)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/model/ModelTest.java`
+  - Coverage Target: 60% lines, 50% branches (combined ~350 lines)
+  - Description: Test JSON serialization/deserialization, validation, state transitions for core model classes. Use Gson directly.
+  - Acceptance:
+    - `Building.toJson()` and `Building.fromJson()` round-trip with all fields intact.
+    - `PlacementQueue` state transitions: PREPARING → READY → IN_PROGRESS → COMPLETED/CANCELLED.
+    - `PathNetwork` correctly tracks building pairs and path block counts.
+    - `Project` validation rejects negative progress, invalid states.
+
+- [ ] T027h [P] [QA] Unit tests for `PlacementQueueProcessor` (async placement and batching)
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessorTest.java` (expand existing skipped tests)
+  - Coverage Target: 70% lines, 60% branches (194 lines, 58 conditions)
+  - Description: Unskip and implement all 10 existing test placeholders; add MockBukkit scheduler integration for async tick simulation.
+  - Acceptance:
+    - All 10 skipped tests pass with real assertions (no TODOs).
+    - `startProcessing` schedules repeating task; `stopProcessing` cancels cleanly.
+    - Queue batching respects BATCH_SIZE config; processes multiple queues round-robin.
+    - Cancellation aborts placement mid-queue; status updates to CANCELLED.
+
+### Integration and Harness Coverage (Target: 50%+)
+
+- [ ] T027i [QA] Headless integration test: end-to-end village generation
+  - Files: `scripts/ci/sim/test-village-generation.ps1`, `tests/HEADLESS-TESTING.md`
+  - Coverage Target: N/A (integration test)
+  - Description: Generate a 5-building village with paths in headless Paper; assert structures placed, paths emitted, no overlaps, no floating blocks. Capture world snapshot and logs.
+  - Acceptance:
+    - Script runs `votest generate-structures` and `votest generate-paths` via RCON.
+    - Parses logs for [STRUCT] seat success (5 structures) and path connectivity ≥90%.
+    - World inspection finds 5 distinct structure footprints with zero overlap (NBT scan).
+    - CI passes with exit code 0.
+
+- [ ] T027j [P] [QA] MockBukkit unit test: `VillageOverhaulPlugin` lifecycle
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/VillageOverhaulPluginTest.java`
+  - Coverage Target: 90% lines, 80% branches (14 lines, 3 conditions)
+  - Description: Expand existing plugin test to verify service registration, config loading, tick engine wiring, command registration. Use MockBukkit ServerMock.
+  - Acceptance:
+    - `onEnable` registers all services (VillageService, StructureService, PathService, ProjectService).
+    - Config loads from `plugin.yml`; defaults applied if missing.
+    - TickEngine started and accessible via `getTickEngine()`.
+    - Commands registered: `/vo`, `/votest`, `/voproject`.
+    - `onDisable` stops tick engine and flushes persistence without errors.
+
+### Coverage Tracking and Reporting
+
+- [ ] T027k [P] [QA] Add JaCoCo coverage reports to CI
+  - Files: `plugin/build.gradle`, `.github/workflows/ci.yml` (if exists)
+  - Description: Configure JaCoCo Gradle plugin to generate HTML coverage reports; upload as CI artifacts; enforce minimum 60% line coverage threshold for new code.
+  - Acceptance:
+    - `./gradlew test jacocoTestReport` generates `build/reports/jacoco/test/html/index.html`.
+    - CI uploads coverage report as artifact on every PR.
+    - Build fails if new code coverage <60% (configurable threshold).
+
+**Checkpoint**: Test coverage ≥70% on core worldgen (PathServiceImpl, StructureServiceImpl, VillagePlacementServiceImpl, TerraformingUtil, SiteValidator); ≥60% on models and PlacementQueueProcessor; all skipped tests implemented.
+
+---
 
 ## Phase 6: User Story 4 — Guided Onboarding (Priority: P2)
 
