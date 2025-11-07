@@ -5,6 +5,7 @@ import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.impl.PathEmitter;
 import com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl;
 import com.davisodom.villageoverhaul.worldgen.impl.StructureServiceImpl;
@@ -153,6 +154,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     world.getHighestBlockYAt(buildingPos.x, buildingPos.z),
                     buildingPos.z
             );
+            
+            // Early terrain classification check to skip unacceptable sites
+            TerrainClassifier.ClassificationResult terrainCheck = checkTerrainSuitability(
+                    world, buildingLocation, effectiveWidth, effectiveDepth);
+            
+            if (terrainCheck.getRejected() > 0) {
+                LOGGER.fine(String.format("[STRUCT] Skipping position for '%s' due to terrain: %s", 
+                        structureId, terrainCheck));
+                continue;
+            }
             
             Optional<Building> building = placeBuilding(world, buildingLocation, structureId, villageId, buildingSeed);
             
@@ -522,6 +533,37 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Check AABB overlap with buffered dimensions
         return !(bufferedX1 + bufferedW1 <= x2 || bufferedX1 >= x2 + w2 || 
                  bufferedZ1 + bufferedD1 <= z2 || bufferedZ1 >= z2 + d2);
+    }
+    
+    /**
+     * Check terrain suitability for a building footprint.
+     * Samples foundation area and classifies terrain to detect water, steep slopes, etc.
+     * 
+     * @param world World to check
+     * @param origin Proposed building origin (southwest corner)
+     * @param width Building width (X axis)
+     * @param depth Building depth (Z axis)
+     * @return Classification result with counts
+     */
+    private TerrainClassifier.ClassificationResult checkTerrainSuitability(
+            World world, Location origin, int width, int depth) {
+        TerrainClassifier.ClassificationResult result = new TerrainClassifier.ClassificationResult();
+        
+        // Sample foundation blocks (every 2 blocks to avoid excessive checks)
+        int sampleStep = 2;
+        for (int x = 0; x < width; x += sampleStep) {
+            for (int z = 0; z < depth; z += sampleStep) {
+                int worldX = origin.getBlockX() + x;
+                int worldY = origin.getBlockY();
+                int worldZ = origin.getBlockZ() + z;
+                
+                TerrainClassifier.Classification classification = 
+                        TerrainClassifier.classify(world, worldX, worldY, worldZ);
+                result.increment(classification);
+            }
+        }
+        
+        return result;
     }
     
     /**

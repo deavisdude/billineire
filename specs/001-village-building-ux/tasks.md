@@ -75,7 +75,7 @@ validations remain, with minimal unit tests for core algorithms where useful.
     - Placement logs include spacing value when evaluating positions.
     - No two placed building footprints are closer than configured spacing (excluding paths/terraformed ground).
 
-- [ ] T012e [Foundational] Implement terrain classification API
+- [X] T012e [Foundational] Implement terrain classification API
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerrainClassifier.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
   - Description: Provide `TerrainClassifier` with methods `isAcceptable(Block)` and `classify(x,y,z)` returning enum { ACCEPTABLE, FLUID, STEEP, BLOCKED }. Integrate into site validation and candidate search to skip unacceptable terrain early.
   - Acceptance:

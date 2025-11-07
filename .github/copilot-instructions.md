@@ -39,4 +39,6 @@ Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
 When completing a task, if a playtest makes sense, suggest it to the user along with a guide on how to test the most recent changes.
 
 Do not leave TODO comments in code snippets. Instead create a complete User Story/Task(s) for any unfinished work.
+
+./specs/ and ./specift/memory/ are living documents. When requirements change, update these files accordingly. Start with the constitution, then work your way down the spec-kit hierarchy to specification files, the plan files, and finally the tasks files.
 <!-- MANUAL ADDITIONS END -->

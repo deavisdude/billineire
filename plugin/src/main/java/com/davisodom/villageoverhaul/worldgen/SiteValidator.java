@@ -1,5 +1,7 @@
 package com.davisodom.villageoverhaul.worldgen;
 
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.Classification;
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.ClassificationResult;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -37,9 +39,11 @@ public class SiteValidator {
     public ValidationResult validateSite(World world, Location origin, int width, int depth, int height) {
         ValidationResult result = new ValidationResult();
         
-        // Check foundation solidity
-        boolean foundationOk = validateFoundation(world, origin, width, depth);
+        // Check foundation solidity with terrain classification
+        ClassificationResult classificationResult = new ClassificationResult();
+        boolean foundationOk = validateFoundation(world, origin, width, depth, classificationResult);
         result.foundationOk = foundationOk;
+        result.classificationResult = classificationResult;
         
         // Check interior air space
         boolean interiorAirOk = validateInteriorAir(world, origin, width, depth, height);
@@ -52,17 +56,18 @@ public class SiteValidator {
         result.passed = foundationOk && interiorAirOk && entranceOk;
         
         if (!result.passed) {
-            LOGGER.fine(String.format("[STRUCT] Site validation failed at %s: foundation=%b, interior=%b, entrance=%b",
-                    origin, foundationOk, interiorAirOk, entranceOk));
+            LOGGER.fine(String.format("[STRUCT] Site validation failed at %s: foundation=%b, interior=%b, entrance=%b, classification: %s",
+                    origin, foundationOk, interiorAirOk, entranceOk, classificationResult));
         }
         
         return result;
     }
     
     /**
-     * Validate foundation solidity and acceptable slope.
+     * Validate foundation solidity and acceptable slope with terrain classification.
      */
-    private boolean validateFoundation(World world, Location origin, int width, int depth) {
+    private boolean validateFoundation(World world, Location origin, int width, int depth, 
+                                      ClassificationResult classificationResult) {
         int solidCount = 0;
         int totalCount = 0;
         double maxSlope = 0.0;
@@ -70,16 +75,25 @@ public class SiteValidator {
         Integer minY = null;
         Integer maxY = null;
         
-        // Sample foundation blocks
+        // Sample foundation blocks and classify terrain
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
-                Block block = world.getBlockAt(
-                        origin.getBlockX() + x,
-                        origin.getBlockY() - 1,
-                        origin.getBlockZ() + z
-                );
+                int worldX = origin.getBlockX() + x;
+                int worldY = origin.getBlockY() - 1;
+                int worldZ = origin.getBlockZ() + z;
                 
+                Block block = world.getBlockAt(worldX, worldY, worldZ);
                 totalCount++;
+                
+                // Classify terrain at this position
+                Classification classification = TerrainClassifier.classify(world, worldX, worldY, worldZ);
+                classificationResult.increment(classification);
+                
+                // Reject if not acceptable (FLUID, STEEP, or BLOCKED)
+                if (classification != Classification.ACCEPTABLE) {
+                    // Early rejection for unacceptable terrain
+                    continue;
+                }
                 
                 // Check if block is solid
                 if (block.getType().isSolid()) {
@@ -105,10 +119,13 @@ public class SiteValidator {
         boolean solidityOk = solidity >= MIN_FOUNDATION_SOLIDITY;
         boolean slopeOk = maxSlope <= MAX_FOUNDATION_SLOPE;
         
-        LOGGER.fine(String.format("[STRUCT] Foundation check: solidity=%.2f (required %.2f), slope=%.3f (max %.3f)",
-                solidity, MIN_FOUNDATION_SOLIDITY, maxSlope, MAX_FOUNDATION_SLOPE));
+        // Reject if any unacceptable terrain found
+        boolean terrainOk = classificationResult.getRejected() == 0;
         
-        return solidityOk && slopeOk;
+        LOGGER.fine(String.format("[STRUCT] Foundation check: solidity=%.2f (required %.2f), slope=%.3f (max %.3f), classification: %s",
+                solidity, MIN_FOUNDATION_SOLIDITY, maxSlope, MAX_FOUNDATION_SLOPE, classificationResult));
+        
+        return solidityOk && slopeOk && terrainOk;
     }
     
     /**
@@ -205,11 +222,13 @@ public class SiteValidator {
         public boolean foundationOk = false;
         public boolean interiorAirOk = false;
         public boolean entranceOk = false;
+        public ClassificationResult classificationResult = null;
         
         @Override
         public String toString() {
-            return String.format("ValidationResult{passed=%b, foundation=%b, interior=%b, entrance=%b}",
-                    passed, foundationOk, interiorAirOk, entranceOk);
+            String classStr = classificationResult != null ? ", classification: " + classificationResult : "";
+            return String.format("ValidationResult{passed=%b, foundation=%b, interior=%b, entrance=%b%s}",
+                    passed, foundationOk, interiorAirOk, entranceOk, classStr);
         }
     }
 }
