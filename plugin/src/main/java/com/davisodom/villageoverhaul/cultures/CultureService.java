@@ -40,8 +40,10 @@ public class CultureService {
             if (!res.endsWith(".json")) continue;
             try (InputStream in = plugin.getResource(res)) {
                 if (in == null) continue;
-                String json = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))
-                        .lines().collect(Collectors.joining("\n"));
+                String json;
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                    json = br.lines().collect(Collectors.joining("\n"));
+                }
                 boolean ok = validator.validateCulture(json);
                 if (!ok) {
                     logger.warning("Culture validation failed for " + res);

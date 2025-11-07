@@ -174,7 +174,8 @@ public class StructureServiceImpl implements StructureService {
                 return false;
             }
             
-            try (ClipboardReader reader = format.getReader(new FileInputStream(schematicFile))) {
+            try (FileInputStream fis = new FileInputStream(schematicFile);
+                 ClipboardReader reader = format.getReader(fis)) {
                 Clipboard clipboard = reader.read();
                 
                 // Create template with actual dimensions from schematic
@@ -395,11 +396,11 @@ public class StructureServiceImpl implements StructureService {
                 editSession.setFastMode(true);
                 
                 // Load clipboard from schematic file
-                File schematicFile = new File(plugin.getDataFolder(), "schematics/" + template.id + ".schem");
                 ClipboardFormat format = ClipboardFormats.findByFile(schematicFile);
                 
                 if (format != null) {
-                    try (ClipboardReader reader = format.getReader(new FileInputStream(schematicFile))) {
+                    try (FileInputStream fis = new FileInputStream(schematicFile);
+                         ClipboardReader reader = format.getReader(fis)) {
                         Clipboard clipboard = reader.read();
                         
                         // Configure paste operation
@@ -426,6 +427,7 @@ public class StructureServiceImpl implements StructureService {
                         LOGGER.fine(String.format("[STRUCT] FAWE placement successful for '%s'", template.id));
                         return true;
                     }
+                }   }
                 }
             }
             */

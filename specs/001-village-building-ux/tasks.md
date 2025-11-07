@@ -46,6 +46,27 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/davisodom/villageoverhaul/DebugFlags.java`
 - [X] T012 Add admin test commands skeleton in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
+- [ ] T012a [Foundational] Wire TickEngine lifecycle in plugin
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
+	- Description: Initialize a single `TickEngine` instance in `VillageOverhaulPlugin#onEnable`. Schedule a repeating task (every 1 tick) to drive the engine and cancel it in `onDisable`. Expose `getTickEngine()` for tests and log concise "[TICK] engine started/stopped" messages controlled by `DebugFlags`.
+	- Acceptance:
+		- Plugin enable starts the engine and scheduler without exceptions.
+		- Plugin disable cancels the task and releases references (no duplicate schedulers on re-enable).
+		- `getTickEngine()` returns the running instance while enabled.
+
+- [ ] T012b [P] [QA] Expose manual tick and MockBukkit scheduler integration
+	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
+	- Description: Ensure the engine has a public `tick()` method advancing the internal tick counter and invoking registered systems in deterministic registration order. Make registration and execution ordering stable to support headless and MockBukkit tests.
+	- Acceptance:
+		- Calling `tick()` increments `getCurrentTick()` by 1 and invokes all systems exactly once per call in deterministic order.
+		- Order remains stable across repeated runs with identical registration sequences.
+
+- [ ] T012c [QA] Finalize deterministic tick tests (replace placeholders)
+	- Files: `plugin/src/test/java/com/davisodom/villageoverhaul/TickHarnessTest.java`
+	- Description: Replace placeholder assertions in the test with real checks: assert `getCurrentTick() == 0` on init; call `engine.tick()` N times and assert `getCurrentTick() == N`; verify multiple systems tick in order; add a MockBukkit scheduled-tick integration test that uses `performTicks(n)`.
+	- Acceptance:
+		- Tests pass locally and in CI with MockBukkit; no placeholder TODOs remain.
+
 **Checkpoint**: Services and DTOs exist; admin commands compile; ready to implement US1
 
 ---
