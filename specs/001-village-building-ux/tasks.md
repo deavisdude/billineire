@@ -129,12 +129,23 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - Exposed via `getMinVillageSpacing()` public getter
     - Updated config load log to show both spacing values
 
-- [ ] T012h [Foundational] Persist and update dynamic village borders
+- [X] T012h [Foundational] Persist and update dynamic village borders
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
   - Description: Represent village border as axis-aligned bounds; expand deterministically on building placement; persist and expose getters.
   - Acceptance:
     - After building placements, border bounds expand to include all footprints.
     - Border persisted and retrievable across restarts.
+  - Implementation:
+    - Created `VillageBorder` class with axis-aligned bounds (minX, maxX, minZ, maxZ)
+    - Added `border` field to `VillageMetadata` (initialized at origin, expands with buildings)
+    - Added `lastBorderUpdateTick` field to track border update timestamp
+    - Implemented `expandBorderForBuilding()` method in VillageMetadata
+    - Integrated border expansion in `addBuilding()` - automatically expands when building added
+    - Added `getBorder()` and `getLastBorderUpdateTick()` getters
+    - Implemented `isWithinDistance()` for inter-village spacing checks (Manhattan distance)
+    - Implemented `getDistanceTo()` for nearest-neighbor distance calculations
+    - Border expansion is deterministic and idempotent (Math.min/max)
+    - toString() provides readable border representation
 
 - [ ] T012i [Foundational] Enforce inter-village spacing during village site search
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`

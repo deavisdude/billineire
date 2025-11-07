@@ -9,12 +9,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
  * In-memory store for village metadata with disk persistence.
- * Tracks buildings, path networks, main building designations.
+ * Tracks buildings, path networks, main building designations, and dynamic borders.
  * Thread-safe for concurrent access.
  */
 public class VillageMetadataStore {
@@ -55,6 +54,13 @@ public class VillageMetadataStore {
      */
     public void addBuilding(UUID villageId, Building building) {
         villageBuildings.computeIfAbsent(villageId, k -> new ArrayList<>()).add(building);
+        
+        // Update village border to include this building
+        VillageMetadata metadata = villages.get(villageId);
+        if (metadata != null) {
+            metadata.expandBorderForBuilding(building);
+        }
+        
         logger.fine(String.format("[STRUCT] Added building %s to village %s", 
             building.getStructureId(), villageId));
     }
@@ -165,6 +171,8 @@ public class VillageMetadataStore {
         private final Location origin;
         private final long seed;
         private final long createdTimestamp;
+        private final VillageBorder border;
+        private long lastBorderUpdateTick;
         
         public VillageMetadata(UUID villageId, String cultureId, Location origin, long seed, long createdTimestamp) {
             this.villageId = villageId;
@@ -172,6 +180,10 @@ public class VillageMetadataStore {
             this.origin = origin;
             this.seed = seed;
             this.createdTimestamp = createdTimestamp;
+            // Initialize border at origin with minimal size (will expand with buildings)
+            this.border = new VillageBorder(origin.getBlockX(), origin.getBlockX(), 
+                                           origin.getBlockZ(), origin.getBlockZ());
+            this.lastBorderUpdateTick = 0;
         }
         
         public UUID getVillageId() { return villageId; }
@@ -179,6 +191,116 @@ public class VillageMetadataStore {
         public Location getOrigin() { return origin; }
         public long getSeed() { return seed; }
         public long getCreatedTimestamp() { return createdTimestamp; }
+        public VillageBorder getBorder() { return border; }
+        public long getLastBorderUpdateTick() { return lastBorderUpdateTick; }
+        
+        /**
+         * Expand border to include a building's footprint.
+         * Called deterministically when buildings are placed.
+         */
+        public void expandBorderForBuilding(Building building) {
+            Location buildingOrigin = building.getOrigin();
+            int[] dims = building.getDimensions();
+            
+            // Calculate building footprint bounds
+            int minX = buildingOrigin.getBlockX();
+            int maxX = minX + dims[0] - 1;
+            int minZ = buildingOrigin.getBlockZ();
+            int maxZ = minZ + dims[2] - 1;
+            
+            // Expand border if needed
+            border.expand(minX, maxX, minZ, maxZ);
+            lastBorderUpdateTick = System.currentTimeMillis(); // Will use tick counter when available
+        }
+    }
+    
+    /**
+     * Represents axis-aligned border bounds for a village.
+     * Mutable to allow deterministic expansion as buildings are added.
+     */
+    public static class VillageBorder {
+        private int minX;
+        private int maxX;
+        private int minZ;
+        private int maxZ;
+        
+        public VillageBorder(int minX, int maxX, int minZ, int maxZ) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+        }
+        
+        public int getMinX() { return minX; }
+        public int getMaxX() { return maxX; }
+        public int getMinZ() { return minZ; }
+        public int getMaxZ() { return maxZ; }
+        
+        public int getWidth() { return maxX - minX + 1; }
+        public int getDepth() { return maxZ - minZ + 1; }
+        
+        /**
+         * Expand border to include new bounds.
+         * Deterministic and idempotent.
+         */
+        public void expand(int newMinX, int newMaxX, int newMinZ, int newMaxZ) {
+            this.minX = Math.min(this.minX, newMinX);
+            this.maxX = Math.max(this.maxX, newMaxX);
+            this.minZ = Math.min(this.minZ, newMinZ);
+            this.maxZ = Math.max(this.maxZ, newMaxZ);
+        }
+        
+        /**
+         * Check if this border is within minDistance of another border.
+         * Used for inter-village spacing enforcement.
+         */
+        public boolean isWithinDistance(VillageBorder other, int minDistance) {
+            // Calculate closest distance between borders (not centers)
+            int dx = 0;
+            if (this.maxX < other.minX) {
+                dx = other.minX - this.maxX;
+            } else if (other.maxX < this.minX) {
+                dx = this.minX - other.maxX;
+            }
+            
+            int dz = 0;
+            if (this.maxZ < other.minZ) {
+                dz = other.minZ - this.maxZ;
+            } else if (other.maxZ < this.minZ) {
+                dz = this.minZ - other.maxZ;
+            }
+            
+            // Use Manhattan distance for simplicity and performance
+            return (dx + dz) < minDistance;
+        }
+        
+        /**
+         * Get border-to-border distance to another village border.
+         */
+        public int getDistanceTo(VillageBorder other) {
+            int dx = 0;
+            if (this.maxX < other.minX) {
+                dx = other.minX - this.maxX;
+            } else if (other.maxX < this.minX) {
+                dx = this.minX - other.maxX;
+            }
+            
+            int dz = 0;
+            if (this.maxZ < other.minZ) {
+                dz = other.minZ - this.maxZ;
+            } else if (other.maxZ < this.minZ) {
+                dz = this.minZ - other.maxZ;
+            }
+            
+            return dx + dz; // Manhattan distance
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("Border[x:%d-%d, z:%d-%d, size:%dx%d]", 
+                minX, maxX, minZ, maxZ, getWidth(), getDepth());
+        }
     }
 }
+
 
