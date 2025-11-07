@@ -45,13 +45,14 @@ updates:
         patterns:
           - "org.junit.jupiter:*"
           - "org.mockito:*"
-          - "com.github.seeseemelk:*"
+          - "com.github.seeseemelk:MockBukkit-*"
         update-types:
           - "minor"
           - "patch"
       # Group WorldEdit/WorldGuard ecosystem
       worldedit-ecosystem:
         patterns:
+          - "com.sk89q.worldedit:*"
           - "com.sk89q.worldguard:*"
           - "com.fastasyncworldedit:*"
         update-types:
