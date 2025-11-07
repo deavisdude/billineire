@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'jacoco'
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
@@ -95,6 +96,20 @@ test {
     testLogging {
         events "passed", "skipped", "failed"
         exceptionFormat "full"
+    }
+    finalizedBy jacocoTestReport
+}
+
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+        csv.required = false
     }
 }
 
