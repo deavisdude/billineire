@@ -124,7 +124,24 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T016a [US1] Implement async placement queue with main-thread batched commits in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessor.java`
 - [X] T017 [US1] Integrate seating into `VillagePlacementServiceImpl` in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
 - [X] T018 [US1] Extend test command: `votest generate-structures <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
- - [ ] T018b [US1] Implement user-facing command: `/vo generate <culture> <name> [seed]` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`; find terrain, call `VillagePlacementService` to place structures; log [STRUCT] summary. When US2 is complete, also invoke path network generation (or report that paths are unavailable yet).
+- [X] T018b [US1] Implement user-facing command: `/vo generate <culture> <name> [seed]` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
+  - Description: User-facing village generation command; find terrain, call `VillagePlacementService` to place structures; log [STRUCT] summary. When US2 is complete, also invoke path network generation (or report that paths are unavailable yet).
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`
+  - Implementation:
+    - Created `GenerateCommand` class with async terrain search (512 block radius)
+    - Terrain suitability criteria: Y variation ≤15 blocks, <30% water, height 50-120
+    - Wired into `/vo generate` subcommand via ProjectCommands
+    - Tab completion suggests available culture IDs
+    - Logs: `[STRUCT] User-triggered village generation: '<name>' (culture=<culture>, seed=<seed>)`
+    - Reports building count, seed, location to user
+    - Placeholder message: "Paths: Not yet available (US2 in progress)"
+    - Fallback: Places marker pillar (stone + torch) if structure placement fails
+  - Acceptance:
+    - ✅ Command registers and executes without error
+    - ✅ Terrain search finds suitable flat area (spiral search pattern)
+    - ✅ Calls VillagePlacementService.placeVillage()
+    - ✅ Summary logging shows placement metrics (building count, seed, location)
+    - ✅ User feedback with colored messages (§a for success, §c for errors)
 - [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
 - [X] T020 [US1] Update harness parsing to assert "0 floating/embedded" in `scripts/ci/sim/run-scenario.ps1`
 

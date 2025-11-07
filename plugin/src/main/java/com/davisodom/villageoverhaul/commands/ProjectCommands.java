@@ -31,11 +31,13 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     private final VillageOverhaulPlugin plugin;
     private final ProjectService projectService;
     private final VillageService villageService;
+    private final GenerateCommand generateCommand;
     
     public ProjectCommands(VillageOverhaulPlugin plugin) {
         this.plugin = plugin;
         this.projectService = plugin.getProjectService();
         this.villageService = plugin.getVillageService();
+        this.generateCommand = new GenerateCommand(plugin);
     }
     
     @Override
@@ -47,6 +49,8 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         String subcommand = args[0].toLowerCase();
         
         switch (subcommand) {
+            case "generate":
+                return generateCommand.execute(sender, Arrays.copyOfRange(args, 1, args.length));
             case "project":
                 return handleProjectCommand(sender, Arrays.copyOfRange(args, 1, args.length));
             case "villager":
@@ -400,8 +404,14 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         List<String> completions = new ArrayList<>();
         
         if (args.length == 1) {
+            completions.add("generate");
             completions.add("project");
             completions.add("villager");
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("generate")) {
+            // Suggest available culture IDs
+            completions.addAll(plugin.getCultureService().all().stream()
+                    .map(c -> c.getId())
+                    .collect(Collectors.toList()));
         } else if (args.length == 2 && args[0].equalsIgnoreCase("project")) {
             completions.addAll(Arrays.asList("list", "status", "create", "activate"));
         } else if (args.length == 2 && args[0].equalsIgnoreCase("villager")) {
