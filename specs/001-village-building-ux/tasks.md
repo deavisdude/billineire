@@ -38,11 +38,11 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T006 Define `VillagePlacementService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillagePlacementService.java`
 - [X] T007 [P] Define `StructureService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java`
 - [X] T008 [P] Define `PathService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/PathService.java`
-- [ ] T008a [P] Define `BuilderService` interface and state model in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/BuilderService.java`
-- [ ] T008b [P] Define `MaterialManager` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/MaterialManager.java`
+- [X] T008a [P] Define `BuilderService` interface and state model in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/BuilderService.java`
+- [X] T008b [P] Define `MaterialManager` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/MaterialManager.java`
 - [X] T009 Implement persistence holders for main building/path metadata in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [X] T010 [P] Add data objects for Building/PathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/model/`
-- [ ] T010a [P] Add data objects for Builder/MaterialRequest/PlacementQueue in `plugin/src/main/java/com/davisodom/villageoverhaul/model/`
+- [X] T010a [P] Add data objects for Builder/MaterialRequest/PlacementQueue in `plugin/src/main/java/com/davisodom/villageoverhaul/model/`
 - [X] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/davisodom/villageoverhaul/DebugFlags.java`
 - [X] T012 Add admin test commands skeleton in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
