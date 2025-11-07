@@ -65,3 +65,6 @@ jobs:
         uses: github/codeql-action/analyze@v3.27.5
         with:
           category: "/language:${{matrix.language}}"
+        env:
+          # Disable PR diff analysis to avoid git fetch issues
+          CODEQL_ACTION_DISABLE_DIFF_RANGE: true
