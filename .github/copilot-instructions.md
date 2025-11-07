@@ -35,4 +35,6 @@ Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
     regex with explicit [0-9] classes (avoid \d in double-quoted strings), escape
     [] and () when needed, and favor simple readiness checks (substring 'Done').
     Validate with `Get-Command -Syntax` in CI to fail fast on parser errors.
+
+When completing a task, if a playtest makes sense, suggest it to the user along with a guide on how to test the most recent changes.
 <!-- MANUAL ADDITIONS END -->

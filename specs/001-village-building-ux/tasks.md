@@ -76,13 +76,16 @@ validations remain, with minimal unit tests for core algorithms where useful.
 
 **Independent Test**: Verify path connectivity ratio and a single persisted main building
 
-- [ ] T021 [US2] Implement `PathServiceImpl` (A* heightmap + smoothing) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
+- [X] T021 [US2] Implement `PathServiceImpl` (A* heightmap + smoothing) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
 - [ ] T022 [P] [US2] Emit path blocks with minimal smoothing (steps/slabs) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
 - [ ] T023 [US2] Implement main building designation logic in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/MainBuildingSelector.java`
 - [ ] T024 [US2] Persist mainBuildingId and pathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [ ] T025 [US2] Extend test command: `votest generate-paths <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [ ] T026 [US2] Harness assertion for path connectivity ≥ 90% in `scripts/ci/sim/run-scenario.ps1`
 - [ ] T026a [US2] Add tests for pathfinding concurrency cap and waypoint cache invalidation in `scripts/ci/sim/run-scenario.ps1`
+- [ ] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
+- [ ] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`.
+- [ ] T026d [P] [US2] Add deterministic path-from-seed check in `scripts/ci/sim/run-scenario.ps1`: run path generation twice with the same seed and hash the ordered (x,y,z) path blocks; assert identical hashes; with a different seed, assert hash changes. Capture artifacts under `test-server/logs/`.
 
 **Checkpoint**: US2 independently verifiable
 
