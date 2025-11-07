@@ -1,17 +1,21 @@
 <!--
 Sync Impact Report
-- Version change: 1.1.0 → 1.2.0
+- Version change: 1.2.0 → 1.3.0
 - Modified sections:
-  - Core Principles (added new principle: "Village Building & Player Onboarding")
-  - Development Workflow, Review Process, and Quality Gates (added village-building gate)
-- Added sections: "Village Building & Player Onboarding" (Principle X)
+	- Engineering Standards & Constraints (expanded with structure integration, async placement, builder state machine, pathfinding limits)
+	- Development Workflow, Review Process, and Quality Gates (added Structure Integration & NPC Construction gate; added planning dependencies subsection)
+- Added sections:
+	- XI. Programmatic Structure Integration & NPC Construction (new core principle)
+	- Planning & Task Dependencies (/speckit.tasks)
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (add village-building compliance gate when applicable)
-	- ✅ .specify/templates/spec-template.md (add checklist item for village-building & UX when applicable)
-	- ✅ .specify/templates/tasks-template.md (add constitution-driven task type for village building & UX)
-	- ⚠ README.md/docs/* (optional: reference new village-building rules where relevant)
-- Follow-up TODOs: Consider lightweight developer guide in docs/ covering main-building designation rules and signage examples
+	- ✅ .specify/templates/plan-template.md (add Structure Integration & NPC Construction gate)
+	- ✅ .specify/templates/spec-template.md (add checklist item for structure integration & NPC construction)
+	- ✅ .specify/templates/tasks-template.md (add constitution-driven dependency breakdown and test coverage requirement)
+	- N/A .specify/templates/commands/* (no commands templates present in repo)
+	- ⚠ README.md/docs/* (optional: reference async structure placement and builder visualization guidelines)
+- Follow-up TODOs:
+	- TODO(DOCS_GUIDE): Add a short developer doc covering WorldEdit/FAWE integration, async placement queues, and builder state machine patterns with examples.
 -->
 
 # Spec Billineire Constitution
@@ -122,6 +126,31 @@ provide clear wayfinding:
 Rationale: Grounded placement, simple paths, and an explicit main-building greeter create a
 coherent onboarding experience without sacrificing determinism or performance on large servers.
 
+### XI. Programmatic Structure Integration & NPC Construction (NON-NEGOTIABLE)
+Village overhauls MUST implement structure placement and builder AI using proven, production-ready
+patterns to ensure performance, determinism, and a great player experience:
+
+- Structure Manipulation: Use WorldEdit/FAWE APIs as the standard for loading, rotating, and
+	pasting schematics. Prefer pre-validation of footprints and chunk-gated operations.
+- Asynchronous Placement: Large structure preparation MUST be off-thread. Apply block mutations on
+	the main thread only via minimal, batched tasks; never paste large structures synchronously.
+- Builder State Machine: Implement a deterministic state machine for builder NPCs with states at
+	minimum: IDLE → WALKING_TO_BUILDING → REQUESTING_MATERIALS → GATHERING_MATERIALS →
+	CLEARING_SITE → PLACING_BLOCKS → COMPLETING → STUCK (recovery). Persist progress.
+- Visible Progress: Place blocks row-by-row, layer-by-layer to produce visible construction
+	progress. Emit server-side progress signals and optional scaffolding/markers.
+- Material Management: Provide a material manager that reconciles builder inventories with
+	warehouses/chests; requests, pickups, and consumption MUST be server-authoritative and logged.
+- Pathfinding Limits: Treat vanilla-like pathfinding as local (~10 blocks). For longer distances,
+	use waypoint segments, cache paths, invalidate on terrain change, and cap concurrent planners.
+- Modular Architecture: Separate structure generation, NPC AI, village management, and construction
+	visualization into modules with clear interfaces and tests.
+- Structure Registration: Where structure registration is needed, prefer integrating with a
+	widely-used system (e.g., CustomStructures) and leverage Paper’s structure generation pipeline.
+
+Rationale: Patterns from Minecolonies/Millénaire demonstrate reliable, scalable construction.
+Codifying them prevents server lag, preserves determinism, and improves playability at scale.
+
 ## Engineering Standards & Constraints
 
 - Coding standards: consistent naming, null-safety, and immutable data where practical for shared
@@ -137,6 +166,25 @@ coherent onboarding experience without sacrificing determinism or performance on
 - Compatibility: Keep mixins/hooks minimal and feature-scoped; prefer official APIs/extension
 	points; feature flags to soft-disable incompatible modules.
 - Documentation: Public APIs and data schemas MUST be documented and versioned.
+
+### Structures & Construction (Addendum)
+
+- WorldEdit/FAWE Integration: Treat WorldEdit (or FAWE) as the default abstraction for structure
+	load/rotate/paste. Validate foundations (solid blocks, interior air) before placement.
+- Async Placement Queues: Pre-compute and queue block placements off-thread; commit small batches
+	on the main thread respecting tick budgets and chunk load state. Never paste large schematics on
+	the main thread.
+- Builder State Machine: Implement the canonical states (IDLE, WALKING_TO_BUILDING,
+	REQUESTING_MATERIALS, GATHERING_MATERIALS, CLEARING_SITE, PLACING_BLOCKS, COMPLETING, STUCK)
+	and persist progress so work survives restarts.
+- Visible Construction: Provide scaffolding/progress indicators and layer-by-layer placement for
+	clear player feedback.
+- Materials Flow: Centralize material requests, pickups, and consumption with audit logs; prefer
+	warehouse/chest rendezvous over ad-hoc pulls.
+- Pathfinding: Limit expensive path searches, segment long walks via waypoints, cache results, and
+	cap concurrent pathfinding operations; re-plan only on invalidation events.
+- Registration: When registering structures, prefer a shared registry (e.g., CustomStructures) and
+	integrate with Paper’s structure generation pipeline where appropriate.
 
 ### Scripting & CI Portability (Windows PowerShell 5.1 baseline)
 
@@ -175,8 +223,27 @@ Every feature/PR MUST pass the following Constitution Check before merge:
 	explicit [0-9] character classes, and keep server readiness detection simple
 	(e.g., substring 'Done').
 
+- Structure Integration & NPC Construction (if applicable):
+	- WorldEdit/FAWE used for structure load/rotate/paste with footprint validation
+	- Asynchronous preparation and main-thread batched placement (no large synchronous pastes)
+	- Deterministic builder state machine with visible row/layer progress and persisted checkpoints
+	- Material manager coordinates builder/storage, server-authoritative
+	- Pathfinding respects local radius, waypointing for long routes, caching, and concurrency caps
+	- Integration approach for registration/Paper pipeline (e.g., CustomStructures) documented
+
 Gate failures require a written justification in the plan’s Complexity Tracking section and an
 explicit follow-up task with an owner and due date.
+
+### Planning & Task Dependencies (/speckit.tasks)
+
+When generating task breakdowns, enforce these dependency chains and require tests per component
+before integration begins:
+
+- WorldEdit integration layer → Structure loading system → Placement engine
+- NPC base class → State machine → Builder AI → Material manager
+- Village data model → Village manager → Expansion system
+- Pathfinding util → Navigator → Builder movement
+- Configuration system → All subsystems
 
 ## Governance
 
@@ -193,4 +260,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.2.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-05
+**Version**: 1.3.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-06

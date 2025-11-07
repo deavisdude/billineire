@@ -5,9 +5,9 @@ Spec: ../001-village-overhaul/spec.md
 
 ## Decisions
 
-- Structure Representation: Prefer FAWE + Sponge Schematic v2 for performance when FAWE is present; fallback to
-  Paper API block placement from a compact JSON template describing block palette, anchor, and footprint. Determinism
-  ensured by fixed ordering and seeds.
+- Structure Representation: WorldEdit API is the standard surface for structure manipulation.
+  Prefer FAWE when present for performance. Use Sponge Schematic v2 as the canonical on-disk
+  format. Determinism ensured by fixed ordering and seeds.
 - Site Validation: Validate foundation solidity under footprint, interior air-space at entrances/rooms, and collision
   clearance. Abort or re-seat on failure. Minor localized terraforming allowed (light grading/filling, vegetation
   trimming) to achieve natural placement; forbid large artificial platforms/cliff cuts.
@@ -17,16 +17,38 @@ Spec: ../001-village-overhaul/spec.md
   structure set using seeded choice + constraints (centrality/proximity to paths).
 - Determinism: Seed = H(worldSeed, featureSeed, villageId); no reliance on nondeterministic iteration; snapshot inputs
   in logs for replay.
-- Chunk-Gating & Budgeting: Split large placements into batches aligned to chunk boundaries; schedule over ticks; never
-  mutate world off-thread.
+- Async Placement, Chunk-Gating & Budgeting: Prepare large structures off-thread. Maintain a
+  placement queue with deterministic ordering (by layer and row). Commit small batches on the main
+  thread aligned to chunk boundaries. Never mutate world off-thread.
 - Observability: [STRUCT] logs for placement begin/seat/re-seat/abort; counters for placements, retries, path coverage,
   main-building tagging; debug toggles.
 - Parity (Java/Bedrock): Use Adventure API for signage text; avoid client-only visuals; ensure functional parity.
 - Protections: If WorldGuard present, treat regions disallowing placement as invalid sites.
 
+## NPC Builder Architecture (Minecolonies Pattern)
+
+State machine with persisted checkpoints and visible progress:
+
+- IDLE → WALKING_TO_BUILDING → REQUESTING_MATERIALS → GATHERING_MATERIALS → CLEARING_SITE →
+  PLACING_BLOCKS → COMPLETING → STUCK (recovery)
+- Block placement is row-by-row, layer-by-layer to provide visible progress to players.
+- Material manager coordinates requests/pickups/consumption from storage; operations are
+  server-authoritative and logged.
+
+Pathfinding limits and performance controls:
+
+- Treat local pathfinding radius as ~10 blocks; use waypoint navigation for longer routes.
+- Cache path segments; invalidate cache on terrain changes only.
+- Cap concurrent pathfinding operations to protect the main tick.
+
+Integration with structure generation:
+
+- Prefer registering structures with a popular plugin (e.g., CustomStructures) when appropriate,
+  and integrate with Paper’s structure generation pipeline.
+
 ## Rationale
 
-- FAWE enables faster edits while keeping determinism; fallback path ensures no hard dependency. Terraforming policy
+- WorldEdit/FAWE enables faster, reliable edits while keeping determinism; fallback path ensures no hard dependency. Terraforming policy
   balances natural aesthetics with predictable, safe edits.
 - A* on a heightmap is simple, fast enough, and easy to smooth with slabs/steps without heavy terrain changes.
 - Seed composition ensures reproducible outputs per world/village while allowing diversity across villages.
@@ -36,7 +58,13 @@ Spec: ../001-village-overhaul/spec.md
 - Vanilla structure templates/Jigsaw: Powerful but heavier integration and less control for small, culture-specific
   sets; phased adoption later is possible.
 - Pure WorldEdit dependency: Faster but creates hard dependency; fallback would be missing.
+  → Decision: Use WorldEdit API surface with FAWE preferred but keep a minimal fallback path.
 - Voronoi-based road network: Overkill for initial scope; A* per-pair with MST selection suffices.
+
+## Critical Performance Consideration
+
+- Large structure placement on the main thread causes server lag. Use asynchronous preparation and
+  main-thread batched commits only. Validate via headless harness logs and tick-time counters.
 
 ## Open Items Resolved
 

@@ -134,3 +134,9 @@ Confirm the feature satisfies or has a plan for:
 - Village Building & UX (if village-related): Grounded building placement, inter-building
   paths, culture-defined main building, signage for projects/requirements, and greeter
   villager behavior on main-building entry are addressed.
+
+- Structure Integration & NPC Construction (if applicable): WorldEdit/FAWE for structure
+  load/rotate/paste with footprint validation, async preparation and batched main-thread
+  placement, deterministic builder state machine with visible progress and persisted
+  checkpoints, material manager, and pathfinding limits (local radius, waypointing, caching,
+  concurrency caps); note registration/Paper pipeline approach.

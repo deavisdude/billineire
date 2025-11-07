@@ -8,7 +8,8 @@ description: "Task list for Village Overhaul — Structures First"
 **Input**: Design documents from `/specs/001-village-overhaul/`
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, contracts/
 
-**Tests**: Tests are OPTIONAL. We include harness validations where helpful but keep unit tests minimal.
+**Tests**: Each component SHOULD have dedicated test coverage before integration begins. Harness
+validations remain, with minimal unit tests for core algorithms where useful.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
@@ -37,8 +38,11 @@ description: "Task list for Village Overhaul — Structures First"
 - [X] T006 Define `VillagePlacementService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillagePlacementService.java`
 - [X] T007 [P] Define `StructureService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java`
 - [X] T008 [P] Define `PathService` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/PathService.java`
+- [ ] T008a [P] Define `BuilderService` interface and state model in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/BuilderService.java`
+- [ ] T008b [P] Define `MaterialManager` interface in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/MaterialManager.java`
 - [X] T009 Implement persistence holders for main building/path metadata in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [X] T010 [P] Add data objects for Building/PathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/model/`
+- [ ] T010a [P] Add data objects for Builder/MaterialRequest/PlacementQueue in `plugin/src/main/java/com/davisodom/villageoverhaul/model/`
 - [X] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/davisodom/villageoverhaul/DebugFlags.java`
 - [X] T012 Add admin test commands skeleton in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
@@ -54,8 +58,9 @@ description: "Task list for Village Overhaul — Structures First"
 
 - [X] T013 [US1] Implement site validation (foundation/interior clearance) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
 - [X] T014 [P] [US1] Implement minor terraforming utils (light grading/filling, vegetation trim) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
-- [X] T015 [US1] Implement `StructureServiceImpl` (load template, seat/re-seat/abort, deterministic order) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+- [X] T015 [US1] Implement `StructureServiceImpl` (load/rotate/paste via WorldEdit/FAWE, seat/re-seat/abort, deterministic order) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
 - [X] T016 [P] [US1] Add FAWE-backed placement path (if FAWE present) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+- [ ] T016a [US1] Implement async placement queue with main-thread batched commits in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueue.java`
 - [X] T017 [US1] Integrate seating into `VillagePlacementServiceImpl` in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
 - [X] T018 [US1] Extend test command: `votest generate-structures <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
@@ -77,6 +82,7 @@ description: "Task list for Village Overhaul — Structures First"
 - [ ] T024 [US2] Persist mainBuildingId and pathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [ ] T025 [US2] Extend test command: `votest generate-paths <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [ ] T026 [US2] Harness assertion for path connectivity ≥ 90% in `scripts/ci/sim/run-scenario.ps1`
+- [ ] T026a [US2] Add tests for pathfinding concurrency cap and waypoint cache invalidation in `scripts/ci/sim/run-scenario.ps1`
 
 **Checkpoint**: US2 independently verifiable
 
@@ -107,6 +113,21 @@ description: "Task list for Village Overhaul — Structures First"
 - [ ] T032 [US4] Extend test commands to refresh signage and trigger greeter in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
 **Checkpoint**: US4 independently verifiable
+
+---
+
+## Phase 6a: NPC Builder — Deterministic State Machine (Priority: P1)
+
+**Goal**: Deterministic builder state machine with visible row/layer progress and material coordination
+
+**Independent Test**: Trigger a small build; assert state transitions, persisted checkpoints, and visible progress
+
+- [ ] T033a Implement Builder state machine skeleton in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/impl/BuilderServiceImpl.java`
+- [ ] T033b [P] Implement MaterialManager allocations/pickups/consumption in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/impl/MaterialManagerImpl.java`
+- [ ] T033c Integrate PlacementQueue with PLACING_BLOCKS state in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/impl/BuilderServiceImpl.java`
+- [ ] T033d Add harness logs for state transitions and progress in `plugin/src/main/java/com/davisodom/villageoverhaul/builders/impl/BuilderServiceImpl.java`
+
+**Checkpoint**: NPC Builder independently verifiable
 
 ---
 
@@ -159,8 +180,16 @@ description: "Task list for Village Overhaul — Structures First"
 ### Phase Dependencies
 - Setup → Foundational → US1 → US2 → US3 → US4 → US5/US6/US7 → US8 → Polish
 
+### Constitution-Driven Dependency Chains (enforced)
+- WorldEdit integration layer → Structure loading system → Placement engine
+- NPC base class → State machine → Builder AI → Material manager
+- Village data model → Village manager → Expansion system
+- Pathfinding util → Navigator → Builder movement
+- Configuration system → All subsystems
+
 ### User Story Dependencies
 - US1 (Structures) → US2 (Paths/Main) → US4 (Onboarding)
+- NPC Builder depends on US1 (structures + placement queue)
 - US3 (Projects) depends on US1 (structures present)
 
 ### Parallel Opportunities

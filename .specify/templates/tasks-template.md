@@ -43,6 +43,23 @@ description: "Task list template for feature implementation"
   main-building designation/persistence, signage for active projects and material requirements,
   and greeter villager trigger behavior on main-building entry (server-side, rate-limited).
 
+- Structure integration & NPC construction: WorldEdit/FAWE integration, structure loading
+  subsystem, asynchronous placement engine with batched main-thread commits, deterministic
+  builder state machine (IDLE → WALKING_TO_BUILDING → REQUESTING_MATERIALS → GATHERING_MATERIALS
+  → CLEARING_SITE → PLACING_BLOCKS → COMPLETING → STUCK), visible row/layer progress and
+  scaffolding, material manager for inventories/warehouses, and pathfinding with waypointing,
+  caching, and concurrency limits.
+
+### Recommended Dependency Breakdown (village/structures)
+
+- WorldEdit integration layer → Structure loading system → Placement engine
+- NPC base class → State machine → Builder AI → Material manager
+- Village data model → Village manager → Expansion system
+- Pathfinding util → Navigator → Builder movement
+- Configuration system → All subsystems
+
+Each component above SHOULD have dedicated test coverage before integration begins.
+
 <!-- 
   ============================================================================
   IMPORTANT: The tasks below are SAMPLE TASKS for illustration purposes only.

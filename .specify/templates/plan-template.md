@@ -55,6 +55,13 @@ For this project, every plan MUST address and prove compliance with these gates:
   (no floating/embedded), inter-building paths, a culture-defined main building, clear
   project signage/requirements, and greeter villager behavior on main-building entry.
 
+- Structure Integration & NPC Construction (if applicable): Plan for WorldEdit/FAWE-based
+  structure load/rotate/paste with footprint validation; asynchronous preparation with
+  main-thread batched placement; deterministic builder state machine with visible row/layer
+  progress and persisted checkpoints; material manager coordinating builder/storage; pathfinding
+  within local radius with waypointing, caching, and concurrency caps; and the chosen approach to
+  structure registration/Paper pipeline integration (e.g., CustomStructures).
+
 ## Project Structure
 
 ### Documentation (this feature)
