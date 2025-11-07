@@ -1,0 +1,64 @@
+name: SonarQube Code Quality
+
+on:
+  push:
+    branches: [ main, '**-village-overhaul' ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - '.github/workflows/sonarqube.yml'
+      - 'sonar-project.properties'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - '.github/workflows/sonarqube.yml'
+      - 'sonar-project.properties'
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Shallow clones should be disabled for better relevancy of analysis
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Build and run tests
+        run: |
+          cd plugin
+          chmod +x gradlew
+          ./gradlew clean build test jacocoTestReport --no-daemon
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate check
+        id: sonarqube-quality-gate-check
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        # Force to fail step after specific time
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}

@@ -1,0 +1,64 @@
+name: CodeQL Security Analysis
+
+on:
+  push:
+    branches: [ main, '**-village-overhaul' ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'plugin/src/**'
+      - 'plugin/build.gradle'
+      - '.github/workflows/codeql.yml'
+  schedule:
+    # Run weekly on Mondays at 00:00 UTC
+    - cron: '0 0 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze Java Code
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'java' ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # Initialize CodeQL tools for scanning
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Specify CodeQL queries to run
+          queries: security-extended,security-and-quality
+
+      # Build the project so CodeQL can analyze it
+      - name: Build with Gradle
+        run: |
+          cd plugin
+          chmod +x gradlew
+          ./gradlew clean build --no-daemon -x test
+
+      # Perform CodeQL analysis
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
