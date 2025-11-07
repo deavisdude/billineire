@@ -60,7 +60,7 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T014 [P] [US1] Implement minor terraforming utils (light grading/filling, vegetation trim) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
 - [X] T015 [US1] Implement `StructureServiceImpl` (load/rotate/paste via WorldEdit/FAWE, seat/re-seat/abort, deterministic order) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
 - [X] T016 [P] [US1] Add FAWE-backed placement path (if FAWE present) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-- [ ] T016a [US1] Implement async placement queue with main-thread batched commits in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueue.java`
+- [X] T016a [US1] Implement async placement queue with main-thread batched commits in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessor.java`
 - [X] T017 [US1] Integrate seating into `VillagePlacementServiceImpl` in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
 - [X] T018 [US1] Extend test command: `votest generate-structures <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
