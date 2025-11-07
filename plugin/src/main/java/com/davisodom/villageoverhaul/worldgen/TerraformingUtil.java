@@ -19,11 +19,11 @@ public class TerraformingUtil {
     private static final Logger LOGGER = Logger.getLogger(TerraformingUtil.class.getName());
     
     // Maximum blocks to grade/fill in a single operation (for small structures)
-    private static final int MAX_TERRAFORM_BLOCKS = 200;
+    private static final int MAX_TERRAFORM_BLOCKS = 300;
     
     // For large structures (> 30x30 footprint), use a higher limit or skip terraforming
     private static final int LARGE_STRUCTURE_THRESHOLD = 900; // 30x30
-    private static final int MAX_TERRAFORM_BLOCKS_LARGE = 2000;
+    private static final int MAX_TERRAFORM_BLOCKS_LARGE = 3000;
     
     // Maximum vertical change for grading
     private static final int MAX_VERTICAL_CHANGE = 3;
@@ -167,38 +167,26 @@ public class TerraformingUtil {
                         origin.getBlockZ() + z
                 );
                 
-                int yDiff = Math.abs(surfaceY - targetY);
+                int yDiff = surfaceY - targetY;
                 
-                // Only grade if within acceptable vertical change
-                if (yDiff > 0 && yDiff <= MAX_VERTICAL_CHANGE) {
-                    if (surfaceY < targetY) {
-                        // Fill gap
-                        for (int y = surfaceY; y < targetY; y++) {
-                            Block fillBlock = world.getBlockAt(
-                                    origin.getBlockX() + x,
-                                    y,
-                                    origin.getBlockZ() + z
-                            );
-                            if (!fillBlock.getType().isSolid()) {
-                                fillBlock.setType(Material.DIRT);
-                                modifiedCount++;
-                            }
-                        }
-                    } else if (surfaceY > targetY) {
-                        // Remove bump (only if not too tall)
-                        for (int y = targetY; y < surfaceY; y++) {
-                            Block removeBlock = world.getBlockAt(
-                                    origin.getBlockX() + x,
-                                    y,
-                                    origin.getBlockZ() + z
-                            );
-                            if (canSafelyRemove(removeBlock.getType())) {
-                                removeBlock.setType(Material.AIR);
-                                modifiedCount++;
-                            }
+                // Only fill gaps UPWARD - never dig down
+                // If surface is higher than target, skip (let structure sit on natural terrain)
+                if (yDiff < 0 && Math.abs(yDiff) <= MAX_VERTICAL_CHANGE) {
+                    // Surface is below target - fill gap
+                    for (int y = surfaceY + 1; y <= targetY; y++) {
+                        Block fillBlock = world.getBlockAt(
+                                origin.getBlockX() + x,
+                                y,
+                                origin.getBlockZ() + z
+                        );
+                        if (!fillBlock.getType().isSolid()) {
+                            fillBlock.setType(Material.DIRT);
+                            modifiedCount++;
                         }
                     }
                 }
+                // Note: We intentionally DO NOT remove blocks when surfaceY > targetY
+                // This prevents structures from being dug into hillsides
             }
         }
         
@@ -300,7 +288,7 @@ public class TerraformingUtil {
     /**
      * Attempt to prepare a site with minimal terraforming.
      * Combines vegetation trimming and light grading.
-     * For very large structures (>30x30), skip terraforming and just clear vegetation.
+     * For very large structures (>30x30), skip grading but ALWAYS fill foundation gaps.
      * 
      * @param world Target world
      * @param origin Southwest corner of footprint
@@ -317,18 +305,57 @@ public class TerraformingUtil {
         LOGGER.fine(String.format("[STRUCT] Preparing site at %s (%dx%dx%d), footprint=%d, large=%s, maxBlocks=%d", 
                 origin, width, depth, height, footprintArea, isLargeStructure, maxBlocks));
         
+        // Step 0: Check for water in footprint - reject if > 20% of footprint is water
+        int waterBlocks = 0;
+        int maxWaterBlocks = (width * depth) / 5; // 20% threshold
+        
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < depth; z++) {
+                Location checkLoc = origin.clone().add(x, 0, z);
+                int y = world.getHighestBlockYAt(checkLoc);
+                Material surfaceMat = world.getBlockAt(checkLoc.getBlockX(), y, checkLoc.getBlockZ()).getType();
+                
+                if (surfaceMat == Material.WATER) {
+                    waterBlocks++;
+                    if (waterBlocks > maxWaterBlocks) {
+                        LOGGER.info(String.format("[STRUCT] Site rejected at %s: too much water (%d/%d blocks, max %d)",
+                                origin, waterBlocks, footprintArea, maxWaterBlocks));
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        if (waterBlocks > 0) {
+            LOGGER.fine(String.format("[STRUCT] Site has %d water blocks (%.1f%%), within acceptable threshold",
+                    waterBlocks, (waterBlocks * 100.0) / footprintArea));
+        }
+        
         // Step 1: Always trim vegetation (trees inside buildings are bad)
         int trimmed = trimVegetation(world, origin, width, depth, height);
         
-        // For very large structures, skip grading/filling and just place on existing terrain
+        int targetY = origin.getBlockY();
+        
+        // For very large structures, skip grading but ALWAYS fill foundation gaps
         if (isLargeStructure) {
-            LOGGER.info(String.format("[STRUCT] Large structure detected (%dx%d), skipping terraforming. Vegetation trimmed: %d blocks",
-                    width, depth, trimmed));
+            LOGGER.info(String.format("[STRUCT] Large structure detected (%dx%d), skipping grading but filling foundation gaps",
+                    width, depth));
+            
+            // Fill gaps beneath foundation to prevent floating structures
+            int filled = fillGapsWithLimit(world, origin, width, depth, targetY - 1, maxBlocks);
+            
+            if (filled < 0) {
+                LOGGER.warning(String.format("[STRUCT] Foundation filling exceeded limits at %s", origin));
+                // Continue anyway - better to have some floating than no structure
+            }
+            
+            int totalModified = trimmed + (filled > 0 ? filled : 0);
+            LOGGER.info(String.format("[STRUCT] Site prepared (large): trimmed=%d, foundation filled=%d",
+                    trimmed, filled > 0 ? filled : 0));
             return true;
         }
         
         // Step 2: Light grading (only for small/medium structures)
-        int targetY = origin.getBlockY();
         int graded = lightGradingWithLimit(world, origin, width, depth, targetY, maxBlocks);
         
         if (graded < 0) {
@@ -350,5 +377,63 @@ public class TerraformingUtil {
                 origin, totalModified, trimmed, graded, filled));
         
         return true;
+    }
+    
+    /**
+     * Backfill foundation AFTER structure placement.
+     * Fills any AIR blocks below the structure down to solid ground.
+     * This fixes floating structures caused by terrain variations.
+     * Only fills EXTERIOR perimeter, not interior areas.
+     * ONLY fills where terrain is within reasonable distance (max 3 blocks gap).
+     * 
+     * @param world The world
+     * @param origin Structure origin (southwest corner, ground level)
+     * @param width Structure width (X direction)
+     * @param depth Structure depth (Z direction)
+     * @param fillMaterial Material to use for backfilling (typically DIRT)
+     * @return Number of blocks filled
+     */
+    public static int backfillFoundation(World world, Location origin, int width, int depth, Material fillMaterial) {
+        int filled = 0;
+        int maxGap = 3; // Only fill gaps up to 3 blocks (prevents walls on steep slopes)
+        
+        LOGGER.fine(String.format("[STRUCT] Backfilling foundation at %s (%dx%d)", origin, width, depth));
+        
+        // Only fill the PERIMETER of the structure (exterior edges only)
+        // This prevents dirt from appearing inside buildings
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < depth; z++) {
+                // Skip interior blocks - only process perimeter (2 block wide border)
+                boolean isPerimeter = (x < 2 || x >= width - 2 || z < 2 || z >= depth - 2);
+                if (!isPerimeter) {
+                    continue;
+                }
+                
+                Location surfaceLoc = origin.clone().add(x, 0, z);
+                
+                // Find natural terrain height at this position
+                int terrainY = world.getHighestBlockYAt(surfaceLoc);
+                int structureBaseY = surfaceLoc.getBlockY();
+                int gapSize = structureBaseY - terrainY;
+                
+                // Only fill if gap is reasonable (1-3 blocks)
+                // Skip if terrain is higher than structure (no gap) or gap is too large (steep slope)
+                if (gapSize < 1 || gapSize > maxGap) {
+                    continue;
+                }
+                
+                // Fill from terrain UP to structure base
+                for (int y = terrainY + 1; y < structureBaseY; y++) {
+                    Block block = world.getBlockAt(surfaceLoc.getBlockX(), y, surfaceLoc.getBlockZ());
+                    if (block.getType().isAir()) {
+                        block.setType(fillMaterial);
+                        filled++;
+                    }
+                }
+            }
+        }
+        
+        LOGGER.info(String.format("[STRUCT] Foundation backfilled: %d blocks placed (max gap: %d)", filled, maxGap));
+        return filled;
     }
 }

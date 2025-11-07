@@ -184,11 +184,11 @@ public class VillageWorldgenAdapter implements Listener {
         
         int startX = start.getBlockX();
         int startZ = start.getBlockZ();
-        int checkRadius = 32; // Check 32 block radius for flatness
-        int sampleInterval = 16; // Check every 16 blocks in spiral
+        int checkRadius = 24; // Check 24 block radius for flatness (reduced from 32)
+        int sampleInterval = 24; // Check every 24 blocks in spiral (increased from 16 for speed)
         
-        // Spiral search pattern
-        for (int radius = 16; radius <= maxRadius; radius += sampleInterval) {
+        // Spiral search pattern - increased max radius for more opportunities
+        for (int radius = 16; radius <= Math.min(maxRadius, 768); radius += sampleInterval) {
             // Check 8 points around the circle at this radius
             for (int i = 0; i < 8; i++) {
                 double angle = (i / 8.0) * 2 * Math.PI;
@@ -222,9 +222,9 @@ public class VillageWorldgenAdapter implements Listener {
         int waterBlocks = 0;
         int totalChecks = 0;
         
-        // Sample terrain in a grid pattern
-        for (int x = -checkRadius; x <= checkRadius; x += 8) {
-            for (int z = -checkRadius; z <= checkRadius; z += 8) {
+        // Sample terrain in a grid pattern (increased from 8 to 12 for speed)
+        for (int x = -checkRadius; x <= checkRadius; x += 12) {
+            for (int z = -checkRadius; z <= checkRadius; z += 12) {
                 int checkX = centerX + x;
                 int checkZ = centerZ + z;
                 int y = world.getHighestBlockYAt(checkX, checkZ);
@@ -245,34 +245,15 @@ public class VillageWorldgenAdapter implements Listener {
         double waterPercent = (double) waterBlocks / totalChecks;
         
         // Criteria for suitable terrain:
-        // - Y variation <= 12 blocks (reasonably flat - relaxed from 8)
+        // - Y variation <= 15 blocks (relaxed for more placement opportunities)
         // - Less than 30% water coverage
         // - Not too high or too low (between Y 50 and Y 120)
-        // - No ice blocks (unsuitable for building)
-        boolean flatEnough = yVariation <= 12;
+        boolean flatEnough = yVariation <= 15;
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
-        // Check for ice blocks (unsuitable terrain)
-        boolean hasIce = false;
-        for (int x = -checkRadius; x <= checkRadius; x += 8) {
-            for (int z = -checkRadius; z <= checkRadius; z += 8) {
-                int checkX = centerX + x;
-                int checkZ = centerZ + z;
-                int y = world.getHighestBlockYAt(checkX, checkZ);
-                Block surfaceBlock = world.getBlockAt(checkX, y - 1, checkZ);
-                
-                Material mat = surfaceBlock.getType();
-                if (mat == Material.ICE || mat == Material.PACKED_ICE || 
-                    mat == Material.BLUE_ICE || mat == Material.FROSTED_ICE) {
-                    hasIce = true;
-                    break;
-                }
-            }
-            if (hasIce) break;
-        }
-        
-        return flatEnough && notTooWatery && goodHeight && !hasIce;
+        // Skip ice check for speed - water check is sufficient
+        return flatEnough && notTooWatery && goodHeight;
     }
     
     /**

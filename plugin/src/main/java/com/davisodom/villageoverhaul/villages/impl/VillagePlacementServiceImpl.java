@@ -3,10 +3,14 @@ package com.davisodom.villageoverhaul.villages.impl;
 import com.davisodom.villageoverhaul.model.Building;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
+import com.davisodom.villageoverhaul.worldgen.PathService;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
+import com.davisodom.villageoverhaul.worldgen.impl.PathEmitter;
+import com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl;
 import com.davisodom.villageoverhaul.worldgen.impl.StructureServiceImpl;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.plugin.Plugin;
 
 import java.util.*;
@@ -20,10 +24,17 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     private static final Logger LOGGER = Logger.getLogger(VillagePlacementServiceImpl.class.getName());
     
     // Minimum spacing between buildings (blocks)
-    private static final int DEFAULT_BUILDING_SPACING = 4;
+    // This is applied on BOTH sides, so total gap = 2 * spacing = 4 blocks
+    private static final int DEFAULT_BUILDING_SPACING = 2;
     
     // Structure service for building placement
     private final StructureService structureService;
+    
+    // Path service for connecting buildings
+    private final PathService pathService;
+    
+    // Path emitter for block placement
+    private final PathEmitter pathEmitter;
     
     // Metadata storage
     private final VillageMetadataStore metadataStore;
@@ -36,6 +47,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(VillageMetadataStore metadataStore) {
         this.structureService = new StructureServiceImpl();
+        this.pathService = new PathServiceImpl();
+        this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
     }
     
@@ -47,6 +60,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(Plugin plugin, VillageMetadataStore metadataStore) {
         this.structureService = new StructureServiceImpl(plugin.getDataFolder());
+        this.pathService = new PathServiceImpl();
+        this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
     }
     
@@ -55,6 +70,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(StructureService structureService, VillageMetadataStore metadataStore) {
         this.structureService = structureService;
+        this.pathService = new PathServiceImpl();
+        this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
     }
     
@@ -74,29 +91,80 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         List<Building> placedBuildings = new ArrayList<>();
         
-        // Use grid-based placement with fixed spacing to prevent overlaps
-        // Buildings placed in a spiral pattern outward from center
-        List<GridPosition> gridPositions = calculateGridPositions(world, origin, structureIds, seed);
+        // Track occupied footprints to prevent overlaps DURING placement
+        List<Footprint> occupiedFootprints = new ArrayList<>();
         
-        for (int i = 0; i < structureIds.size() && i < gridPositions.size(); i++) {
+        // Place buildings one at a time with dynamic collision detection
+        // Use grid-based spiral search for each building to find non-overlapping spots
+        for (int i = 0; i < structureIds.size(); i++) {
             String structureId = structureIds.get(i);
-            GridPosition gridPos = gridPositions.get(i);
             
-            Location buildingLocation = new Location(
-                    world,
-                    gridPos.x,
-                    world.getHighestBlockYAt(gridPos.x, gridPos.z),
-                    gridPos.z
-            );
+            // Get structure dimensions
+            Optional<int[]> dimensions = structureService.getStructureDimensions(structureId);
+            if (!dimensions.isPresent()) {
+                LOGGER.warning(String.format("[STRUCT] Structure '%s' dimensions not found, skipping", structureId));
+                continue;
+            }
+            
+            int[] dims = dimensions.get();
+            int width = dims[0];
+            int depth = dims[2];
             
             // Derive building-specific seed
             long buildingSeed = seed + i;
+            
+            // Determine rotation for this building
+            Random rotationRandom = new Random(buildingSeed);
+            int rotationDegrees = rotationRandom.nextInt(4) * 90;
+            
+            // Calculate effective footprint after rotation
+            int effectiveWidth, effectiveDepth;
+            if (rotationDegrees == 90 || rotationDegrees == 270) {
+                effectiveWidth = depth;
+                effectiveDepth = width;
+            } else {
+                effectiveWidth = width;
+                effectiveDepth = depth;
+            }
+            
+            // Find non-overlapping position for this building
+            GridPosition buildingPos = findNonOverlappingPosition(
+                    origin.getBlockX(), origin.getBlockZ(), 
+                    effectiveWidth, effectiveDepth, 
+                    occupiedFootprints);
+            
+            if (buildingPos == null) {
+                LOGGER.warning(String.format("[STRUCT] Could not find non-overlapping position for '%s'", structureId));
+                continue;
+            }
+            
+            Location buildingLocation = new Location(
+                    world,
+                    buildingPos.x,
+                    world.getHighestBlockYAt(buildingPos.x, buildingPos.z),
+                    buildingPos.z
+            );
             
             Optional<Building> building = placeBuilding(world, buildingLocation, structureId, villageId, buildingSeed);
             
             if (building.isPresent()) {
                 placedBuildings.add(building.get());
-                LOGGER.fine(String.format("[STRUCT] Placed building %s at %s", structureId, buildingLocation));
+                
+                // IMPORTANT: Track actual placed location for collision detection
+                // actualOrigin is the CORNER of the schematic (not center), so use it directly
+                Location actualOrigin = building.get().getOrigin();
+                
+                Footprint footprint = new Footprint(
+                        actualOrigin.getBlockX(), 
+                        actualOrigin.getBlockZ(), 
+                        effectiveWidth, 
+                        effectiveDepth);
+                occupiedFootprints.add(footprint);
+                
+                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d), tracking footprint: x=%d, z=%d, w=%d, d=%d", 
+                        structureId, 
+                        actualOrigin.getBlockX(), actualOrigin.getBlockY(), actualOrigin.getBlockZ(),
+                        footprint.x, footprint.z, footprint.width, footprint.depth));
             } else {
                 LOGGER.warning(String.format("[STRUCT] Failed to place building %s", structureId));
             }
@@ -110,6 +178,47 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Store village buildings
         for (Building building : placedBuildings) {
             metadataStore.addBuilding(villageId, building);
+        }
+        
+        // Generate path network connecting buildings to the first (main) building
+        if (placedBuildings.size() > 1) {
+            LOGGER.info(String.format("[STRUCT] Generating path network for village %s", villageId));
+            
+            // Use first building as main building (temporary until T023 implements proper selection)
+            Location mainBuildingLocation = placedBuildings.get(0).getOrigin();
+            
+            // Collect all building locations
+            List<Location> buildingLocations = new ArrayList<>();
+            for (Building building : placedBuildings) {
+                buildingLocations.add(building.getOrigin());
+            }
+            
+            // Generate path network (A* pathfinding)
+            boolean pathSuccess = pathService.generatePathNetwork(
+                    world, 
+                    villageId, 
+                    buildingLocations, 
+                    mainBuildingLocation, 
+                    seed
+            );
+            
+            if (pathSuccess) {
+                // Place path blocks in the world
+                List<List<Block>> pathNetwork = pathService.getVillagePathNetwork(villageId);
+                int totalPathBlocks = 0;
+                
+                for (List<Block> pathSegment : pathNetwork) {
+                    int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId);
+                    totalPathBlocks += placed;
+                }
+                
+                LOGGER.info(String.format("[STRUCT] Path network complete: village=%s, paths=%d, blocks=%d",
+                        villageId, pathNetwork.size(), totalPathBlocks));
+            } else {
+                LOGGER.warning(String.format("[STRUCT] Path network generation failed for village %s", villageId));
+            }
+        } else {
+            LOGGER.fine("[STRUCT] Only one building, skipping path generation");
         }
         
         LOGGER.info(String.format("[STRUCT] Village placement complete: villageId=%s, buildings=%d",
@@ -248,7 +357,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             return Arrays.asList(
                 "house_roman_small",
                 "house_roman_medium",
-                "workshop_roman_forge"
+                "house_roman_villa",
+                "workshop_roman_forge",
+                "market_roman_stall"
             );
         }
         
@@ -256,7 +367,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         return Arrays.asList(
             "house_roman_small",
             "house_roman_medium",
-            "workshop_roman_forge"
+            "house_roman_villa",
+            "workshop_roman_forge",
+            "market_roman_stall"
         );
     }
     
@@ -294,23 +407,43 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int width = dims[0];
             int depth = dims[2]; // Z dimension
             
+            // Determine rotation for this building (same logic as placement uses)
+            long buildingSeed = seed + i;
+            Random rotationRandom = new Random(buildingSeed);
+            int rotationDegrees = rotationRandom.nextInt(4) * 90; // 0, 90, 180, or 270
+            
+            // Calculate ACTUAL footprint after rotation
+            int effectiveWidth, effectiveDepth;
+            if (rotationDegrees == 90 || rotationDegrees == 270) {
+                // 90° or 270° rotation swaps width and depth
+                effectiveWidth = depth;
+                effectiveDepth = width;
+            } else {
+                // 0° or 180° rotation keeps original dimensions
+                effectiveWidth = width;
+                effectiveDepth = depth;
+            }
+            
             // Find closest position to center that doesn't overlap
             GridPosition bestPosition = findNonOverlappingPosition(
-                    originX, originZ, width, depth, occupiedFootprints);
+                    originX, originZ, effectiveWidth, effectiveDepth, occupiedFootprints);
             
             if (bestPosition != null) {
                 positions.add(bestPosition);
                 
                 // Mark this footprint as occupied (including spacing buffer)
+                // Spacing buffer extends OUTWARD from structure on all sides
                 occupiedFootprints.add(new Footprint(
-                        bestPosition.x,
-                        bestPosition.z,
-                        width + DEFAULT_BUILDING_SPACING * 2,  // Add spacing on all sides
-                        depth + DEFAULT_BUILDING_SPACING * 2
+                        bestPosition.x - DEFAULT_BUILDING_SPACING,  // Start spacing blocks BEFORE structure
+                        bestPosition.z - DEFAULT_BUILDING_SPACING,
+                        effectiveWidth + DEFAULT_BUILDING_SPACING * 2,  // Structure width + spacing on both sides
+                        effectiveDepth + DEFAULT_BUILDING_SPACING * 2   // Structure depth + spacing on both sides
                 ));
                 
-                LOGGER.fine(String.format("[STRUCT] Grid position for '%s': (%d, %d), size: %dx%d",
-                        structureId, bestPosition.x, bestPosition.z, width, depth));
+                LOGGER.info(String.format("[STRUCT] Grid position for '%s': origin=(%d, %d), footprint=(%d, %d) size=%dx%d (rotated %d° from %dx%d)+%d buffer",
+                        structureId, bestPosition.x, bestPosition.z, 
+                        bestPosition.x - DEFAULT_BUILDING_SPACING, bestPosition.z - DEFAULT_BUILDING_SPACING,
+                        effectiveWidth, effectiveDepth, rotationDegrees, width, depth, DEFAULT_BUILDING_SPACING));
             } else {
                 LOGGER.warning(String.format("[STRUCT] Could not find grid position for '%s'", structureId));
             }
@@ -331,7 +464,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         // Spiral search outward from center
-        int maxRadius = 100; // Maximum search radius in blocks
+        int maxRadius = 150; // Increased search radius for more placement attempts
         
         for (int radius = 5; radius < maxRadius; radius += 5) {
             // Try positions in a circle around the center
@@ -361,16 +494,25 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     /**
-     * Check if two footprints overlap (including spacing buffer already added to occupied).
+     * Check if two footprints overlap.
+     * The new structure (x1, z1, w1, d1) needs spacing buffer added.
+     * The occupied footprint (f2) already has spacing buffer included.
      */
     private boolean footprintsOverlap(int x1, int z1, int w1, int d1, Footprint f2) {
+        // Add spacing buffer to new structure being checked
+        int bufferedX1 = x1 - DEFAULT_BUILDING_SPACING;
+        int bufferedZ1 = z1 - DEFAULT_BUILDING_SPACING;
+        int bufferedW1 = w1 + DEFAULT_BUILDING_SPACING * 2;
+        int bufferedD1 = d1 + DEFAULT_BUILDING_SPACING * 2;
+        
         int x2 = f2.x;
         int z2 = f2.z;
         int w2 = f2.width;
         int d2 = f2.depth;
         
-        // Check AABB overlap
-        return !(x1 + w1 <= x2 || x1 >= x2 + w2 || z1 + d1 <= z2 || z1 >= z2 + d2);
+        // Check AABB overlap with buffered dimensions
+        return !(bufferedX1 + bufferedW1 <= x2 || bufferedX1 >= x2 + w2 || 
+                 bufferedZ1 + bufferedD1 <= z2 || bufferedZ1 >= z2 + d2);
     }
     
     /**

@@ -340,6 +340,21 @@ public class StructureServiceImpl implements StructureService {
                 Operations.complete(operation);
                 
                 LOGGER.fine(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
+                
+                // Foundation backfilling disabled - let structures sit naturally on terrain
+                // Previous aggressive backfilling created visible dirt walls and terracing
+                /*
+                int backfilled = TerraformingUtil.backfillFoundation(
+                    world,
+                    new Location(world, weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()),
+                    template.dimensions[0],
+                    template.dimensions[2],
+                    Material.DIRT
+                );
+                
+                LOGGER.fine(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
+                */
+                
                 return true;
             }
             
