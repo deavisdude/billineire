@@ -93,12 +93,36 @@ public class GenerateCommand {
             sender.sendMessage("§7Searching for suitable terrain near world spawn...");
         }
         
+        // Create temporary metadata store to check if this is the first village
+        // Note: This uses same approach as placeVillage - needs T012l for shared store
+        VillageMetadataStore tempStore = new VillageMetadataStore(plugin);
+        boolean isFirstVillage = isFirstVillage(world, tempStore);
+        int spawnProximityRadius = plugin.getSpawnProximityRadius();
+        
+        // Adjust search strategy based on whether this is first village
+        if (isFirstVillage && spawnProximityRadius > 0) {
+            // First village: search near spawn (Constitution v1.5.0, Principle XII)
+            searchOrigin = world.getSpawnLocation();
+            sender.sendMessage("§7First village: searching within " + spawnProximityRadius + " blocks of spawn...");
+        } else if (!isFirstVillage) {
+            // Subsequent villages: find nearest existing village and search near it
+            Location nearestVillage = findNearestVillageLocation(world, searchOrigin, tempStore);
+            if (nearestVillage != null) {
+                searchOrigin = nearestVillage;
+                sender.sendMessage("§7Subsequent village: searching near existing village at " + 
+                    formatLocation(nearestVillage) + "...");
+            }
+        }
+        
         // Search for suitable terrain (async to avoid blocking)
+        final Location finalSearchOrigin = searchOrigin;
+        final World finalWorld = world;
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            Location suitableLocation = findSuitableVillageLocation(world, searchOrigin, 512);
+            Location suitableLocation = findSuitableVillageLocation(finalWorld, finalSearchOrigin, 
+                    isFirstVillage ? spawnProximityRadius : 512);
             
             if (suitableLocation == null) {
-                sender.sendMessage("§cNo suitable terrain found within 512 blocks. Try a different location.");
+                sender.sendMessage("§cNo suitable terrain found. Try a different location.");
                 return;
             }
             
@@ -274,6 +298,62 @@ public class GenerateCommand {
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
+        
         return flatEnough && notTooWatery && goodHeight;
+    }
+    
+    /**
+     * Check if this is the first village in the world.
+     * 
+     * @param world Target world
+     * @param metadataStore Metadata store to check
+     * @return true if no villages exist in this world yet
+     */
+    private boolean isFirstVillage(World world, VillageMetadataStore metadataStore) {
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (village.getOrigin().getWorld().equals(world)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Find the nearest existing village location.
+     * Used for nearest-neighbor bias (Constitution v1.5.0, Principle XII).
+     * 
+     * @param world Target world
+     * @param searchOrigin Current search origin
+     * @param metadataStore Metadata store with village data
+     * @return Location of nearest village, or null if no villages exist
+     */
+    private Location findNearestVillageLocation(World world, Location searchOrigin, VillageMetadataStore metadataStore) {
+        Location nearest = null;
+        int minDistance = Integer.MAX_VALUE;
+        
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (!village.getOrigin().getWorld().equals(world)) {
+                continue;
+            }
+            
+            Location villageOrigin = village.getOrigin();
+            int dx = Math.abs(searchOrigin.getBlockX() - villageOrigin.getBlockX());
+            int dz = Math.abs(searchOrigin.getBlockZ() - villageOrigin.getBlockZ());
+            int distance = dx + dz; // Manhattan distance
+            
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearest = villageOrigin;
+            }
+        }
+        
+        return nearest;
+    }
+    
+    /**
+     * Format location for logging.
+     */
+    private String formatLocation(Location loc) {
+        return String.format("(%d, %d, %d)", loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
 }

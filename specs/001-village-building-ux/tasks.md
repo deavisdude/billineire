@@ -163,12 +163,24 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - Added `formatLocation()` helper for consistent location logging
     - Note: Current implementation works within same VillageMetadataStore instance; cross-session enforcement requires shared metadata store (see T012l below)
 
-- [ ] T012j [Foundational] Spawn-proximal initial placement & nearest-neighbor bias
-  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+- [X] T012j [Foundational] Spawn-proximal initial placement & nearest-neighbor bias
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`, `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
   - Description: Bias first/early villages to spawn proximity (not exact spawn). For subsequent villages, prefer the nearest valid site to existing borders while respecting the minimum distance.
   - Acceptance:
     - First village placed within a configured radius of spawn (not exactly at spawn).
     - Subsequent villages placed at the smallest valid distance ≥ `minVillageSpacing`.
+  - Implementation:
+    - Added `village.spawnProximityRadius: 512` to config.yml with documentation
+    - Added `spawnProximityRadius` field to VillageOverhaulPlugin with getter
+    - Updated config load to include spawnProximityRadius in log
+    - VillagePlacementServiceImpl: Added `isFirstVillage()`, `isWithinSpawnProximity()`, `getDistanceToNearestVillage()` helper methods
+    - Updated `placeVillage()` to log first vs subsequent village status and distances
+    - GenerateCommand: Added `isFirstVillage()`, `findNearestVillageLocation()`, `formatLocation()` helpers
+    - Updated terrain search logic to:
+      - First village: Search within spawnProximityRadius of world spawn
+      - Subsequent villages: Search near nearest existing village border (nearest-neighbor bias)
+    - Logs show spawn distance for first village, nearest village distance for subsequent
+    - Note: Full effectiveness requires T012l (shared metadata store) for cross-session detection
 
 - [ ] T012k [Foundational] Observability for inter-village enforcement
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`

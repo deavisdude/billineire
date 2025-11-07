@@ -41,6 +41,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     // Configuration values
     private int minBuildingSpacing;
     private int minVillageSpacing;
+    private int spawnProximityRadius;
     
     // Core services (Phase 2)
     private TickEngine tickEngine;
@@ -73,7 +74,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         saveDefaultConfig();
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
         minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
-        logger.info("✓ Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + ", minVillageSpacing=" + minVillageSpacing + ")");
+        spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
+        logger.info("✓ Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
+                ", minVillageSpacing=" + minVillageSpacing + 
+                ", spawnProximityRadius=" + spawnProximityRadius + ")");
         
         // Initialize foundational services
         initializeFoundation();
@@ -270,5 +274,13 @@ public class VillageOverhaulPlugin extends JavaPlugin {
      */
     public int getMinVillageSpacing() {
         return minVillageSpacing;
+    }
+    
+    /**
+     * Get configured spawn proximity radius for first village
+     * @return Maximum radius in blocks (default: 512)
+     */
+    public int getSpawnProximityRadius() {
+        return spawnProximityRadius;
     }
 }

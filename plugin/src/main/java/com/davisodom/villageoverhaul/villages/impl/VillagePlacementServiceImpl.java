@@ -96,6 +96,27 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d, minBuildingSpacing=%d, minVillageSpacing=%d",
                 cultureId, origin, seed, minBuildingSpacing, minVillageSpacing));
         
+        // Check if this is the first village (Constitution v1.5.0, Principle XII - Spawn Proximity)
+        boolean isFirst = isFirstVillage(world);
+        
+        if (isFirst) {
+            // First village: verify spawn proximity (not exact spawn, within configured radius)
+            Location spawn = world.getSpawnLocation();
+            int spawnDistance = Math.abs(origin.getBlockX() - spawn.getBlockX()) + 
+                               Math.abs(origin.getBlockZ() - spawn.getBlockZ());
+            
+            LOGGER.info(String.format("[STRUCT] First village: spawn distance=%d blocks (spawn at %s)",
+                    spawnDistance, formatLocation(spawn)));
+            
+            // Note: Spawn proximity enforcement happens in terrain search (GenerateCommand/VillageWorldgenAdapter)
+            // This is just logging for observability
+        } else {
+            // Subsequent villages: log nearest-neighbor distance
+            int distanceToNearest = getDistanceToNearestVillage(origin);
+            LOGGER.info(String.format("[STRUCT] Subsequent village: nearest existing village distance=%d blocks",
+                    distanceToNearest));
+        }
+        
         // Check inter-village spacing (Constitution v1.5.0, Principle XII)
         // Reject sites within minVillageSpacing of any existing village border
         if (!checkInterVillageSpacing(origin, minVillageSpacing)) {
@@ -760,6 +781,67 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         return true; // No violations found
+    }
+    
+    /**
+     * Check if this is the first village in the world.
+     * 
+     * @param world Target world
+     * @return true if no villages exist in this world yet
+     */
+    private boolean isFirstVillage(World world) {
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (village.getOrigin().getWorld().equals(world)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Check if a location is within spawn proximity radius.
+     * 
+     * @param location Location to check
+     * @param spawnProximityRadius Maximum radius from spawn
+     * @return true if within radius (or radius is 0 to disable check)
+     */
+    private boolean isWithinSpawnProximity(Location location, int spawnProximityRadius) {
+        if (spawnProximityRadius <= 0) {
+            return true; // Spawn proximity disabled
+        }
+        
+        Location spawn = location.getWorld().getSpawnLocation();
+        int dx = Math.abs(location.getBlockX() - spawn.getBlockX());
+        int dz = Math.abs(location.getBlockZ() - spawn.getBlockZ());
+        int distance = dx + dz; // Manhattan distance
+        
+        return distance <= spawnProximityRadius;
+    }
+    
+    /**
+     * Calculate distance from a location to the nearest existing village border.
+     * 
+     * @param location Location to check
+     * @return Distance to nearest village, or Integer.MAX_VALUE if no villages exist
+     */
+    private int getDistanceToNearestVillage(Location location) {
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+                location.getBlockX(), location.getBlockX(),
+                location.getBlockZ(), location.getBlockZ()
+        );
+        
+        int minDistance = Integer.MAX_VALUE;
+        
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (!village.getOrigin().getWorld().equals(location.getWorld())) {
+                continue;
+            }
+            
+            int distance = proposedBorder.getDistanceTo(village.getBorder());
+            minDistance = Math.min(minDistance, distance);
+        }
+        
+        return minDistance;
     }
     
     /**
