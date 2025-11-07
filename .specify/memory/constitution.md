@@ -1,21 +1,19 @@
 <!--
 Sync Impact Report
-- Version change: 1.2.0 → 1.3.0
+- Version change: 1.3.0 → 1.4.0
 - Modified sections:
-	- Engineering Standards & Constraints (expanded with structure integration, async placement, builder state machine, pathfinding limits)
-	- Development Workflow, Review Process, and Quality Gates (added Structure Integration & NPC Construction gate; added planning dependencies subsection)
+	- X. Village Building & Player Onboarding (clarified grounded placement scope and cross-reference to terrain/cartography)
 - Added sections:
-	- XI. Programmatic Structure Integration & NPC Construction (new core principle)
-	- Planning & Task Dependencies (/speckit.tasks)
+	- XII. Terrain Suitability, Spacing, and Cartography (NON-NEGOTIABLE)
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (add Structure Integration & NPC Construction gate)
-	- ✅ .specify/templates/spec-template.md (add checklist item for structure integration & NPC construction)
-	- ✅ .specify/templates/tasks-template.md (add constitution-driven dependency breakdown and test coverage requirement)
-	- N/A .specify/templates/commands/* (no commands templates present in repo)
-	- ⚠ README.md/docs/* (optional: reference async structure placement and builder visualization guidelines)
+	- ✅ .specify/templates/plan-template.md (expand Village Building & UX gate with water avoidance, spacing, non-overlap, and live map)
+	- ✅ .specify/templates/spec-template.md (expand Constitution Gates checklist with the same constraints)
+	- ✅ .specify/templates/tasks-template.md (expand constitution-driven task types for terrain constraints and village map GUI)
+	- N/A .specify/templates/commands/* (directory not present)
+	- ⚠ README.md / docs/* (add brief note on Village Map UI and terrain constraints)
 - Follow-up TODOs:
-	- TODO(DOCS_GUIDE): Add a short developer doc covering WorldEdit/FAWE integration, async placement queues, and builder state machine patterns with examples.
+	- TODO(DOCS_VILLAGE_MAP): Add docs/quickstart section describing the "Village Map" sign interaction and GUI parity for Bedrock.
 -->
 
 # Spec Billineire Constitution
@@ -123,6 +121,9 @@ provide clear wayfinding:
 	deterministic from world seed/state. Heavy calculations MUST be budgeted under Performance
 	Principles and never block the main thread beyond budget.
 
+Cross-reference: See Principle XII for explicit terrain suitability, spacing, non-overlap, and
+village cartography requirements.
+
 Rationale: Grounded placement, simple paths, and an explicit main-building greeter create a
 coherent onboarding experience without sacrificing determinism or performance on large servers.
 
@@ -150,6 +151,32 @@ patterns to ensure performance, determinism, and a great player experience:
 
 Rationale: Patterns from Minecolonies/Millénaire demonstrate reliable, scalable construction.
 Codifying them prevents server lag, preserves determinism, and improves playability at scale.
+
+### XII. Terrain Suitability, Spacing, and Cartography (NON-NEGOTIABLE)
+Village buildings MUST respect explicit terrain and layout constraints, and the village MUST
+maintain a live, server-authoritative cartographic model:
+
+- Water/Fluid Avoidance: Buildings MUST NOT be spawned on or overlapping bodies of water or lava.
+	Foundation and interior validation MUST treat fluids as invalid blocks. Seating attempts that
+	encounter fluids MUST abort or re-seat elsewhere.
+- Configurable Spacing: Buildings MUST respect a configurable minimum spacing (in blocks) between
+	building footprints. The spacing rule applies to the final, rotation-aware axis-aligned footprint
+	boxes and MUST be enforced deterministically during placement.
+- Non-Overlap of Footprints: Building footprints MUST NOT overlap. Placement code MUST compute
+	rotation-aware bounds and reject/adjust placements that collide with existing structures.
+- Living Village Map: Maintain a live in-memory model of building placements and a terrain
+	suitability classification (acceptable vs unacceptable tiles, including fluid/steep/blocked).
+	Expose this to players at the main building via a clearly labeled sign "Village Map"; right-click
+	MUST open a GUI that displays the current map. Provide Bedrock-parity via inventory GUI or map
+	item equivalents—no client-only logic.
+- Determinism & Performance: Map updates and placement decisions MUST be derived from world state
+	and seeds; updates MUST be chunk-gated and budgeted per Performance Principles.
+- Observability: Emit structured logs when placements skip due to water/spacing/overlap, including
+	counts and coordinates where safe. Provide metrics for rejected sites and map update latency.
+
+Rationale: Explicit terrain constraints prevent immersion-breaking placements, spacing ensures
+readable and navigable villages, and a live cartographic view improves player UX without breaking
+determinism or performance budgets.
 
 ## Engineering Standards & Constraints
 
@@ -260,4 +287,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.3.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-06
+**Version**: 1.4.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-07

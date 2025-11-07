@@ -68,6 +68,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Initialize foundational services
         initializeFoundation();
         
+        // Start the tick engine (must be after all service initialization)
+        if (tickEngine != null) {
+            tickEngine.start();
+        }
+        
         logger.info("Village Overhaul enabled successfully!");
     }
     
@@ -150,8 +155,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         
         // Tick engine
         tickEngine = new TickEngine(this);
-        // Don't start yet - will register systems in user story phases
-        logger.info("✓ Tick engine initialized (not started)");
+        logger.info("✓ Tick engine initialized");
         
         // Trade listener (US1: route trade proceeds to projects for vanilla villagers)
         tradeListener = new TradeListener(this);

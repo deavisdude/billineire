@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.core;
 
+import com.davisodom.villageoverhaul.DebugFlags;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
@@ -72,6 +73,7 @@ public class TickEngine {
             }
         }.runTaskTimer(plugin, 0L, 1L); // Every server tick
         
+        DebugFlags.logTick("engine started");
         logger.info("Tick engine started");
     }
     
@@ -83,17 +85,20 @@ public class TickEngine {
             tickTask.cancel();
             tickTask = null;
         }
+        DebugFlags.logTick("engine stopped");
         logger.info("Tick engine stopped");
     }
     
     /**
      * Execute one tick across all registered systems
      * Measures time per system and logs budget violations
+     * 
+     * This method is public to support manual ticking in tests (MockBukkit, headless)
+     * while also being called by the scheduled task in production.
      */
-    private void tick() {
+    public void tick() {
         currentTick++;
         long tickStart = System.nanoTime();
-        long totalBudgetUsed = 0;
         
         // Tick all systems in deterministic order
         for (Map.Entry<String, TickableSystem> entry : systems.entrySet()) {
@@ -111,7 +116,6 @@ public class TickEngine {
             
             long systemMicros = (systemEnd - systemStart) / 1000;
             tickTimeMicros.put(systemName, systemMicros);
-            totalBudgetUsed += systemMicros;
         }
         
         long tickEnd = System.nanoTime();

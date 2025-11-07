@@ -46,7 +46,7 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T011 Wire debug flags and [STRUCT] logging in `plugin/src/main/java/com/davisodom/villageoverhaul/DebugFlags.java`
 - [X] T012 Add admin test commands skeleton in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
-- [ ] T012a [Foundational] Wire TickEngine lifecycle in plugin
+- [X] T012a [Foundational] Wire TickEngine lifecycle in plugin
 	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
 	- Description: Initialize a single `TickEngine` instance in `VillageOverhaulPlugin#onEnable`. Schedule a repeating task (every 1 tick) to drive the engine and cancel it in `onDisable`. Expose `getTickEngine()` for tests and log concise "[TICK] engine started/stopped" messages controlled by `DebugFlags`.
 	- Acceptance:
@@ -66,6 +66,32 @@ validations remain, with minimal unit tests for core algorithms where useful.
 	- Description: Replace placeholder assertions in the test with real checks: assert `getCurrentTick() == 0` on init; call `engine.tick()` N times and assert `getCurrentTick() == N`; verify multiple systems tick in order; add a MockBukkit scheduled-tick integration test that uses `performTicks(n)`.
 	- Acceptance:
 		- Tests pass locally and in CI with MockBukkit; no placeholder TODOs remain.
+
+- [ ] T012d [Foundational] Add configurable minimum building spacing
+  - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Introduce config key `village.minBuildingSpacing` (default: 8 blocks). Load during `onEnable`, expose via a getter or configuration service. Enforce spacing when selecting candidate building positions before footprint validation.
+  - Acceptance:
+    - Config key present with default if missing.
+    - Placement logs include spacing value when evaluating positions.
+    - No two placed building footprints are closer than configured spacing (excluding paths/terraformed ground).
+
+- [ ] T012e [Foundational] Implement terrain classification API
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerrainClassifier.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Provide `TerrainClassifier` with methods `isAcceptable(Block)` and `classify(x,y,z)` returning enum { ACCEPTABLE, FLUID, STEEP, BLOCKED }. Integrate into site validation and candidate search to skip unacceptable terrain early.
+  - Acceptance:
+    - Fluids (water/lava) always classified FLUID.
+    - Steep slopes (>2 height delta within 3x3) classified STEEP.
+    - Air/leaf/log unsupported foundations classified BLOCKED.
+    - Structure placement only proceeds on ACCEPTABLE foundation tiles.
+    - Logs show counts of rejected tiles per attempt (`[STRUCT] classification: fluid=..., steep=..., blocked=...`).
+
+- [ ] T012f [Foundational] Integrate non-overlap + spacing + terrain classifier in placement pipeline
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Refactor placement search to: (1) apply terrain classifier, (2) enforce min spacing before expensive validation, (3) compute rotation-aware footprint and verify no overlap with existing footprints, (4) record rejection reasons.
+  - Acceptance:
+    - Re-seat attempts enumerate rejection reasons (spacing/overlap/terrain) at debug level.
+    - Final placements never overlap and honor spacing.
+    - Average rejected attempts per village ≤ configured limit (log metric).
 
 **Checkpoint**: Services and DTOs exist; admin commands compile; ready to implement US1
 
@@ -87,6 +113,14 @@ validations remain, with minimal unit tests for core algorithms where useful.
  - [ ] T018b [US1] Implement user-facing command: `/vo generate <culture> <name> [seed]` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`; find terrain, call `VillagePlacementService` to place structures; log [STRUCT] summary. When US2 is complete, also invoke path network generation (or report that paths are unavailable yet).
 - [X] T019 [US1] Add [STRUCT] logs: begin/seat/re-seat/abort with seed inputs in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
 - [X] T020 [US1] Update harness parsing to assert "0 floating/embedded" in `scripts/ci/sim/run-scenario.ps1`
+
+- [ ] T020a [US1] Enforce water avoidance & spacing in structure seating
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
+  - Description: Extend seating logic to abort if any foundation/interior block is FLUID. Include spacing pre-check before detailed validation. Update logs with `[STRUCT] seat rejected: fluid` or `spacing`.
+  - Acceptance:
+    - No building placed with any water/lava under footprint.
+    - Logs show rejection reason when failing due to fluid or spacing.
+    - Existing successful seats unaffected (still grounded & interior air ok).
 
 **Checkpoint**: US1 independently verifiable via headless harness
 
@@ -182,6 +216,32 @@ Purpose: Fix rooftop paths, floating path slabs, treetop dirt, unused terraformi
 	- Description: In the affected area, ensure no dirt/grass blocks sit directly atop leaf/log blocks introduced by grading.
 
 - [ ] T026h [P] [US1] Headless test: "terraform rollback on abort"
+
+- [ ] T026i [P] [US1] Headless test: "reject water foundations"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Force generation near shallow water and assert all candidate seats over water are rejected; log count; succeed only if final placements exclude fluid tiles.
+  - Acceptance:
+    - Harness fails if any placed building footprint includes water/lava.
+    - Log contains `rejectedFluidSeats=NN` metric.
+
+- [ ] T026j [P] [US1] Headless test: "spacing enforcement"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Generate a dense village scenario; compute min inter-footprint distance; assert ≥ configured spacing.
+  - Acceptance:
+    - Test prints minDistance and configuredSpacing; fails if minDistance < configuredSpacing.
+
+- [ ] T026k [P] [US1] Headless test: "non-overlapping footprints"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Hash all footprint block coords and assert no duplicates; verify count matches building count.
+  - Acceptance:
+    - Fails if any overlap detected.
+
+- [ ] T026l [P] [US4] Headless test: "village map integrity"
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: After generation, query map service via test command, parse returned footprint and terrain summary; assert counts match placed structures, and unacceptable tiles summary non-zero when near fluids.
+  - Acceptance:
+    - Map reports each placed building exactly once.
+    - Terrain classification totals reflect environment.
 	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
 	- Description: Simulate a forced re-seat; assert no net block changes remain at the first attempt location after rollback.
 
@@ -244,6 +304,26 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
     - No dirt placed on top of leaf/log blocks (T014b constraint).
 
 - [ ] T027f [P] [QA] Unit tests for `SiteValidator` (foundation and clearance checks)
+
+- [ ] T027l [P] [QA] Unit tests: water foundation rejection & spacing
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/SiteValidatorTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`
+  - Description: Add tests ensuring SiteValidator fails on water/lava blocks; placement service rejects candidates violating min spacing.
+  - Acceptance:
+    - Water footprint test returns foundationOk=false.
+    - Spacing test never places two mock structures closer than config value.
+
+- [ ] T027m [P] [QA] Unit tests: non-overlap & classification
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/TerrainClassifierTest.java`
+  - Description: Validate rotation-aware footprint intersection algorithm; test TerrainClassifier for ACCEPTABLE vs FLUID/STEPP/STEEP/BLOCKED categories.
+  - Acceptance:
+    - Overlap test fails when artificially forced overlap; production logic prevents it.
+    - Classification tests cover all enum values.
+
+- [ ] T027n [P] [QA] Unit tests: village map model integrity
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/onboarding/VillageMapServiceTest.java`
+  - Description: Instantiate map service, add mock building footprints, mark unacceptable terrain; assert counts and retrieval API consistency.
+  - Acceptance:
+    - Map returns all footprints; unacceptable terrain list stable across queries.
   - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/SiteValidatorTest.java`
   - Coverage Target: 65% lines, 55% branches (83 lines, 60 conditions)
   - Description: Test foundation solidity checks, interior clearance, slope validation. Use MockBukkit World.
@@ -321,6 +401,26 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 - [ ] T031 [P] [US4] Implement greeter trigger (radius/cooldown) in `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/GreeterService.java`
 - [ ] T032 [US4] Extend test commands to refresh signage and trigger greeter in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 
+- [ ] T030a [US4] Implement VillageMapService (live cartography)
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/VillageMapService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+  - Description: Maintain building footprint registry + terrain classification snapshot per village; API: `getMap(villageId)` returns structured DTO.
+  - Acceptance:
+    - Adding/removing building updates map deterministically.
+    - Classification queries cached and invalidated on placement.
+
+- [ ] T030b [US4] Implement Village Map GUI & sign interaction
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/VillageMapGui.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/SignageService.java`, `plugin/src/main/resources/plugin.yml`
+  - Description: Register interaction on right-click of sign with text "Village Map"; open GUI (inventory-based) showing building list + terrain summary; ensure Bedrock parity (no client-only formatting).
+  - Acceptance:
+    - GUI opens with correct data.
+    - Bedrock clients receive readable text labels.
+
+- [ ] T030c [US4] Village Map test command & serialization
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/VillageMapService.java`
+  - Description: Add `votest map <village-id>` producing JSON summary: buildings, spacing minDistance, unacceptable terrain counts.
+  - Acceptance:
+    - JSON output consumed by headless harness in T026l.
+
 **Checkpoint**: US4 independently verifiable
 
 ---
@@ -378,6 +478,13 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 ## Phase N: Polish & Cross-Cutting Concerns
 
 - [ ] T038 [P] Documentation updates for structures/paths/onboarding in `docs/`
+
+- [ ] T038a [P] Village Map documentation
+  - Files: `docs/village-map.md`, `specs/001-village-building-ux/quickstart.md`
+  - Description: Author usage guide: sign placement, GUI features, water avoidance & spacing rules, config key reference.
+  - Acceptance:
+    - Quickstart extended with Map section.
+    - Separate doc includes interaction + API + config table.
 - [ ] T039 Performance profiling hooks for structure/path ticks in `plugin/src/main/java/com/davisodom/villageoverhaul/metrics/PerfCounters.java`
 - [ ] T040 [P] Security review of admin/test commands in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [ ] T041 Ensure CI scripts remain PS 5.1-compatible and ASCII-only in `scripts/ci/sim/*.ps1`

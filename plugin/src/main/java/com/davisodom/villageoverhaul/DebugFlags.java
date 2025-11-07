@@ -15,6 +15,7 @@ public class DebugFlags {
     private static boolean debugPaths = false;
     private static boolean debugTerraforming = false;
     private static boolean debugPerformance = false;
+    private static boolean debugTick = false;
     private static Logger logger;
     
     /**
@@ -28,12 +29,14 @@ public class DebugFlags {
         debugPaths = config.getBoolean("debug.paths", false);
         debugTerraforming = config.getBoolean("debug.terraforming", false);
         debugPerformance = config.getBoolean("debug.performance", false);
+        debugTick = config.getBoolean("debug.tick", false);
         
         if (isAnyDebugEnabled()) {
             logger.info("[STRUCT] Debug flags initialized: structures=" + debugStructures + 
                        ", paths=" + debugPaths + 
                        ", terraforming=" + debugTerraforming + 
-                       ", performance=" + debugPerformance);
+                       ", performance=" + debugPerformance +
+                       ", tick=" + debugTick);
         }
     }
     
@@ -41,9 +44,10 @@ public class DebugFlags {
     public static boolean isDebugPaths() { return debugPaths; }
     public static boolean isDebugTerraforming() { return debugTerraforming; }
     public static boolean isDebugPerformance() { return debugPerformance; }
+    public static boolean isDebugTick() { return debugTick; }
     
     public static boolean isAnyDebugEnabled() {
-        return debugStructures || debugPaths || debugTerraforming || debugPerformance;
+        return debugStructures || debugPaths || debugTerraforming || debugPerformance || debugTick;
     }
     
     /**
@@ -144,6 +148,15 @@ public class DebugFlags {
         if (logger != null) {
             logger.info(String.format("[STRUCT] Village generated: %s (culture: %s, buildings: %d, took %dms)", 
                 villageId, cultureId, buildingCount, durationMs));
+        }
+    }
+    
+    /**
+     * Log tick engine lifecycle event with [TICK] marker.
+     */
+    public static void logTick(String message) {
+        if (debugTick && logger != null) {
+            logger.info("[TICK] " + message);
         }
     }
 }
