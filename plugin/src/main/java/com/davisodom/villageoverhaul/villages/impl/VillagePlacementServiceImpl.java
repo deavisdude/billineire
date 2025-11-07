@@ -103,6 +103,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Track occupied footprints to prevent overlaps DURING placement
         List<Footprint> occupiedFootprints = new ArrayList<>();
         
+        // Track rejection reasons for all placement attempts (Constitution v1.4.0, Principle XII)
+        PlacementRejectionTracker villageRejectionTracker = new PlacementRejectionTracker();
+        
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
         for (int i = 0; i < structureIds.size(); i++) {
@@ -136,34 +139,23 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 effectiveDepth = depth;
             }
             
-            // Find non-overlapping position for this building
-            GridPosition buildingPos = findNonOverlappingPosition(
-                    origin.getBlockX(), origin.getBlockZ(), 
-                    effectiveWidth, effectiveDepth, 
-                    occupiedFootprints);
+            // Find suitable position with integrated terrain/spacing/overlap checks
+            PlacementResult placementResult = findSuitablePlacementPosition(
+                    world, origin, effectiveWidth, effectiveDepth, 
+                    occupiedFootprints, villageRejectionTracker);
             
-            if (buildingPos == null) {
-                LOGGER.warning(String.format("[STRUCT] Could not find non-overlapping position for '%s' (spacing=%d blocks)", 
-                        structureId, minBuildingSpacing));
+            if (placementResult == null) {
+                LOGGER.warning(String.format("[STRUCT] Could not find suitable position for '%s' after %d attempts", 
+                        structureId, villageRejectionTracker.totalAttempts));
                 continue;
             }
             
             Location buildingLocation = new Location(
                     world,
-                    buildingPos.x,
-                    world.getHighestBlockYAt(buildingPos.x, buildingPos.z),
-                    buildingPos.z
+                    placementResult.position.x,
+                    world.getHighestBlockYAt(placementResult.position.x, placementResult.position.z),
+                    placementResult.position.z
             );
-            
-            // Early terrain classification check to skip unacceptable sites
-            TerrainClassifier.ClassificationResult terrainCheck = checkTerrainSuitability(
-                    world, buildingLocation, effectiveWidth, effectiveDepth);
-            
-            if (terrainCheck.getRejected() > 0) {
-                LOGGER.fine(String.format("[STRUCT] Skipping position for '%s' due to terrain: %s", 
-                        structureId, terrainCheck));
-                continue;
-            }
             
             Optional<Building> building = placeBuilding(world, buildingLocation, structureId, villageId, buildingSeed);
             
@@ -194,6 +186,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.warning(String.format("[STRUCT] Abort: No buildings placed for village at %s", origin));
             return Optional.empty();
         }
+        
+        // Log placement metrics (Constitution v1.4.0, Principle XII)
+        LOGGER.info(String.format("[STRUCT] Placement metrics for village %s: %s, avgRejected=%.2f",
+                villageId, villageRejectionTracker, villageRejectionTracker.getAverageRejectedAttempts()));
         
         // Store village buildings
         for (Building building : placedBuildings) {
@@ -536,8 +532,21 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     /**
+     * Check if two footprints overlap (without spacing buffer).
+     * Used for direct AABB collision detection after spacing already verified.
+     */
+    private boolean footprintsOverlap(Footprint f1, Footprint f2) {
+        // Simple AABB overlap check
+        return !(f1.x + f1.width <= f2.x || f1.x >= f2.x + f2.width || 
+                 f1.z + f1.depth <= f2.z || f1.z >= f2.z + f2.depth);
+    }
+    
+    /**
      * Check terrain suitability for a building footprint.
      * Samples foundation area and classifies terrain to detect water, steep slopes, etc.
+     * 
+     * RELAXED TOLERANCE: Allows up to 20% of samples to be non-ACCEPTABLE (e.g., minor slopes, 
+     * sparse vegetation). Only rejects if >20% bad OR ANY fluid detected (hard veto on water).
      * 
      * @param world World to check
      * @param origin Proposed building origin (southwest corner)
@@ -549,8 +558,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             World world, Location origin, int width, int depth) {
         TerrainClassifier.ClassificationResult result = new TerrainClassifier.ClassificationResult();
         
-        // Sample foundation blocks (every 2 blocks to avoid excessive checks)
-        int sampleStep = 2;
+        // Sample foundation blocks (every 4 blocks - reduced density for performance)
+        int sampleStep = 4;
         for (int x = 0; x < width; x += sampleStep) {
             for (int z = 0; z < depth; z += sampleStep) {
                 int worldX = origin.getBlockX() + x;
@@ -569,6 +578,139 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     /**
      * Simple grid position holder.
      */
+    /**
+     * Result of placement position search with integrated terrain/spacing/overlap checks.
+     */
+    private static class PlacementResult {
+        final GridPosition position;
+        final int attempts;
+        
+        PlacementResult(GridPosition position, int attempts) {
+            this.position = position;
+            this.attempts = attempts;
+        }
+    }
+    
+    /**
+     * Find suitable placement position with integrated terrain, spacing, and overlap checks.
+     * Uses spiral search pattern from origin, checking terrain FIRST (cheapest), then spacing, then overlap.
+     * Records all rejection reasons in tracker for observability (Constitution v1.4.0, Principle XII).
+     * 
+     * @param world World to search
+     * @param origin Village origin (center point)
+     * @param width Building width (after rotation)
+     * @param depth Building depth (after rotation)
+     * @param occupiedFootprints Already placed buildings
+     * @param tracker Rejection reason tracker
+     * @return PlacementResult with position and attempt count, or null if no suitable position found
+     */
+    private PlacementResult findSuitablePlacementPosition(
+            World world, Location origin, int width, int depth,
+            List<Footprint> occupiedFootprints, 
+            PlacementRejectionTracker tracker) {
+        
+        final int maxRadius = 100;
+        final int gridSize = 8;
+        
+        // Spiral search pattern: start at origin, expand outward
+        for (int radius = 0; radius <= maxRadius; radius += gridSize) {
+            // For each ring, try all 4 quadrants
+            for (int dx = -radius; dx <= radius; dx += gridSize) {
+                for (int dz = -radius; dz <= radius; dz += gridSize) {
+                    // Skip interior points (already checked in previous rings)
+                    if (radius > 0 && Math.abs(dx) < radius && Math.abs(dz) < radius) {
+                        continue;
+                    }
+                    
+                    tracker.recordAttempt();
+                    
+                    int candidateX = origin.getBlockX() + dx;
+                    int candidateZ = origin.getBlockZ() + dz;
+                    int candidateY = world.getHighestBlockYAt(candidateX, candidateZ);
+                    
+                    Location candidateLocation = new Location(world, candidateX, candidateY, candidateZ);
+                    
+                    // CHECK 1: Terrain classification (cheapest, fails fast)
+                    TerrainClassifier.ClassificationResult terrainResult = 
+                            checkTerrainSuitability(world, candidateLocation, width, depth);
+                    
+                    // Use relaxed tolerance check: hard veto on water, 20% tolerance for steep/blocked
+                    if (!terrainResult.isAcceptableWithTolerance()) {
+                        tracker.recordTerrainRejection(terrainResult);
+                        LOGGER.finest(String.format("[STRUCT] Terrain rejection at (%d,%d): %s", 
+                                candidateX, candidateZ, terrainResult));
+                        continue;
+                    }
+                    
+                    // CHECK 2: Spacing check (create temporary footprint)
+                    Footprint candidateFootprint = new Footprint(candidateX, candidateZ, width, depth);
+                    
+                    // Check minimum spacing to all occupied footprints
+                    boolean hasSpacingViolation = false;
+                    for (Footprint occupied : occupiedFootprints) {
+                        if (!hasMinimumSpacing(candidateFootprint, occupied, minBuildingSpacing)) {
+                            hasSpacingViolation = true;
+                            break;
+                        }
+                    }
+                    
+                    if (hasSpacingViolation) {
+                        tracker.recordSpacingRejection();
+                        LOGGER.finest(String.format("[STRUCT] Spacing rejection at (%d,%d)", 
+                                candidateX, candidateZ));
+                        continue;
+                    }
+                    
+                    // CHECK 3: Overlap check (most expensive, done last)
+                    boolean hasOverlap = false;
+                    for (Footprint occupied : occupiedFootprints) {
+                        if (footprintsOverlap(candidateFootprint, occupied)) {
+                            hasOverlap = true;
+                            break;
+                        }
+                    }
+                    
+                    if (hasOverlap) {
+                        tracker.recordOverlapRejection();
+                        LOGGER.finest(String.format("[STRUCT] Overlap rejection at (%d,%d)", 
+                                candidateX, candidateZ));
+                        continue;
+                    }
+                    
+                    // SUCCESS: All checks passed
+                    LOGGER.fine(String.format("[STRUCT] Found suitable position at (%d,%d) after %d attempts", 
+                            candidateX, candidateZ, tracker.totalAttempts));
+                    return new PlacementResult(new GridPosition(candidateX, candidateZ), tracker.totalAttempts);
+                }
+            }
+        }
+        
+        // No suitable position found
+        LOGGER.warning(String.format("[STRUCT] No suitable position found after %d attempts (maxRadius=%d)", 
+                tracker.totalAttempts, maxRadius));
+        return null;
+    }
+    
+    /**
+     * Check if two footprints have minimum spacing between them.
+     * Spacing is measured as the minimum distance between any edges of the AABBs.
+     * 
+     * @param a First footprint
+     * @param b Second footprint
+     * @param minSpacing Minimum required spacing
+     * @return true if spacing >= minSpacing, false otherwise
+     */
+    private boolean hasMinimumSpacing(Footprint a, Footprint b, int minSpacing) {
+        // Calculate horizontal and vertical distances between AABBs
+        int horizontalDist = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)));
+        int verticalDist = Math.max(0, Math.max(a.z - (b.z + b.depth), b.z - (a.z + a.depth)));
+        
+        // Minimum distance is the smaller of the two (closest edge)
+        int minDist = Math.max(horizontalDist, verticalDist);
+        
+        return minDist >= minSpacing;
+    }
+    
     private static class GridPosition {
         final int x;
         final int z;
@@ -593,6 +735,56 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             this.z = z;
             this.width = width;
             this.depth = depth;
+        }
+    }
+    
+    /**
+     * Tracks rejection reasons for placement attempts.
+     * Used to provide detailed debug logging per Constitution v1.4.0, Principle XII.
+     */
+    private static class PlacementRejectionTracker {
+        int terrainRejections = 0;
+        int spacingRejections = 0;
+        int overlapRejections = 0;
+        int totalAttempts = 0;
+        
+        // Detailed terrain breakdown
+        int fluidRejections = 0;
+        int steepRejections = 0;
+        int blockedRejections = 0;
+        
+        void recordAttempt() {
+            totalAttempts++;
+        }
+        
+        void recordTerrainRejection(TerrainClassifier.ClassificationResult terrainResult) {
+            terrainRejections++;
+            fluidRejections += terrainResult.fluid;
+            steepRejections += terrainResult.steep;
+            blockedRejections += terrainResult.blocked;
+        }
+        
+        void recordSpacingRejection() {
+            spacingRejections++;
+        }
+        
+        void recordOverlapRejection() {
+            overlapRejections++;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("attempts=%d, rejected: terrain=%d (fluid=%d, steep=%d, blocked=%d), spacing=%d, overlap=%d",
+                    totalAttempts, terrainRejections, fluidRejections, steepRejections, blockedRejections, 
+                    spacingRejections, overlapRejections);
+        }
+        
+        /**
+         * Calculate average rejected attempts.
+         */
+        double getAverageRejectedAttempts() {
+            int totalRejections = terrainRejections + spacingRejections + overlapRejections;
+            return totalAttempts > 0 ? (double) totalRejections / totalAttempts : 0.0;
         }
     }
 }

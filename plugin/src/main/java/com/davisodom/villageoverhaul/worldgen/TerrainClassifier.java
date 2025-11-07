@@ -77,8 +77,11 @@ public class TerrainClassifier {
     
     /**
      * Maximum acceptable height delta within 3x3 area (blocks).
+     * 
+     * Relaxed from 2 to 4 blocks to allow natural terrain variation.
+     * This permits gentle hills while still rejecting cliffs/mountains.
      */
-    private static final int MAX_SLOPE_DELTA = 2;
+    private static final int MAX_SLOPE_DELTA = 4;
     
     /**
      * Check if a block is acceptable for structure placement.
@@ -191,6 +194,41 @@ public class TerrainClassifier {
          */
         public int getRejected() {
             return fluid + steep + blocked;
+        }
+        
+        /**
+         * Get total sampled tiles.
+         */
+        public int getTotal() {
+            return acceptable + fluid + steep + blocked;
+        }
+        
+        /**
+         * Check if site is acceptable with tolerance.
+         * 
+         * Hard veto: ANY fluid tiles = reject (water/lava are unacceptable)
+         * Soft tolerance: Up to 20% non-acceptable tiles allowed (steep/blocked)
+         * 
+         * This allows buildings on slightly uneven terrain or near sparse vegetation
+         * while still preventing placement in water or on cliffs.
+         * 
+         * @return true if site passes tolerance checks
+         */
+        public boolean isAcceptableWithTolerance() {
+            // Hard veto on any fluid
+            if (fluid > 0) {
+                return false;
+            }
+            
+            int total = getTotal();
+            if (total == 0) {
+                return true; // No samples (shouldn't happen, but handle gracefully)
+            }
+            
+            // Allow up to 20% steep/blocked tiles
+            int nonFluidRejected = steep + blocked;
+            double rejectionRate = (double) nonFluidRejected / total;
+            return rejectionRate <= 0.20;
         }
         
         /**
