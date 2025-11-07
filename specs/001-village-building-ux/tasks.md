@@ -116,12 +116,18 @@ validations remain, with minimal unit tests for core algorithms where useful.
 **Purpose**: Enforce village-level spacing (border-to-border, default 200 blocks), establish dynamic
 border tracking, and align site selection with spawn proximity and nearest-neighbor bias.
 
-- [ ] T012g [Foundational] Add configurable minimum village spacing
+- [X] T012g [Foundational] Add configurable minimum village spacing
   - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
   - Description: Introduce `village.minVillageSpacing` (default: 200). Load on enable and expose via config service.
   - Acceptance:
     - Config key present with default if missing.
     - `/vo generate` and natural gen reference this value in logs.
+  - Implementation:
+    - Added `village.minVillageSpacing: 200` to config.yml with documentation
+    - Added `minVillageSpacing` field to VillageOverhaulPlugin
+    - Load config value in onEnable with default fallback (200)
+    - Exposed via `getMinVillageSpacing()` public getter
+    - Updated config load log to show both spacing values
 
 - [ ] T012h [Foundational] Persist and update dynamic village borders
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`

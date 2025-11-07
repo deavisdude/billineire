@@ -6,8 +6,15 @@
 village:
   # Minimum spacing between building footprints (blocks)
   # This prevents structures from being placed too close together
-  # Default: 2 blocks (Constitution v1.4.0, Principle XII)
+  # Default: 2 blocks (Constitution v1.5.0, Principle XII)
   minBuildingSpacing: 2
+  
+  # Minimum spacing between village borders (blocks)
+  # Enforces border-to-border distance; prevents village overlap
+  # First/early villages start near (not at) spawn; subsequent villages
+  # placed as close as possible to existing borders while respecting this distance
+  # Default: 200 blocks (Constitution v1.5.0, Principle XII)
+  minVillageSpacing: 200
 
 # Debug Flags
 debug:
