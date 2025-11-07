@@ -147,12 +147,21 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - Border expansion is deterministic and idempotent (Math.min/max)
     - toString() provides readable border representation
 
-- [ ] T012i [Foundational] Enforce inter-village spacing during village site search
+- [X] T012i [Foundational] Enforce inter-village spacing during village site search
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
   - Description: During site selection (user-invoked and natural), reject candidate sites whose border would violate `minVillageSpacing` vs any existing village border (border-to-border, bidirectional).
   - Acceptance:
     - Attempted placements within `minVillageSpacing` are rejected with `[STRUCT]` logs indicating `rejectedVillageSites.minDistance`.
     - Successful placements always satisfy min border distance.
+  - Implementation:
+    - Added `minVillageSpacing` field to VillagePlacementServiceImpl (loaded from config)
+    - Updated all three constructors to initialize minVillageSpacing (default 200, or from plugin config)
+    - Implemented `checkInterVillageSpacing()` method: Creates temporary border at proposed origin, checks against all existing village borders using `isWithinDistance()`
+    - Added pre-check in `placeVillage()` before village placement begins
+    - Logs rejection with actual distance and required distance at FINE level
+    - Updated placement log to include both minBuildingSpacing and minVillageSpacing values
+    - Added `formatLocation()` helper for consistent location logging
+    - Note: Current implementation works within same VillageMetadataStore instance; cross-session enforcement requires shared metadata store (see T012l below)
 
 - [ ] T012j [Foundational] Spawn-proximal initial placement & nearest-neighbor bias
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
@@ -166,6 +175,16 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
   - Description: Emit structured logs/metrics for inter-village rejections and border-limited expansions.
   - Acceptance:
     - Logs include counters like `rejectedVillageSites.minDistance=NN` and border expansion clips.
+
+- [ ] T012l [Foundational] Implement shared VillageMetadataStore singleton
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`
+  - Description: Create singleton VillageMetadataStore instance in VillageOverhaulPlugin lifecycle (initialize in onEnable, cleanup in onDisable). Expose via `getMetadataStore()` getter. Update all callers (VillagePlacementServiceImpl, GenerateCommand, VillageWorldgenAdapter) to use shared instance instead of creating new instances. This enables inter-village spacing checks to work across all command invocations and worldgen events.
+  - Acceptance:
+    - VillageOverhaulPlugin manages single metadata store instance throughout plugin lifecycle
+    - All village placements (commands, worldgen, tests) use shared store
+    - Inter-village spacing enforcement works across multiple `/vo generate` invocations
+    - Villages persist in metadata store across placements (until server restart)
+    - No duplicate metadata store instances created
 
 **Checkpoint**: Inter-village rules enforced and observable; borders persisted; ready for US1.
 

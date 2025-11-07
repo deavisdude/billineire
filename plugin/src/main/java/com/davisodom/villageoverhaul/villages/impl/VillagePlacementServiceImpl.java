@@ -29,8 +29,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     // Default value if no configuration provided
     private static final int DEFAULT_BUILDING_SPACING = 2;
     
-    // Configured spacing value (loaded from plugin config)
+    // Default minimum spacing between villages (border-to-border, blocks)
+    private static final int DEFAULT_VILLAGE_SPACING = 200;
+    
+    // Configured spacing values (loaded from plugin config)
     private final int minBuildingSpacing;
+    private final int minVillageSpacing;
     
     // Structure service for building placement
     private final StructureService structureService;
@@ -56,6 +60,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
+        this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
     }
     
     /**
@@ -71,6 +76,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.metadataStore = metadataStore;
         // Load spacing from plugin config
         this.minBuildingSpacing = plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
+        this.minVillageSpacing = plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
     }
     
     /**
@@ -82,12 +88,21 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
+        this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
     }
     
     @Override
     public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed) {
-        LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d, minSpacing=%d",
-                cultureId, origin, seed, minBuildingSpacing));
+        LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d, minBuildingSpacing=%d, minVillageSpacing=%d",
+                cultureId, origin, seed, minBuildingSpacing, minVillageSpacing));
+        
+        // Check inter-village spacing (Constitution v1.5.0, Principle XII)
+        // Reject sites within minVillageSpacing of any existing village border
+        if (!checkInterVillageSpacing(origin, minVillageSpacing)) {
+            LOGGER.warning(String.format("[STRUCT] Village placement rejected: site at %s violates minVillageSpacing=%d with existing village",
+                    formatLocation(origin), minVillageSpacing));
+            return Optional.empty();
+        }
         
         // NOTE: Site validation already performed by VillageWorldgenAdapter terrain search
         // Skip redundant validation here to avoid false negatives
@@ -710,6 +725,51 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         return minDist >= minSpacing;
     }
+    
+    /**
+     * Check if a proposed village location violates inter-village spacing requirements.
+     * 
+     * @param proposedOrigin Proposed village origin (center)
+     * @param minDistance Minimum border-to-border distance required
+     * @return true if spacing is acceptable, false if too close to an existing village
+     */
+    private boolean checkInterVillageSpacing(Location proposedOrigin, int minDistance) {
+        // Create a temporary border for the proposed village at its origin (point)
+        // We check the origin point against all existing village borders
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+                proposedOrigin.getBlockX(), proposedOrigin.getBlockX(),
+                proposedOrigin.getBlockZ(), proposedOrigin.getBlockZ()
+        );
+        
+        // Check against all existing villages in the same world
+        for (VillageMetadataStore.VillageMetadata existingVillage : metadataStore.getAllVillages()) {
+            // Skip villages in different worlds
+            if (!existingVillage.getOrigin().getWorld().equals(proposedOrigin.getWorld())) {
+                continue;
+            }
+            
+            VillageMetadataStore.VillageBorder existingBorder = existingVillage.getBorder();
+            
+            // Check if borders are within minimum distance
+            if (proposedBorder.isWithinDistance(existingBorder, minDistance)) {
+                int actualDistance = proposedBorder.getDistanceTo(existingBorder);
+                LOGGER.fine(String.format("[STRUCT] Inter-village spacing violation: proposed=%s, existing=%s (village=%s), distance=%d, required=%d",
+                        formatLocation(proposedOrigin), existingBorder, existingVillage.getVillageId(), actualDistance, minDistance));
+                return false;
+            }
+        }
+        
+        return true; // No violations found
+    }
+    
+    /**
+     * Format location for logging.
+     */
+    private String formatLocation(Location loc) {
+        return String.format("(%d, %d, %d)", loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+    }
+    
+    // ==================== Inner Classes ====================
     
     private static class GridPosition {
         final int x;
