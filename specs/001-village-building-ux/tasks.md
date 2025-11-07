@@ -54,14 +54,14 @@ validations remain, with minimal unit tests for core algorithms where useful.
 		- Plugin disable cancels the task and releases references (no duplicate schedulers on re-enable).
 		- `getTickEngine()` returns the running instance while enabled.
 
-- [ ] T012b [P] [QA] Expose manual tick and MockBukkit scheduler integration
+- [X] T012b [P] [QA] Expose manual tick and MockBukkit scheduler integration
 	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
 	- Description: Ensure the engine has a public `tick()` method advancing the internal tick counter and invoking registered systems in deterministic registration order. Make registration and execution ordering stable to support headless and MockBukkit tests.
 	- Acceptance:
 		- Calling `tick()` increments `getCurrentTick()` by 1 and invokes all systems exactly once per call in deterministic order.
 		- Order remains stable across repeated runs with identical registration sequences.
 
-- [ ] T012c [QA] Finalize deterministic tick tests (replace placeholders)
+- [X] T012c [QA] Finalize deterministic tick tests (replace placeholders)
 	- Files: `plugin/src/test/java/com/davisodom/villageoverhaul/TickHarnessTest.java`
 	- Description: Replace placeholder assertions in the test with real checks: assert `getCurrentTick() == 0` on init; call `engine.tick()` N times and assert `getCurrentTick() == N`; verify multiple systems tick in order; add a MockBukkit scheduled-tick integration test that uses `performTicks(n)`.
 	- Acceptance:
