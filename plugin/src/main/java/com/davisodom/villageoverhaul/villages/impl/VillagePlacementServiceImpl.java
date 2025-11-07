@@ -25,7 +25,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     // Minimum spacing between buildings (blocks)
     // This is applied on BOTH sides, so total gap = 2 * spacing = 4 blocks
+    // Default value if no configuration provided
     private static final int DEFAULT_BUILDING_SPACING = 2;
+    
+    // Configured spacing value (loaded from plugin config)
+    private final int minBuildingSpacing;
     
     // Structure service for building placement
     private final StructureService structureService;
@@ -50,6 +54,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
     }
     
     /**
@@ -63,6 +68,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        // Load spacing from plugin config
+        this.minBuildingSpacing = plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
     }
     
     /**
@@ -73,12 +80,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
     }
     
     @Override
     public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed) {
-        LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d",
-                cultureId, origin, seed));
+        LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d, minSpacing=%d",
+                cultureId, origin, seed, minBuildingSpacing));
         
         // NOTE: Site validation already performed by VillageWorldgenAdapter terrain search
         // Skip redundant validation here to avoid false negatives
@@ -134,7 +142,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     occupiedFootprints);
             
             if (buildingPos == null) {
-                LOGGER.warning(String.format("[STRUCT] Could not find non-overlapping position for '%s'", structureId));
+                LOGGER.warning(String.format("[STRUCT] Could not find non-overlapping position for '%s' (spacing=%d blocks)", 
+                        structureId, minBuildingSpacing));
                 continue;
             }
             
@@ -500,10 +509,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     private boolean footprintsOverlap(int x1, int z1, int w1, int d1, Footprint f2) {
         // Add spacing buffer to new structure being checked
-        int bufferedX1 = x1 - DEFAULT_BUILDING_SPACING;
-        int bufferedZ1 = z1 - DEFAULT_BUILDING_SPACING;
-        int bufferedW1 = w1 + DEFAULT_BUILDING_SPACING * 2;
-        int bufferedD1 = d1 + DEFAULT_BUILDING_SPACING * 2;
+        int bufferedX1 = x1 - minBuildingSpacing;
+        int bufferedZ1 = z1 - minBuildingSpacing;
+        int bufferedW1 = w1 + minBuildingSpacing * 2;
+        int bufferedD1 = d1 + minBuildingSpacing * 2;
         
         int x2 = f2.x;
         int z2 = f2.z;

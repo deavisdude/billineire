@@ -1,0 +1,21 @@
+# Village Overhaul Configuration
+# ===================================
+# Configure village generation, spacing, terrain handling, and debug options
+
+# Village Generation Settings
+village:
+  # Minimum spacing between building footprints (blocks)
+  # This prevents structures from being placed too close together
+  # Default: 2 blocks (Constitution v1.4.0, Principle XII)
+  minBuildingSpacing: 2
+
+# Debug Flags
+debug:
+  # Enable detailed tick engine logging
+  tick: false
+  
+  # Enable structure placement debug logs
+  structure: false
+  
+  # Enable path generation debug logs
+  path: false

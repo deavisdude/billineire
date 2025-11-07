@@ -38,6 +38,9 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private static VillageOverhaulPlugin instance;
     private Logger logger;
     
+    // Configuration values
+    private int minBuildingSpacing;
+    
     // Core services (Phase 2)
     private TickEngine tickEngine;
     private WalletService walletService;
@@ -64,6 +67,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         logger = getLogger();
         
         logger.info("Village Overhaul v" + getDescription().getVersion() + " starting...");
+        
+        // Load configuration
+        saveDefaultConfig();
+        minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
+        logger.info("✓ Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + ")");
         
         // Initialize foundational services
         initializeFoundation();
@@ -245,4 +253,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public VillagerAppearanceAdapter getVillagerAppearanceAdapter() { return villagerAppearanceAdapter; }
     
     public VillagerInteractionController getVillagerInteractionController() { return villagerInteractionController; }
+    
+    /**
+     * Get configured minimum building spacing
+     * @return Minimum spacing in blocks (default: 8)
+     */
+    public int getMinBuildingSpacing() {
+        return minBuildingSpacing;
+    }
 }

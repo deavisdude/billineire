@@ -67,7 +67,7 @@ validations remain, with minimal unit tests for core algorithms where useful.
 	- Acceptance:
 		- Tests pass locally and in CI with MockBukkit; no placeholder TODOs remain.
 
-- [ ] T012d [Foundational] Add configurable minimum building spacing
+- [X] T012d [Foundational] Add configurable minimum building spacing
   - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
   - Description: Introduce config key `village.minBuildingSpacing` (default: 8 blocks). Load during `onEnable`, expose via a getter or configuration service. Enforce spacing when selecting candidate building positions before footprint validation.
   - Acceptance:
