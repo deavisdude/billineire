@@ -63,21 +63,21 @@ dependencies {
     compileOnly 'net.luckperms:api:5.4'
     
     // WorldGuard (optional, for regions)
-    compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
+    compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.14'
     
     // WorldEdit (for schematic loading)
-    compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.2.15') {
+    compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.3.17') {
         transitive = false
     }
-    compileOnly('com.sk89q.worldedit:worldedit-core:7.2.15') {
+    compileOnly('com.sk89q.worldedit:worldedit-core:7.3.17') {
         transitive = false
     }
     
     // FAWE (optional, for safe edits)
-    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.8.0') {
+    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.14.0') {
         transitive = false
     }
-    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Bukkit:2.8.0') {
+    compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Bukkit:2.14.0') {
         transitive = false
     }
     
