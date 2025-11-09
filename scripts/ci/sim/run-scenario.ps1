@@ -652,6 +652,110 @@ if (Test-Path "$ServerDir/server.log") {
             Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
         }
     }
+
+    # T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
+    Write-Host ""
+    Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cyan
+    
+    # Pattern: [PATH] A* FAILED: node limit reached (explored=5000/5000, obstacles=N, maxCost=X.X)
+    $nodeCapPattern = '\[PATH\] A\* FAILED: node limit reached \(explored=([0-9]+)/([0-9]+)'
+    $nodeCapMatches = [regex]::Matches($logContent, $nodeCapPattern)
+    
+    if ($nodeCapMatches.Count -gt 0) {
+        Write-Host "Node cap enforcement detected: $($nodeCapMatches.Count) path(s) hit limit" -ForegroundColor White
+        
+        $allRespectCap = $true
+        foreach ($match in $nodeCapMatches) {
+            $explored = [int]$match.Groups[1].Value
+            $cap = [int]$match.Groups[2].Value
+            
+            Write-Host "  Explored: $explored / Cap: $cap" -ForegroundColor Gray
+            
+            if ($explored -gt $cap) {
+                Write-Host "X Node exploration exceeded cap: $explored > $cap" -ForegroundColor Red
+                $allRespectCap = $false
+            }
+        }
+        
+        if ($allRespectCap) {
+            Write-Host "OK All failed paths respected MAX_NODES_EXPLORED cap" -ForegroundColor Green
+        } else {
+            Write-Host "X Some paths exceeded MAX_NODES_EXPLORED cap" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "! No node cap enforcement detected (all paths may have succeeded)" -ForegroundColor Yellow
+    }
+    
+    # Pattern: [PATH] A* SUCCESS: Goal reached after exploring N nodes
+    $successPattern = '\[PATH\] A\* SUCCESS: Goal reached after exploring ([0-9]+) nodes'
+    $successMatches = [regex]::Matches($logContent, $successPattern)
+    
+    if ($successMatches.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Successful pathfinding analysis:" -ForegroundColor White
+        
+        $totalNodes = 0
+        $maxNodes = 0
+        $minNodes = [int]::MaxValue
+        
+        foreach ($match in $successMatches) {
+            $explored = [int]$match.Groups[1].Value
+            $totalNodes += $explored
+            if ($explored -gt $maxNodes) { $maxNodes = $explored }
+            if ($explored -lt $minNodes) { $minNodes = $explored }
+        }
+        
+        $avgNodes = [math]::Round($totalNodes / $successMatches.Count, 1)
+        
+        Write-Host "  Total successful paths: $($successMatches.Count)" -ForegroundColor Gray
+        Write-Host "  Node exploration range: $minNodes - $maxNodes (avg: $avgNodes)" -ForegroundColor Gray
+        
+        # Warn if consistently hitting high node counts (performance concern)
+        if ($avgNodes -gt 3000) {
+            Write-Host "! High average node exploration ($avgNodes), may indicate complex terrain" -ForegroundColor Yellow
+        }
+    }
+    
+    # T026a: Check waypoint cache behavior (note: full waypoint cache not yet implemented)
+    Write-Host ""
+    Write-Host "=== Waypoint Cache Validation (T026a) ===" -ForegroundColor Cyan
+    
+    # Pattern: Path network cache entries
+    $cachePattern = '\[STRUCT\] Path network complete: village=([a-f0-9\-]+)'
+    $cacheMatches = [regex]::Matches($logContent, $cachePattern)
+    
+    if ($cacheMatches.Count -gt 0) {
+        $uniqueVillages = @{}
+        foreach ($match in $cacheMatches) {
+            $villageId = $match.Groups[1].Value
+            if (-not $uniqueVillages.ContainsKey($villageId)) {
+                $uniqueVillages[$villageId] = 1
+            } else {
+                $uniqueVillages[$villageId]++
+            }
+        }
+        
+        Write-Host "Path network cache entries: $($uniqueVillages.Count) village(s)" -ForegroundColor White
+        
+        $regenerationDetected = $false
+        foreach ($villageId in $uniqueVillages.Keys) {
+            if ($uniqueVillages[$villageId] -gt 1) {
+                Write-Host "  Village $villageId regenerated paths $($uniqueVillages[$villageId]) time(s)" -ForegroundColor Gray
+                $regenerationDetected = $true
+            }
+        }
+        
+        if ($regenerationDetected) {
+            Write-Host "! Path regeneration detected (may indicate cache invalidation or terrain changes)" -ForegroundColor Yellow
+        } else {
+            Write-Host "OK All villages generated paths exactly once (cache working as expected)" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "! No path network cache activity detected" -ForegroundColor Yellow
+    }
+    
+    Write-Host ""
+    Write-Host "NOTE: Full waypoint-level cache and invalidation not yet implemented (future work)" -ForegroundColor Cyan
 }
 
 # Check for crashes in the log

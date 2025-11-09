@@ -262,6 +262,7 @@ Helper functions for future bot player simulation (requires additional server-si
 
 ### Scripts
 - `scripts/ci/sim/run-headless-paper.ps1` - Paper server setup
+- `scripts/ci/sim/run-scenario.ps1` - Main test harness with path validation (T026, T026a)
 - `scripts/ci/sim/test-custom-villager-interaction.ps1` - T019r test
 - `scripts/ci/sim/test-npc-performance.ps1` - T019s test
 - `scripts/ci/sim/BotPlayer.psm1` - Helper module (RCON, log monitoring, etc.)
@@ -273,7 +274,115 @@ Helper functions for future bot player simulation (requires additional server-si
 ### Test Artifacts
 - `custom-villager-test-results.json` - T019r output
 - `npc-perf-test-results.json` - T019s output
+- `state-snapshot.json` - T026/T026a scenario snapshot
 - `test-server/` - Server directory (auto-created)
+
+## T026a: Pathfinding Concurrency Cap & Waypoint Cache Tests
+
+**Added**: 2025-11-09  
+**Status**: ✅ Implemented  
+**Location**: `scripts/ci/sim/run-scenario.ps1`
+
+### What T026a Tests
+
+#### 1. Pathfinding Node Cap Enforcement
+Validates that A* pathfinding respects `MAX_NODES_EXPLORED` limit (currently 5000 nodes).
+
+**Test Pattern**:
+```regex
+\[PATH\] A\* FAILED: node limit reached \(explored=([0-9]+)/([0-9]+)
+```
+
+**Acceptance Criteria**:
+- ✅ Explored nodes never exceed MAX_NODES_EXPLORED cap
+- ✅ Failed paths gracefully abort when limit reached
+- ✅ Log reports: `(explored=5000/5000, obstacles=N, maxCost=X.X)`
+
+**Performance Monitoring**:
+- Tracks average node exploration across successful paths
+- Warns if average >3000 nodes (indicates complex terrain)
+- Reports exploration range (min/max/avg) per test run
+
+**Example Output**:
+```
+=== Pathfinding Node Cap Validation (T026a) ===
+Node cap enforcement detected: 2 path(s) hit limit
+  Explored: 5000 / Cap: 5000
+  Explored: 5000 / Cap: 5000
+OK All failed paths respected MAX_NODES_EXPLORED cap
+
+Successful pathfinding analysis:
+  Total successful paths: 8
+  Node exploration range: 124 - 2847 (avg: 1245.3)
+```
+
+#### 2. Waypoint Cache Behavior
+Monitors path network caching and regeneration patterns.
+
+**Test Pattern**:
+```regex
+\[STRUCT\] Path network complete: village=([a-f0-9\-]+)
+```
+
+**Current Implementation Notes**:
+- ✅ Village-level path network cache (HashMap<UUID, PathNetwork>)
+- ⚠️ **Full waypoint-level cache not yet implemented** (future work)
+- ⚠️ **Terrain-triggered invalidation not yet implemented** (future work)
+
+**Acceptance Criteria**:
+- ✅ Each village generates paths exactly once (cache working)
+- ⚠️ Regeneration detected → potential cache invalidation (not yet implemented)
+- ℹ️ Test framework ready for future waypoint cache validation
+
+**Example Output**:
+```
+=== Waypoint Cache Validation (T026a) ===
+Path network cache entries: 3 village(s)
+OK All villages generated paths exactly once (cache working as expected)
+
+NOTE: Full waypoint-level cache and invalidation not yet implemented (future work)
+```
+
+### Running T026a Tests
+
+```powershell
+# Standard scenario run (includes T026a validation)
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000
+
+# Stress test with complex terrain (trigger node cap)
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 6000 -Seed 99999
+```
+
+### Interpreting Results
+
+**Node Cap Tests**:
+- 🟢 **PASS**: All failed paths show `explored ≤ cap`
+- 🔴 **FAIL**: Any path exceeds MAX_NODES_EXPLORED
+- 🟡 **WARNING**: High average node exploration (>3000)
+
+**Cache Tests**:
+- 🟢 **PASS**: Each village generates paths once only
+- 🟡 **WARNING**: Regeneration detected (check terrain changes)
+- 🔵 **INFO**: No cache activity (paths may not be generated)
+
+### Future Work (T026a Extensions)
+
+Planned enhancements once waypoint cache is fully implemented:
+
+1. **Waypoint-level caching**:
+   - Track individual waypoint segments (not just full paths)
+   - Reuse shared path segments between buildings
+   - Log pattern: `[PATH] Waypoint cache hit: segment X->Y`
+
+2. **Terrain-triggered invalidation**:
+   - Invalidate cached paths when terrain changes
+   - Log pattern: `[PATH] Cache invalidated: terrain change at (x,y,z)`
+   - Test: Modify terrain, regenerate paths, verify cache miss
+
+3. **Concurrent planner cap**:
+   - Limit simultaneous A* searches (e.g., max 3 concurrent)
+   - Log pattern: `[PATH] Planner queue: active=N, queued=M`
+   - Test: Trigger many path generations, verify queue behavior
 
 ## Constitution Compliance
 

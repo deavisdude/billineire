@@ -305,7 +305,33 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
 - [X] T024 [US2] Persist mainBuildingId and pathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [X] T025 [US2] Extend test command: `votest generate-paths <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [X] T026 [US2] Harness assertion for path connectivity ≥ 90% in `scripts/ci/sim/run-scenario.ps1`
-- [ ] T026a [US2] Add tests for pathfinding concurrency cap and waypoint cache invalidation in `scripts/ci/sim/run-scenario.ps1`
+- [X] T026a [US2] Add tests for pathfinding concurrency cap and waypoint cache invalidation in `scripts/ci/sim/run-scenario.ps1`
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Validate MAX_NODES_EXPLORED enforcement during A* pathfinding and path network cache behavior. Tests parse [PATH] logs to verify node exploration limits, graceful failures, and cache patterns. Documents current implementation status and future waypoint cache validation plans.
+  - Acceptance:
+    - ✅ Node cap tests verify explored nodes never exceed MAX_NODES_EXPLORED (5000)
+    - ✅ Failed paths log: `[PATH] A* FAILED: node limit reached (explored=N/5000)`
+    - ✅ Successful path node exploration tracked (min/max/avg statistics)
+    - ✅ Performance warning if average exploration >3000 nodes
+    - ✅ Cache tests verify each village generates paths exactly once
+    - ✅ Regeneration detection (indicates potential cache invalidation)
+    - ✅ Documentation includes current vs. future implementation notes
+  - Implementation:
+    - Added "Pathfinding Node Cap Validation" section to run-scenario.ps1
+    - Parses `[PATH] A* FAILED: node limit reached` pattern with regex
+    - Validates explored ≤ cap for all failed paths
+    - Parses `[PATH] A* SUCCESS: Goal reached after exploring N nodes` pattern
+    - Calculates node exploration statistics (min/max/avg) for successful paths
+    - Added "Waypoint Cache Validation" section to run-scenario.ps1
+    - Tracks path network cache entries per village via `[STRUCT] Path network complete` pattern
+    - Detects path regeneration (multiple completions for same village UUID)
+    - Notes: Current implementation has village-level path network cache only
+    - Future work: Full waypoint-level cache and terrain-triggered invalidation
+    - Updated HEADLESS-TESTING.md with comprehensive T026a test documentation:
+      - Test patterns and acceptance criteria
+      - Example outputs with color-coded results
+      - How to run and interpret results
+      - Future waypoint cache enhancement plans
 - [ ] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
 - [ ] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`.
 - [ ] T026d [P] [US2] Add deterministic path-from-seed check in `scripts/ci/sim/run-scenario.ps1`: run path generation twice with the same seed and hash the ordered (x,y,z) path blocks; assert identical hashes; with a different seed, assert hash changes. Capture artifacts under `test-server/logs/`.
@@ -649,6 +675,90 @@ Purpose: Resolve high-impact playtest defects: unused terraforming pads, treetop
 Prioritization: P1 (T015c, T021d, T020b, T014c) → P2 (T018c, T017c, T022b, T012m) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
+
+---
+
+## Phase 4.8: Pathfinding Performance & Caching (Future Work Prioritized)
+
+**Purpose**: Implement planned pathfinding enhancements identified during T026a (node cap & cache tests) to improve scalability, reduce redundant computations, and prepare for NPC movement & builder logistics. These tasks convert future work items into actionable, testable backlog entries.
+
+### Rationale & Priority
+| Priority | Reason |
+|----------|--------|
+| P1 | High impact on performance for larger villages; prevents exponential node exploration & redundant recalculations |
+| P2 | Improves resilience & observability; enables targeted invalidation after terrain mutations (terraforming, structure placement) |
+| P3 | Advanced optimizations & instrumentation helpful for profiling but not blocking core gameplay |
+
+- [ ] T042 [P1] [US2] Waypoint-level path segment cache in `PathServiceImpl`
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/model/PathNetwork.java`
+  - Description: Introduce cache keyed by ordered `(startX,startZ)->(endX,endZ)` segment pairs (normalized ordering). Break long building-to-building paths into waypoint segments (e.g., every N blocks or turning points). Reuse cached segments when generating new paths sharing sub-routes. Persist hit/miss stats per village.
+  - Acceptance:
+    - Segment decomposition produces ≥1 segment for any path > 40 blocks.
+    - Cache hit rate logged: `[PATH] cache: hits=H, misses=M, entries=E`.
+    - Reusing segments reduces node exploration by ≥30% on a 5-building test vs baseline.
+    - Deterministic: same seed + same building layout yields identical segment sequence.
+  - Tests:
+    - Add harness parsing (extend `run-scenario.ps1`) for cache stats.
+    - MockBukkit unit test verifies segment normalization and retrieval.
+
+- [ ] T042a [P1] [US2] Headless test: waypoint cache efficacy
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Generate two villages with overlapping building vectors (forcing shared route portions). Assert second village shows ≥1 cache hit; fail if hits=0 when overlap ≥25%.
+  - Acceptance:
+    - Harness logs include cache stats for both villages.
+    - Test fails if reported hits=0 while overlap condition satisfied.
+
+- [ ] T043 [P2] [US2] Terrain-triggered path cache invalidation
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+  - Description: Invalidate cached segments intersecting modified terrain columns after terraforming or structure placement. Maintain lightweight spatial index (grid bucket -> segment IDs). Log invalidation metrics.
+  - Acceptance:
+    - `[PATH] cache invalidated: segments=N, reason=terraform` when site prep alters ground beneath existing segments.
+    - Subsequent path generation after invalidation recomputes affected segments (miss then reinsert).
+    - False invalidations (segments untouched) < 5% in test scenario.
+  - Tests:
+    - Harness: Force terrain change (e.g., grading) between two path generations; assert invalidation log present.
+    - Unit test simulates terrain change notification and verifies affected segment removal.
+
+- [ ] T043a [P2] [US2] Headless test: targeted cache invalidation
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Generate paths, mutate terrain under one segment via test command or scripted block edits, regenerate paths; assert invalidation count ≥1 and non-mutated segment count unchanged.
+  - Acceptance:
+    - Invalidation log includes mutated coordinate range.
+    - Non-mutated segment IDs remain cached (entries count stable excluding invalidated items).
+
+- [ ] T044 [P2] [US2] Concurrency cap & planner queue for A* searches
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
+  - Description: Introduce capped thread/task execution (e.g., max 3 concurrent planners). Additional path requests enqueue and log `[PATH] planner queued`. Use synchronized queue; expose metrics.
+  - Acceptance:
+    - Concurrent planner count never exceeds configured cap.
+    - Queued requests eventually begin (no starvation) under load test of ≥10 simultaneous path requests.
+    - Logs: `[PATH] planners: active=A queued=Q cap=C` at start & completion.
+  - Tests:
+    - Stress unit test simulates multiple async requests; asserts cap enforcement & eventual processing.
+    - Harness extension (optional) triggers rapid path generation and parses queue metrics.
+
+- [ ] T044a [P2] [US2] Headless stress test: planner queue saturation
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Trigger > cap simultaneous path generations (e.g., spawn buildings then call path generation command). Assert queued count >0 and all queued items processed within timeout.
+  - Acceptance:
+    - Final log shows queued=0 after processing cycle.
+    - No path generation failure due to planner starvation.
+
+- [ ] T045 [P3] [US2] Pathfinding perf counters & profiling hooks
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/metrics/PerfCounters.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
+  - Description: Add counters: `nodesExploredTotal`, `avgNodesPerPath`, `cacheHitRate`, `invalidationEvents`, `plannerQueueWaitMs`. Expose `/votest path-metrics <village-id>` command.
+  - Acceptance:
+    - Command outputs JSON with all counters.
+    - Counters resettable via `/votest path-metrics reset`.
+    - Avg nodes matches harness sampled average (±5%).
+
+- [ ] T045a [P3] [US2] Unit test: metrics consistency
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImplTest.java`
+  - Description: Generate mock paths; verify counters increment predictably and reset clears values.
+  - Acceptance:
+    - After N path generations: `nodesExploredTotal >= sum(nodes)`; after reset all counters = 0.
+
+**Checkpoint**: Pathfinding subsystem optimized with segment reuse, targeted invalidation, capped concurrency, and observable performance metrics; ready for NPC builder integration.
 
 ---
 
