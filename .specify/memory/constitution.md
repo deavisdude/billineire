@@ -6,11 +6,11 @@ Sync Impact Report
 - Added sections: None
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (add Inter-Village Spacing & Borders gate: default 200 blocks, border-to-border, spawn-proximal placement, dynamic borders)
-	- ✅ .specify/templates/spec-template.md (add checklist item for inter-village spacing/borders with default 200 and deterministic enforcement)
-	- ✅ .specify/templates/tasks-template.md (add constitution-driven task type for inter-village spacing enforcement and dynamic border updates)
+	- OK .specify/templates/plan-template.md (add Inter-Village Spacing & Borders gate: default 200 blocks, border-to-border, spawn-proximal placement, dynamic borders)
+	- OK .specify/templates/spec-template.md (add checklist item for inter-village spacing/borders with default 200 and deterministic enforcement)
+	- OK .specify/templates/tasks-template.md (add constitution-driven task type for inter-village spacing enforcement and dynamic border updates)
 	- N/A .specify/templates/commands/* (no specific commands templates present)
-	- ⚠ README.md / docs/* (note village inter-spacing rules and border dynamics)
+	- ! README.md / docs/* (note village inter-spacing rules and border dynamics)
 - Follow-up TODOs:
 	- TODO(DOCS_VILLAGE_MAP): Add docs/quickstart section describing the "Village Map" sign interaction and GUI parity for Bedrock.
 	- TODO(DOCS_VILLAGE_SPACING): Document inter-village minimum distance (default 200), spawn-proximal placement, and dynamic border behavior in docs/.

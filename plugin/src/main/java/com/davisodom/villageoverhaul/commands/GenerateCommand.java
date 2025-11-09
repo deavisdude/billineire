@@ -69,8 +69,8 @@ public class GenerateCommand {
             seedArg = null;
         }
         
-        // Immediate feedback to user
-        sender.sendMessage("§a✓ Village generation command received");
+    // Immediate feedback to user
+    sender.sendMessage("§aOK Village generation command received");
         sender.sendMessage("§7  Culture: §f" + cultureId);
         sender.sendMessage("§7  Name: §f" + villageName);
         if (seedArg != null) {
@@ -177,7 +177,7 @@ public class GenerateCommand {
                     if (placedVillageId.isPresent()) {
                         int buildingCount = metadataStore.getVillageBuildings(villageId).size();
                         
-                        sender.sendMessage("§a✓ Village '" + villageName + "' generated successfully!");
+                        sender.sendMessage("§aOK Village '" + villageName + "' generated successfully!");
                         sender.sendMessage("§7  Culture: " + cultureId);
                         sender.sendMessage("§7  Location: " + baseX + ", " + baseY + ", " + baseZ);
                         sender.sendMessage("§7  Buildings: " + buildingCount);
@@ -191,7 +191,7 @@ public class GenerateCommand {
                         sender.sendMessage("§7  Paths: Not yet available (US2 in progress)");
                         
                     } else {
-                        sender.sendMessage("§c✗ Failed to place structures for village '" + villageName + "'");
+                        sender.sendMessage("§cX Failed to place structures for village '" + villageName + "'");
                         sender.sendMessage("§7Check server logs for details.");
                         
                         // Place marker pillar as fallback

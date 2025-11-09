@@ -128,9 +128,9 @@ public class TradeListener implements Listener {
         if (result.isPresent()) {
             Project.ContributionResult cr = result.get();
             
-            if (cr.isCompleted()) {
+                if (cr.isCompleted()) {
                 // Project just completed!
-                player.sendMessage("§a§l✓ Village project completed: " + project.getBuildingRef());
+                player.sendMessage("§a§lOK Village project completed: " + project.getBuildingRef());
                 player.sendMessage("§7The village thanks you for your contributions!");
                 
                 // Trigger upgrade

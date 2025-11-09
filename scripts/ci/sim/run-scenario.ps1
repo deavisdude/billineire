@@ -38,7 +38,7 @@ Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
 # Check server exists
 if (!(Test-Path "$ServerDir/paper.jar")) {
-    Write-Host "✗ Paper server not found in $ServerDir" -ForegroundColor Red
+    Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
     Write-Host "  Run run-headless-paper.ps1 first" -ForegroundColor Yellow
     exit 1
 }
@@ -90,7 +90,7 @@ $serverProcess = Start-Process -FilePath "java" `
     -NoNewWindow
 
 if (!$serverProcess) {
-    Write-Host "✗ Failed to start server" -ForegroundColor Red
+    Write-Host "X Failed to start server" -ForegroundColor Red
     exit 1
 }
 
@@ -107,7 +107,7 @@ while ($elapsed -lt $maxWaitSeconds) {
     
     # Check if process died early
     if ($serverProcess.HasExited) {
-        Write-Host "✗ Server process exited unexpectedly" -ForegroundColor Red
+        Write-Host "X Server process exited unexpectedly" -ForegroundColor Red
         if (Test-Path "$ServerDir/server.log") {
             Write-Host "Server log:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server.log" -Tail 50
@@ -123,13 +123,13 @@ while ($elapsed -lt $maxWaitSeconds) {
         $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
         if ($logContent -match "Done \([\d.]+s\)!") {
             $serverReady = $true
-            Write-Host "✓ Server started successfully" -ForegroundColor Green
+            Write-Host "OK Server started successfully" -ForegroundColor Green
             break
         }
         
         # Check for common startup issues
         if ($logContent -match "(?i)(failed|error|exception)") {
-            Write-Host "⚠ Potential startup issue detected in logs" -ForegroundColor Yellow
+            Write-Host "! Potential startup issue detected in logs" -ForegroundColor Yellow
         }
     }
     
@@ -137,7 +137,7 @@ while ($elapsed -lt $maxWaitSeconds) {
 }
 
 if (!$serverReady) {
-    Write-Host "✗ Server did not start within $maxWaitSeconds seconds" -ForegroundColor Red
+    Write-Host "X Server did not start within $maxWaitSeconds seconds" -ForegroundColor Red
     
     # Dump logs for debugging
     if (Test-Path "$ServerDir/server.log") {
@@ -232,7 +232,7 @@ $snapshot = @{
 } | ConvertTo-Json -Depth 10
 
 Set-Content -Path $SnapshotFile -Value $snapshot
-Write-Host "✓ Snapshot written to $SnapshotFile" -ForegroundColor Green
+Write-Host "OK Snapshot written to $SnapshotFile" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Test Summary ===" -ForegroundColor Cyan

@@ -159,7 +159,7 @@ public class ProjectService {
                     playerId, projectId, result.getAccepted(), result.getOverflow(), result.isCompleted()));
             
             if (result.isCompleted()) {
-                logger.info("✓ Project completed: " + project);
+                logger.info("OK Project completed: " + project);
             }
             
             return Optional.of(result);

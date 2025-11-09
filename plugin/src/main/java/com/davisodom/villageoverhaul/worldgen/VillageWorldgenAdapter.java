@@ -148,10 +148,10 @@ public class VillageWorldgenAdapter implements Listener {
             Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed);
             
             if (placedVillageId.isPresent()) {
-                logger.info("✓ Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
+                logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
                         + world.getName() + " @ (" + baseX + "," + (finalY + 1) + "," + baseZ + ")");
             } else {
-                logger.warning("✗ Failed to place structures for village '" + villageName + "', placing marker pillar");
+                logger.warning("X Failed to place structures for village '" + villageName + "', placing marker pillar");
                 // Fallback: Create a tiny marker pillar (stone + torch) to indicate village center
                 safeSet(world, baseX, finalY, baseZ, Material.STONE);
                 safeSet(world, baseX, finalY + 1, baseZ, Material.STONE);
@@ -306,7 +306,7 @@ public class VillageWorldgenAdapter implements Listener {
                     appearanceAdapter.applyAppearance(entity, definitionId);
                 }
                 
-                logger.info("  ✓ Spawned " + definitionId + " at village " + village.getName());
+                logger.info("  OK Spawned " + definitionId + " at village " + village.getName());
             }
         }
     }

@@ -208,10 +208,10 @@ public class VillagerInteractionController implements Listener {
         if (result.isPresent()) {
             Project.ContributionResult cr = result.get();
             
-            if (cr.isCompleted()) {
-                // Project just completed!
-                player.sendMessage(Component.text("✓ Village project completed: " + project.getBuildingRef(), 
-                        NamedTextColor.GREEN));
+        if (cr.isCompleted()) {
+        // Project just completed!
+        player.sendMessage(Component.text("OK Village project completed: " + project.getBuildingRef(), 
+            NamedTextColor.GREEN));
                 player.sendMessage(Component.text("The village thanks you for your contributions!", 
                         NamedTextColor.GRAY));
                 

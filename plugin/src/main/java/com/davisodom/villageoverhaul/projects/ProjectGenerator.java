@@ -59,7 +59,7 @@ public class ProjectGenerator {
             }
         }
         
-        logger.info("✓ Generated " + tier1Projects.size() + " initial projects for " + village.getName());
+    logger.info("OK Generated " + tier1Projects.size() + " initial projects for " + village.getName());
     }
     
     /**

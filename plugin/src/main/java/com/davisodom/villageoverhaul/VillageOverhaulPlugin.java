@@ -78,7 +78,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
         minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
-        logger.info("✓ Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
+    logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
                 ", minVillageSpacing=" + minVillageSpacing + 
                 ", spawnProximityRadius=" + spawnProximityRadius + ")");
         
@@ -121,73 +121,73 @@ public class VillageOverhaulPlugin extends JavaPlugin {
      */
     private void initializeFoundation() {
         // Metrics and observability
-        metrics = new Metrics(logger);
-        logger.info("✓ Metrics initialized");
+    metrics = new Metrics(logger);
+    logger.info("OK Metrics initialized");
         
         // Persistence layer
-        jsonStore = new JsonStore(getDataFolder(), logger);
-        logger.info("✓ JSON store initialized");
+    jsonStore = new JsonStore(getDataFolder(), logger);
+    logger.info("OK JSON store initialized");
         
         // Schema validator
-        schemaValidator = new SchemaValidator(logger);
-        logger.info("✓ Schema validator initialized");
+    schemaValidator = new SchemaValidator(logger);
+    logger.info("OK Schema validator initialized");
         
     // Culture service (data-driven cultural sets)
     cultureService = new CultureService(logger, schemaValidator);
     cultureService.load(this);
-    logger.info("✓ Culture service loaded " + cultureService.all().size() + " culture(s)");
+    logger.info("OK Culture service loaded " + cultureService.all().size() + " culture(s)");
 
         // Wallet service (economy)
-        walletService = new WalletService();
-        logger.info("✓ Wallet service initialized");
+    walletService = new WalletService();
+    logger.info("OK Wallet service initialized");
         
         // Village service (minimal for Phase 2.5)
-        villageService = new VillageService();
-        logger.info("✓ Village service initialized");
+    villageService = new VillageService();
+    logger.info("OK Village service initialized");
         
         // Metadata store (Phase 2.1: inter-village spacing enforcement)
-        metadataStore = new VillageMetadataStore(this);
-        logger.info("✓ Village metadata store initialized");
+    metadataStore = new VillageMetadataStore(this);
+    logger.info("OK Village metadata store initialized");
         
         // Project service (US1)
-        projectService = new ProjectService(logger);
-        logger.info("✓ Project service initialized");
+    projectService = new ProjectService(logger);
+    logger.info("OK Project service initialized");
         
         // Project generator (auto-create projects for villages)
-        projectGenerator = new ProjectGenerator(this);
-        logger.info("✓ Project generator initialized");
+    projectGenerator = new ProjectGenerator(this);
+    logger.info("OK Project generator initialized");
         
         // Upgrade executor (US1: visual building upgrades)
-        upgradeExecutor = new com.davisodom.villageoverhaul.projects.UpgradeExecutor(this);
-        logger.info("✓ Upgrade executor initialized");
+    upgradeExecutor = new com.davisodom.villageoverhaul.projects.UpgradeExecutor(this);
+    logger.info("OK Upgrade executor initialized");
         
         // Custom villager service (Phase 2.6)
-        customVillagerService = new CustomVillagerService(this, logger, metrics);
-        logger.info("✓ Custom villager service initialized");
+    customVillagerService = new CustomVillagerService(this, logger, metrics);
+    logger.info("OK Custom villager service initialized");
         
         // Villager appearance adapter (Phase 2.6)
-        villagerAppearanceAdapter = new VillagerAppearanceAdapter(logger);
-        logger.info("✓ Villager appearance adapter initialized");
+    villagerAppearanceAdapter = new VillagerAppearanceAdapter(logger);
+    logger.info("OK Villager appearance adapter initialized");
         
         // Villager interaction controller (Phase 2.6) - now with US1 integration
         villagerInteractionController = new VillagerInteractionController(this, logger, customVillagerService, metrics);
         getServer().getPluginManager().registerEvents(villagerInteractionController, this);
-        logger.info("✓ Villager interaction controller registered");
+    logger.info("OK Villager interaction controller registered");
         
         // Tick engine
-        tickEngine = new TickEngine(this);
-        logger.info("✓ Tick engine initialized");
+    tickEngine = new TickEngine(this);
+    logger.info("OK Tick engine initialized");
         
         // Trade listener (US1: route trade proceeds to projects for vanilla villagers)
-        tradeListener = new TradeListener(this);
+    tradeListener = new TradeListener(this);
         getServer().getPluginManager().registerEvents(tradeListener, this);
-        logger.info("✓ Trade listener registered");
+    logger.info("OK Trade listener registered");
         
         // Admin HTTP server (for CI/testing)
         try {
             adminServer = new AdminHttpServer(logger, 8080);
             adminServer.start();
-            logger.info("✓ Admin HTTP server started on port 8080");
+            logger.info("OK Admin HTTP server started on port 8080");
         } catch (Exception e) {
             logger.warning("Failed to start admin HTTP server: " + e.getMessage());
             logger.warning("  (This is optional for CI testing)");

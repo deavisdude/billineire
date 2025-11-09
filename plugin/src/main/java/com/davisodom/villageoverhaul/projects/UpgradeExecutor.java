@@ -80,8 +80,8 @@ public class UpgradeExecutor {
             applyUnlockEffect(village, effect);
         }
         
-        logger.info("✓ Upgrade completed: " + project.getBuildingRef() + 
-                " at (" + vx + "," + vy + "," + vz + ")");
+    logger.info("OK Upgrade completed: " + project.getBuildingRef() + 
+        " at (" + vx + "," + vy + "," + vz + ")");
     }
     
     /**

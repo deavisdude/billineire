@@ -213,7 +213,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             }
             
             Project project = projectService.createProject(villageId, buildingRef, costMillz, unlockEffects);
-            sender.sendMessage("§a✓ Created project for " + villageOpt.get().getName() + ": " + project.getId());
+            sender.sendMessage("§aOK Created project for " + villageOpt.get().getName() + ": " + project.getId());
             sender.sendMessage("§7Use §e/vo project activate " + project.getId() + " §7to make it active");
             
         } catch (IllegalArgumentException e) {
@@ -234,8 +234,8 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             UUID projectId = UUID.fromString(args[1]);
             boolean activated = projectService.activateProject(projectId);
             
-            if (activated) {
-                sender.sendMessage("§a✓ Project activated: " + projectId);
+                if (activated) {
+                sender.sendMessage("§aOK Project activated: " + projectId);
             } else {
                 sender.sendMessage("§cFailed to activate project (not found or already active)");
             }
@@ -335,7 +335,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                 appearanceAdapter.applyAppearance(entity, definitionId);
             }
             
-            sender.sendMessage("§a✓ Spawned " + definitionId + " at your location");
+            sender.sendMessage("§aOK Spawned " + definitionId + " at your location");
             sender.sendMessage("§7Entity ID: " + customVillager.getEntityId());
         } else {
             sender.sendMessage("§cFailed to spawn villager (village cap reached or error)");
@@ -398,7 +398,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         boolean success = npcService.despawnVillager(entityId);
         
         if (success) {
-            sender.sendMessage("§a✓ Despawned custom villager");
+            sender.sendMessage("§aOK Despawned custom villager");
         } else {
             sender.sendMessage("§cVillager not found");
         }
