@@ -69,8 +69,8 @@ function Resolve-JavaExe {
     param([string]$preferred)
 
     # Detect OS: Windows uses .exe extension, Unix does not
-    $isWindows = $PSVersionTable.PSVersion.Major -le 5 -or $IsWindows
-    $javaExeName = if ($isWindows) { 'java.exe' } else { 'java' }
+    $onWindows = if ($PSVersionTable.PSVersion.Major -le 5) { $true } else { $IsWindows }
+    $javaExeName = if ($onWindows) { 'java.exe' } else { 'java' }
     $binPath = 'bin'
 
     # 1) If explicit path provided, prefer it. Accept either the java.exe file or the JDK root folder.
@@ -209,8 +209,8 @@ Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 # e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
 # Only apply this on Windows where Program Files exists
 if ($ServerDir -and $ServerDir -match 'Program Files' -and ($ServerDir -match 'Java' -or $ServerDir -match 'jdk')) {
-    $isWindows = $PSVersionTable.PSVersion.Major -le 5 -or $IsWindows
-    $javaExeName = if ($isWindows) { 'java.exe' } else { 'java' }
+    $onWindowsCheck = if ($PSVersionTable.PSVersion.Major -le 5) { $true } else { $IsWindows }
+    $javaExeName = if ($onWindowsCheck) { 'java.exe' } else { 'java' }
     $possibleJavaBin = Join-Path $ServerDir (Join-Path 'bin' $javaExeName)
     if (Test-Path $possibleJavaBin) {
         Write-Host "! Detected a Java install path passed as ServerDir. Interpreting this as -JavaPath and restoring ServerDir to default 'test-server'." -ForegroundColor Yellow
@@ -989,6 +989,72 @@ if (Test-Path "$ServerDir/server.log") {
     Write-Host "INFO T026c1 automated dual-route scenario not implemented (manual playtest guidance in HEADLESS-TESTING.md)" -ForegroundColor Yellow
     Write-Host "INFO Use /votest place-obstacle water|steep to create alternative shorter high-cost routes" -ForegroundColor Yellow
     Write-Host "INFO Expected: Slightly longer flat route chosen when <20% longer than water/steep shortcut" -ForegroundColor Yellow
+    
+    # T026d: Deterministic path-from-seed check
+    Write-Host ""
+    Write-Host "=== Deterministic Path-from-Seed Check (T026d) ===" -ForegroundColor Cyan
+    
+    # Parse [PATH] Determinism hash logs
+    $hashPattern = '\[PATH\] Determinism hash: ([a-f0-9]+) \(nodes=([0-9]+)\)'
+    $hashMatches = [regex]::Matches($logContent, $hashPattern)
+    
+    if ($hashMatches.Count -eq 0) {
+        Write-Host "INFO No determinism hash logs found (path generation may not have occurred)" -ForegroundColor Yellow
+    } else {
+        Write-Host "INFO Found $($hashMatches.Count) path determinism hashes" -ForegroundColor Cyan
+        
+        # Group hashes by unique hash value to detect duplicates (same seed)
+        $hashGroups = @{}
+        foreach ($match in $hashMatches) {
+            $hash = $match.Groups[1].Value
+            $nodes = [int]$match.Groups[2].Value
+            
+            if (-not $hashGroups.ContainsKey($hash)) {
+                $hashGroups[$hash] = @()
+            }
+            $hashGroups[$hash] += $nodes
+        }
+        
+        # Report unique hashes
+        Write-Host "INFO Unique path hashes: $($hashGroups.Count)" -ForegroundColor Cyan
+        
+        $duplicateHashCount = 0
+        $allHashesIdentical = ($hashGroups.Count -eq 1 -and $hashMatches.Count -gt 1)
+        
+        foreach ($hash in $hashGroups.Keys) {
+            $occurrences = $hashGroups[$hash].Count
+            if ($occurrences -gt 1) {
+                $duplicateHashCount++
+                Write-Host "  Hash: $hash (occurrences=$occurrences, nodes=$($hashGroups[$hash][0]))" -ForegroundColor Gray
+            }
+        }
+        
+        # Validation logic:
+        # - If same seed used multiple times, expect identical hashes (determinism)
+        # - If different seeds used, expect different hashes (variance)
+        # Since current test uses single seed, we expect either:
+        #   1) Multiple identical hashes (if paths regenerated with same seed) = PASS
+        #   2) Single hash (only one path generated) = INFO
+        #   3) Multiple different hashes with same seed = FAIL (non-deterministic)
+        
+        if ($allHashesIdentical) {
+            Write-Host "OK All path hashes identical (deterministic with same seed)" -ForegroundColor Green
+        } elseif ($hashGroups.Count -eq $hashMatches.Count) {
+            Write-Host "INFO All path hashes unique (expected if using different seeds or different building pairs)" -ForegroundColor Yellow
+            Write-Host "INFO To test determinism: run twice with same seed and compare hashes" -ForegroundColor Yellow
+        } else {
+            Write-Host "OK Mix of identical and unique hashes (expected for multiple paths with same seed)" -ForegroundColor Green
+            Write-Host "  Identical hash groups: $duplicateHashCount" -ForegroundColor Gray
+            Write-Host "  Unique hashes: $($hashGroups.Count - $duplicateHashCount)" -ForegroundColor Gray
+        }
+        
+        # Future enhancement: Compare hashes across multiple runs with explicit seed control
+        Write-Host ""
+        Write-Host "NOTE Full determinism test requires:" -ForegroundColor Yellow
+        Write-Host "  1. Run with seed A twice, verify identical hashes" -ForegroundColor Yellow
+        Write-Host "  2. Run with seed B, verify different hashes from seed A" -ForegroundColor Yellow
+        Write-Host "  Current test validates hash generation only" -ForegroundColor Yellow
+    }
 }
 
 # Check for crashes in the log

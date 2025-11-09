@@ -387,6 +387,10 @@ public class PathServiceImpl implements PathService {
             "[PATH] A* SUCCESS: Goal reached after exploring %d nodes (path=%d tiles, cost=%.1f, flat=%d, slope=%d, water=%d, steep=%d)",
             nodesExplored, path.size(), totalCost, flatTiles, slopeTiles, waterTiles, steepTiles
         ));
+        
+        // Log path hash for determinism testing (T026d)
+        String pathHash = computePathHash(path);
+        LOGGER.info(String.format("[PATH] Determinism hash: %s (nodes=%d)", pathHash, path.size()));
     }
     
     @Override
@@ -652,6 +656,34 @@ public class PathServiceImpl implements PathService {
         
         // Fallback: if we didn't find ground in search range, use original highest block or hint
         return Math.min(yHint, highestY);
+    }
+    
+    /**
+     * Compute deterministic hash of path coordinates for seed testing (T026d).
+     * Uses MD5 hash of ordered (x,y,z) coordinates to verify reproducibility.
+     */
+    private String computePathHash(List<PathNode> path) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            StringBuilder coordString = new StringBuilder();
+            
+            for (PathNode node : path) {
+                coordString.append(node.x).append(",")
+                          .append(node.y).append(",")
+                          .append(node.z).append(";");
+            }
+            
+            byte[] hash = md.digest(coordString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return "hash-error";
+        }
     }
     
     /**

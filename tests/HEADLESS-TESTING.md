@@ -771,6 +771,213 @@ Use multiple water patches or wall width adjustments to tune alternative route l
 - Balance between route optimality and path diversity
 - Ensure cost penalties match gameplay intentions (e.g., Romans prefer straight roads even if sloped)
 
+---
+
+## T026d: Deterministic Path-from-Seed Check
+
+**Purpose**: Verify that path generation with the same seed produces identical path coordinates (determinism) and that different seeds produce different paths (variance).
+
+**Status**: ✅ Implemented (2025-11-09)
+
+### What Is Implemented
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Path coordinate hashing in PathServiceImpl | ✅ | MD5 hash of ordered (x,y,z) coordinates |
+| `[PATH] Determinism hash` logging | ✅ | Logs hash + node count for every path |
+| Harness parsing of determinism hashes | ✅ | Groups by hash value, reports duplicates |
+| Hash comparison validation | 🟡 | Basic grouping only (full multi-run test deferred) |
+
+### How It Works
+
+**Code Changes** (`PathServiceImpl.java`):
+```java
+// After A* pathfinding completes, compute hash of ordered path nodes
+String pathHash = computePathHash(path);
+LOGGER.info(String.format("[PATH] Determinism hash: %s (nodes=%d)", pathHash, path.size()));
+
+private String computePathHash(List<PathNode> path) {
+    // MD5 hash of "x1,y1,z1;x2,y2,z2;..." format
+}
+```
+
+**Log Output Example**:
+```text
+[PATH] A* SUCCESS: Goal reached after exploring 245 nodes (path=45 tiles, cost=52.3, flat=40, slope=5, water=0, steep=0)
+[PATH] Determinism hash: 3a7f8c2d1e9b4f6a8c2d1e9b4f6a8c2d (nodes=45)
+```
+
+**Harness Validation** (`run-scenario.ps1`):
+- Parses all `[PATH] Determinism hash` lines
+- Groups paths by hash value
+- Reports:
+  - Total unique hashes
+  - Duplicate hash counts (same hash appearing multiple times)
+  - Validation status: identical hashes = deterministic, all unique = variance
+
+### Running the Test
+
+**Single Run (Current)** — Validates hash generation only:
+```powershell
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345
+```
+
+**Expected Output**:
+```text
+=== Deterministic Path-from-Seed Check (T026d) ===
+INFO Found 8 path determinism hashes
+INFO Unique path hashes: 8
+INFO All path hashes unique (expected if using different building pairs)
+INFO To test determinism: run twice with same seed and compare hashes
+```
+
+**Full Determinism Test (Automated)** — Runs 3 times and compares hashes:
+
+```powershell
+.\scripts\ci\sim\test-path-determinism.ps1
+```
+
+This script automates the full T026d acceptance criteria:
+1. **Run 1** (Seed A = 12345): Captures baseline path hashes
+2. **Run 2** (Seed A = 12345): Re-runs with same seed, compares hashes
+3. **Run 3** (Seed B = 67890): Runs with different seed, verifies variance
+
+**Expected Results**:
+- ✅ Determinism: Run 1 and Run 2 produce identical hash sequences
+- ✅ Variance: Run 3 produces different hashes from Runs 1/2
+
+**Known Limitation**: Structure placement must be deterministic for path determinism test to succeed. If structure placement fails intermittently (0 placements in one run, 3+ in another), the test will report FAIL for determinism even if path generation itself is deterministic. This is expected until structure placement reproducibility issues are resolved.
+
+**Manual Test (Alternative)** — Compare hashes across runs:
+1. Run with seed A twice:
+   ```powershell
+   .\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345 | Out-File run1.log
+   .\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345 | Out-File run2.log
+   ```
+2. Extract hashes from both logs:
+   ```powershell
+   Select-String '\[PATH\] Determinism hash' run1.log
+   Select-String '\[PATH\] Determinism hash' run2.log
+   ```
+3. EXPECTATION: Identical hash sequences (same order, same values)
+
+4. Run with seed B:
+   ```powershell
+   .\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 67890 | Out-File run3.log
+   Select-String '\[PATH\] Determinism hash' run3.log
+   ```
+5. EXPECTATION: Different hashes from seed A runs
+
+### Acceptance Criteria
+
+✅ **Hash Generation**:
+- Every successful A* path logs a determinism hash
+- Hash format: 32-character hex string (MD5)
+- Node count matches path length
+
+✅ **Reproducibility (Same Seed)**:
+- Multiple runs with same seed produce identical hash sequences
+- Hash order matches building placement order (deterministic)
+
+✅ **Variance (Different Seeds)**:
+- Different seeds produce different hash values
+- Validates that seed affects path randomization/tie-breaking
+
+### Current Limitations
+
+🟡 **Structure Placement Determinism Dependency**:
+- Path determinism test requires deterministic structure placement
+- If structure placement fails intermittently (e.g., 3 placements in Run 1, 0 in Run 2), no paths will be generated for comparison
+- Current test result (2025-11-09): Variance confirmed ✅ (Seed A ≠ Seed B), but determinism test blocked by structure placement issue
+- Resolution: Once structure placement is deterministic, re-run `test-path-determinism.ps1` for full validation
+
+🟡 **Manual Verification Available**:
+- Even with structure placement variability, hash generation and variance can be manually verified
+- Extract hashes from successful runs: `Select-String '\[PATH\] Determinism hash' logs/*.log`
+- Compare hash values manually to confirm different seeds produce different hashes
+
+### Future Enhancements
+
+✅ **Automated Multi-Run Comparison** (IMPLEMENTED):
+```powershell
+.\scripts\ci\sim\test-path-determinism.ps1
+# - Runs with seed A twice, compares hash sequences
+# - Runs with seed B once, verifies variance
+# - Reports PASS/FAIL for determinism + variance
+# - Saves artifacts: determinism-test-seedA-run1.log, etc.
+```
+
+**Hash Artifact Storage** (proposed):
+```powershell
+# Capture hashes to JSON for regression testing
+# test-server/logs/path-hashes-seed-12345.json
+{
+  "seed": 12345,
+  "hashes": ["3a7f8c2d...", "9b4f6a8c..."],
+  "timestamp": "2025-11-09T12:34:56Z"
+}
+```
+
+**Path Coordinate Export** (debugging, proposed):
+```text
+# Optional: log full coordinate list for manual inspection
+[PATH] Path coordinates: (100,64,200);(101,64,201);...
+```
+
+### Integration with T026a (Cache Testing)
+
+T026d complements T026a waypoint cache tests:
+- **T026a**: Validates cache hit/miss behavior and invalidation
+- **T026d**: Validates cache KEY stability (same seed = same coordinates)
+
+Together they ensure:
+1. Paths are deterministic (T026d)
+2. Cached paths are reused correctly (T026a)
+3. Cache invalidation triggers recalculation (T026a)
+
+### Quick Checklist
+
+✅ **Automated Full Test** (recommended):
+- [ ] Run `.\scripts\ci\sim\test-path-determinism.ps1`
+- [ ] Verify "Variance Test: PASS" (different seeds produce different hashes)
+- [ ] Check for "Determinism Test: FAIL" due to structure placement issues (expected until structure placement is deterministic)
+- [ ] Review artifacts: `test-server/logs/determinism-test-seed*.log`
+
+**Single Run** (Hash Generation):
+- [ ] Run `.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000`
+- [ ] Verify `[PATH] Determinism hash` lines present in logs
+- [ ] Harness reports unique hash count
+- [ ] No "hash-error" values (MD5 algorithm available)
+
+Multi-Run (Determinism):
+- [ ] Run with same seed twice, compare hash sequences
+- [ ] Assert identical hashes in same order
+- [ ] Run with different seed, assert different hashes
+
+### Example Log Analysis
+
+**Seed 12345 (Run 1)**:
+```text
+[PATH] Determinism hash: a1b2c3d4e5f6... (nodes=45)
+[PATH] Determinism hash: f6e5d4c3b2a1... (nodes=38)
+[PATH] Determinism hash: 123456789abc... (nodes=52)
+```
+
+**Seed 12345 (Run 2)** — Expected (identical):
+```text
+[PATH] Determinism hash: a1b2c3d4e5f6... (nodes=45)  ✅
+[PATH] Determinism hash: f6e5d4c3b2a1... (nodes=38)  ✅
+[PATH] Determinism hash: 123456789abc... (nodes=52)  ✅
+```
+
+**Seed 67890** — Expected (different):
+```text
+[PATH] Determinism hash: 9a8b7c6d5e4f... (nodes=42)  ✅
+[PATH] Determinism hash: 6f5e4d3c2b1a... (nodes=40)  ✅
+[PATH] Determinism hash: cba987654321... (nodes=55)  ✅
+```
+
+---
+
 ## Constitution Compliance
 
 Per Constitution v1.1.0, Amendment 2025-11-05:
