@@ -26,22 +26,319 @@ param(
     [string]$ServerDir = "test-server",
     [int]$Ticks = 6000,
     [long]$Seed = 12345,
-    [string]$SnapshotFile = "state-snapshot.json"
+    [string]$SnapshotFile = "state-snapshot.json",
+    [string]$JavaPath = "",
+    [bool]$AutoInstallPaper = $true,
+    [bool]$AutoInstallJdk = $true,
+    [string]$PaperVersion = "1.21.8",
+    [int]$PaperBuild = 60
 )
 
 $ErrorActionPreference = "Stop"
+function Invoke-ExeCapture($exe, $arguments) {
+    # Run executable and capture stdout+stderr robustly via Start-Process and temp files
+    $out = [System.IO.Path]::GetTempFileName()
+    $err = [System.IO.Path]::GetTempFileName()
+    try {
+        Start-Process -FilePath $exe -ArgumentList $arguments -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err -Wait -ErrorAction Stop | Out-Null
+        $stdout = Get-Content $out -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content $err -Raw -ErrorAction SilentlyContinue
+        $combined = ($stdout + "`n" + $stderr).Trim()
+        return $combined
+    } catch {
+        Write-Host "! Invoke-ExeCapture failed running: $exe $arguments" -ForegroundColor Yellow
+        Write-Host "! Exception: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    } finally {
+        Remove-Item -Path $out -ErrorAction SilentlyContinue
+        Remove-Item -Path $err -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-JavaMajor {
+    param([string]$exe)
+    $info = Invoke-ExeCapture $exe '-version'
+    if ($null -eq $info) { return $null }
+    if ($info -match 'version "?([0-9]+)') {
+        return [int]$Matches[1]
+    }
+    return $null
+}
+
+function Resolve-JavaExe {
+    param([string]$preferred)
+
+    # 1) If explicit path provided, prefer it. Accept either the java.exe file or the JDK root folder.
+    if ($preferred) {
+        # Trim surrounding whitespace and remove surrounding quotes if present
+        $preferred = $preferred.Trim()
+        if ((($preferred.StartsWith('"') -and $preferred.EndsWith('"')) -or ($preferred.StartsWith("'") -and $preferred.EndsWith("'")))) {
+            $preferred = $preferred.Substring(1, $preferred.Length - 2)
+        }
+
+        # If the provided path points directly to an executable
+        if (Test-Path $preferred -PathType Leaf) {
+            $p = (Resolve-Path $preferred).Path
+            $maj = Get-JavaMajor $p
+            if ($maj -and $maj -ge 21) { return $p }
+            # Strict mode: reject non-21 java even if file exists
+            $ver = Invoke-ExeCapture $p '-version'
+            if ($null -eq $ver) { $ver = "(failed to execute java -version)" }
+            Write-Host "X Provided java executable does not meet Java 21 requirement: $p" -ForegroundColor Red
+            Write-Host "  java -version output:" -ForegroundColor Red
+            Write-Host "$ver" -ForegroundColor Red
+            return $null
+        }
+
+        # If the provided path is a folder, check bin\java.exe inside it
+        $candidateBin = Join-Path $preferred 'bin\java.exe'
+        if (Test-Path $candidateBin) {
+            $p2 = (Resolve-Path $candidateBin).Path
+            $maj2 = Get-JavaMajor $p2
+            if ($maj2 -and $maj2 -ge 21) { return $p2 }
+            # Strict mode: reject non-21 java even if file exists in folder
+            $ver2 = Invoke-ExeCapture $p2 '-version'
+            if ($null -eq $ver2) { $ver2 = "(failed to execute java -version)" }
+            Write-Host "X Provided JDK folder contains java.exe but it does not meet Java 21 requirement: $p2" -ForegroundColor Red
+            Write-Host "  java -version output:" -ForegroundColor Red
+            Write-Host "$ver2" -ForegroundColor Red
+            return $null
+        }
+
+        Write-Host "! Provided JavaPath not found: $preferred" -ForegroundColor Yellow
+    }
+
+    # 2) Check JAVA_HOME
+    if ($env:JAVA_HOME) {
+        $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
+        if (Test-Path $candidate) {
+            $maj = Get-JavaMajor $candidate
+            if ($maj -and $maj -ge 21) { return (Resolve-Path $candidate).Path }
+        }
+    }
+
+    # 3) Use where.exe to find java executables on PATH
+    try {
+        $where = & where.exe java 2>$null
+        if ($where) {
+            foreach ($w in $where) {
+                $wTrim = $w.Trim()
+                $maj = Get-JavaMajor $wTrim
+                if ($maj -and $maj -ge 21) { return $wTrim }
+            }
+        }
+    } catch {
+    }
+
+    # 4) Search common Program Files locations for JDK 21 installs
+    $programPaths = @(
+        "C:\\Program Files\\Java",
+        "C:\\Program Files\\AdoptOpenJDK",
+        "C:\\Program Files\\Eclipse Adoptium",
+        "C:\\Program Files (x86)\\Java"
+    )
+    foreach ($root in $programPaths) {
+        if (Test-Path $root) {
+            Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.Name -match 'jdk-?21|openjdk-?21|temurin-?21') {
+                    $cand = Join-Path $_.FullName 'bin\java.exe'
+                    if (Test-Path $cand -PathType Leaf) {
+                        $majc = Get-JavaMajor $cand
+                        if ($majc -and $majc -ge 21) { return (Resolve-Path $cand).Path }
+                    }
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
+function Install-TempJdk {
+    param([int]$majorVersion)
+
+    Write-Host "Attempting to download a temporary JDK $majorVersion (Adoptium)..." -ForegroundColor Cyan
+    $timestamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $workDir = Join-Path $env:TEMP "spec-billineire-jdk-$majorVersion-$timestamp"
+    New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+
+    # Adoptium API binary endpoint (will redirect to a binary URL)
+    $apiUrl = "https://api.adoptium.net/v3/binary/latest/$majorVersion/ga/windows/x64/jdk/hotspot/normal/adoptium?project=jdk"
+    $zipPath = Join-Path $env:TEMP ("temurin-jdk-{0}-{1}.zip" -f $majorVersion, $timestamp)
+
+    try {
+        Invoke-WebRequest -Uri $apiUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "! Failed to download JDK from Adoptium: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+
+    try {
+        Expand-Archive -Path $zipPath -DestinationPath $workDir -Force
+    } catch {
+        Write-Host "! Failed to extract downloaded JDK: $($_.Exception.Message)" -ForegroundColor Yellow
+        Remove-Item -Path $zipPath -ErrorAction SilentlyContinue
+        return $null
+    }
+
+    Remove-Item -Path $zipPath -ErrorAction SilentlyContinue
+
+    # Find java.exe inside the extracted folder
+    $javaFile = Get-ChildItem -Path $workDir -Filter java.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $javaFile) {
+        Write-Host "! java.exe not found in the extracted JDK" -ForegroundColor Yellow
+        return $null
+    }
+
+    $javaPath = $javaFile.FullName
+    Write-Host "Downloaded temporary JDK available at: $javaPath" -ForegroundColor Green
+    return $javaPath
+}
 
 Write-Host "=== Village Overhaul CI: N-Tick Scenario ===" -ForegroundColor Cyan
 Write-Host "Ticks: $Ticks" -ForegroundColor White
 Write-Host "Seed: $Seed" -ForegroundColor White
 Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
-# Check server exists
-if (!(Test-Path "$ServerDir/paper.jar")) {
-    Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
-    Write-Host "  Run run-headless-paper.ps1 first" -ForegroundColor Yellow
-    exit 1
+# Heuristic: user may have passed an unquoted JavaPath into the first positional parameter (ServerDir)
+# e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
+if ($ServerDir -and $ServerDir -match 'Program Files' -and ($ServerDir -match 'Java' -or $ServerDir -match 'jdk')) {
+    $possibleJavaBin = Join-Path $ServerDir 'bin\java.exe'
+    if (Test-Path $possibleJavaBin) {
+        Write-Host "! Detected a Java install path passed as ServerDir. Interpreting this as -JavaPath and restoring ServerDir to default 'test-server'." -ForegroundColor Yellow
+        Write-Host "  Tip: Quote paths that contain spaces, e.g. -JavaPath 'C:\\Program Files\\Java\\jdk-21'" -ForegroundColor Yellow
+        $JavaPath = $ServerDir
+        $ServerDir = 'test-server'
+    }
 }
+
+# Check server exists
+    function Install-PaperJar {
+        param([string]$serverDir, [string]$version, [int]$build = 0)
+
+        Write-Host "Attempting to download Paper $version into $serverDir/paper.jar" -ForegroundColor Cyan
+        # If a specific build was requested, use it. Otherwise query the API for the latest build.
+        if ($build -gt 0) {
+            $buildNum = $build
+        } else {
+            $apiBuildsUrl = "https://api.papermc.io/v2/projects/paper/versions/$version/builds"
+            try {
+                $builds = Invoke-RestMethod -Uri $apiBuildsUrl -UseBasicParsing -ErrorAction Stop
+            } catch {
+                Write-Host "X Failed to query PaperMC API: $($_.Exception.Message)" -ForegroundColor Red
+                return $false
+            }
+
+            if (-not $builds.builds -or $builds.builds.Count -eq 0) {
+                Write-Host "X No builds found for Paper version $version" -ForegroundColor Red
+                return $false
+            }
+
+            # Pick highest build number
+            $latest = $builds.builds | Sort-Object -Property build -Descending | Select-Object -First 1
+            $buildNum = $latest.build
+        }
+
+        try {
+            $buildInfo = Invoke-RestMethod -Uri ("https://api.papermc.io/v2/projects/paper/versions/$version/builds/$buildNum") -UseBasicParsing -ErrorAction Stop
+            $filename = $buildInfo.downloads.application.name
+        } catch {
+            Write-Host "X Failed to get build info for build $buildNum" -ForegroundColor Red
+            Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+
+        $downloadUrl = "https://api.papermc.io/v2/projects/paper/versions/$version/builds/$buildNum/downloads/$filename"
+
+        # Backup existing jar if present
+        $dest = Join-Path $serverDir 'paper.jar'
+        if (Test-Path $dest) {
+            $bak = Join-Path $serverDir ("paper.jar.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))")
+            Write-Host "Backing up existing paper.jar to $bak" -ForegroundColor Yellow
+            Move-Item -Path $dest -Destination $bak -Force -ErrorAction SilentlyContinue
+        }
+
+        try {
+            Write-Host "Downloading $downloadUrl ..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $dest -UseBasicParsing -ErrorAction Stop
+            if ((Get-Item $dest).Length -gt 1024) {
+                Write-Host "OK Downloaded Paper to $dest" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "X Downloaded file appears too small" -ForegroundColor Red
+                return $false
+            }
+        } catch {
+            Write-Host "X Failed to download Paper jar: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    function Install-WorldEdit {
+        param([string]$serverDir)
+
+        $pluginsDir = Join-Path $serverDir "plugins"
+        # Prefer WorldEdit 7.3.17 (Hangar/Paper build) which provides PAPER classifier jars
+        $worldEditJar = Join-Path $pluginsDir "worldedit-bukkit-7.3.17.jar"
+
+        # Check if WorldEdit is already installed
+        if (Test-Path $worldEditJar) {
+            Write-Host "WorldEdit already installed: $worldEditJar" -ForegroundColor Green
+            return $true
+        }
+
+        Write-Host "WorldEdit not found, downloading from Hangar CDN..." -ForegroundColor Yellow
+
+        # Create plugins directory if it doesn't exist
+        if (!(Test-Path $pluginsDir)) {
+            New-Item -ItemType Directory -Path $pluginsDir -Force | Out-Null
+        }
+
+        # Hangar CDN download URL for WorldEdit 7.3.17 (PAPER classifier)
+        # Format: https://hangarcdn.papermc.io/plugins/EngineHub/WorldEdit/versions/7.3.17/PAPER/worldedit-bukkit-7.3.17.jar
+        $worldEditUrl = "https://hangarcdn.papermc.io/plugins/EngineHub/WorldEdit/versions/7.3.17/PAPER/worldedit-bukkit-7.3.17.jar"
+
+        try {
+            Write-Host "Downloading WorldEdit 7.3.17 from Hangar CDN ..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $worldEditUrl -OutFile $worldEditJar -UseBasicParsing -ErrorAction Stop
+
+            if ((Get-Item $worldEditJar).Length -gt 1024) {
+                Write-Host "OK Downloaded WorldEdit to $worldEditJar" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "X Downloaded file appears too small" -ForegroundColor Red
+                Remove-Item -Path $worldEditJar -ErrorAction SilentlyContinue
+                return $false
+            }
+        } catch {
+            Write-Host "X Failed to download WorldEdit: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "! Plugin will fall back to procedural structures" -ForegroundColor Yellow
+            return $false
+        }
+    }
+
+if (!(Test-Path "$ServerDir/paper.jar") -or (Get-Item "$ServerDir/paper.jar").Length -lt 1024) {
+    if ($AutoInstallPaper) {
+        Write-Host "Paper jar missing or too small; attempting automatic download (Paper $PaperVersion)" -ForegroundColor Yellow
+        if (-not (Install-PaperJar -serverDir $ServerDir -version $PaperVersion)) {
+            Write-Host "X Automatic Paper download failed" -ForegroundColor Red
+            Write-Host "  Please place a valid paper.jar in $ServerDir and re-run" -ForegroundColor Yellow
+            exit 1
+        }
+    } else {
+        Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
+        Write-Host "  Run run-headless-paper.ps1 first or enable -AutoInstallPaper" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# Ensure WorldEdit is installed (optional but recommended for schematic support)
+Write-Host "Checking for WorldEdit dependency..." -ForegroundColor Cyan
+if (-not (Install-WorldEdit -serverDir $ServerDir)) {
+    Write-Host "! WorldEdit installation failed or skipped" -ForegroundColor Yellow
+    Write-Host "  Plugin will use procedural structures as fallback" -ForegroundColor Yellow
+}
+
 
 # Create a startup script that will run the server for N ticks
 $startupScript = @"
@@ -80,7 +377,17 @@ $serverLogPath = Join-Path (Resolve-Path $ServerDir) "server.log"
 $serverErrorLogPath = Join-Path (Resolve-Path $ServerDir) "server-error.log"
 
 # Start the server in the background with timeout
-$serverProcess = Start-Process -FilePath "java" `
+# Resolve java executable (prefer Java 21)
+$javaExe = Resolve-JavaExe -preferred $JavaPath
+if (-not $javaExe) {
+    Write-Host "X Java 21 not found on PATH, JAVA_HOME, or common install locations." -ForegroundColor Red
+    Write-Host "  Please install a JDK 21 and re-run, or provide -JavaPath 'C:\\path\\to\\java.exe'" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
+
+$serverProcess = Start-Process -FilePath $javaExe `
     -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
                   "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
     -WorkingDirectory $ServerDir `
@@ -108,27 +415,98 @@ while ($elapsed -lt $maxWaitSeconds) {
     # Check if process died early
     if ($serverProcess.HasExited) {
         Write-Host "X Server process exited unexpectedly" -ForegroundColor Red
+        # Combine server.log and server-error.log for diagnostic scanning
+        $serverLogContent = ""
         if (Test-Path "$ServerDir/server.log") {
             Write-Host "Server log:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server.log" -Tail 50
+            $serverLogContent += Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+            $serverLogContent += "`n"
         }
         if (Test-Path "$ServerDir/server-error.log") {
             Write-Host "Server errors:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server-error.log" -Tail 50
+            $serverLogContent += Get-Content "$ServerDir/server-error.log" -Raw -ErrorAction SilentlyContinue
+            $serverLogContent += "`n"
         }
+
+        # Look for UnsupportedClassVersionError to provide actionable guidance
+        if ($serverLogContent -and ($serverLogContent -match 'UnsupportedClassVersionError' -or $serverLogContent -match 'class file version ([0-9]+)')) {
+            Write-Host "" -ForegroundColor Yellow
+            # Use plain ASCII hyphen to avoid non-ASCII punctuation issues
+            Write-Host "Detected UnsupportedClassVersionError - Paper appears to require a newer Java runtime." -ForegroundColor Yellow
+            if ($serverLogContent -match 'class file version ([0-9]+)') {
+                $cfv = [int]$Matches[1]
+                switch ($cfv) {
+                    61 { $requiredJava = 17 }
+                    62 { $requiredJava = 18 }
+                    63 { $requiredJava = 19 }
+                    64 { $requiredJava = 20 }
+                    65 { $requiredJava = 21 }
+                    default { $requiredJava = "unknown (class file version $cfv)" }
+                }
+                Write-Host "Paper appears compiled for class file version $cfv (Java $requiredJava)." -ForegroundColor Yellow
+            }
+
+            Write-Host "Your configured java executable:" -ForegroundColor Yellow
+            if ($javaExe) {
+                Write-Host "  $javaExe" -ForegroundColor Yellow
+                $verout = Invoke-ExeCapture $javaExe '-version'
+                if ($verout) { Write-Host "  java -version:`n$verout" -ForegroundColor Yellow }
+            } else {
+                Write-Host "  (no java executable resolved)" -ForegroundColor Yellow
+            }
+
+            # Print actionable guidance using simple concatenation and single-quoted path fragments
+            Write-Host ("Action: install or point to the required Java version (e.g., Java " + $requiredJava + " or newer) and re-run.") -ForegroundColor Yellow
+            $examplePath = 'C:\\Program Files\\Java\\jdk-' + $requiredJava + '\\bin\\java.exe'
+            Write-Host ("Example: set JAVA_HOME or pass -JavaPath '" + $examplePath + "'") -ForegroundColor Yellow
+            Write-Host "Or use an older Paper build compatible with Java 21 (e.g., Paper 1.20.x) by passing -PaperVersion 1.20.4" -ForegroundColor Yellow
+        }
+
+        # If enabled, try to auto-download a temporary JDK of the required version and restart the server once
+        if ($AutoInstallJdk -and ($requiredJava -is [int])) {
+            Write-Host "Auto-install JDK is enabled; attempting to download JDK $requiredJava and restart server..." -ForegroundColor Yellow
+            $tempJava = Install-TempJdk -majorVersion $requiredJava
+            if ($tempJava) {
+                Write-Host "Retrying server start using temporary JDK: $tempJava" -ForegroundColor Cyan
+                $javaExe = $tempJava
+                $serverProcess = Start-Process -FilePath $javaExe `
+                    -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
+                                  "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
+                    -WorkingDirectory $ServerDir `
+                    -RedirectStandardOutput $serverLogPath `
+                    -RedirectStandardError $serverErrorLogPath `
+                    -PassThru `
+                    -NoNewWindow
+
+                if ($serverProcess) {
+                    Write-Host "Server process started (PID: $($serverProcess.Id)) with temporary JDK" -ForegroundColor Cyan
+                    # Continue monitoring loop
+                    continue
+                } else {
+                    Write-Host "X Failed to start server using downloaded JDK" -ForegroundColor Red
+                    exit 1
+                }
+            } else {
+                Write-Host "X Automatic JDK download failed; see guidance above" -ForegroundColor Red
+                exit 1
+            }
+        }
+
         exit 1
     }
     
-    if (Test-Path "$ServerDir/server.log") {
+        if (Test-Path "$ServerDir/server.log") {
         $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
-        if ($logContent -match "Done \([\d.]+s\)!") {
+        if ($logContent -match 'Done \([\d.]+s\)!') {
             $serverReady = $true
             Write-Host "OK Server started successfully" -ForegroundColor Green
             break
         }
         
         # Check for common startup issues
-        if ($logContent -match "(?i)(failed|error|exception)") {
+        if ($logContent -match '(?i)(failed|error|exception)') {
             Write-Host "! Potential startup issue detected in logs" -ForegroundColor Yellow
         }
     }
@@ -169,7 +547,32 @@ $totalWaitSeconds = $tickSeconds + 30  # Add 30 second buffer
 
 Write-Host "Running server for $Ticks ticks (approximately $tickSeconds seconds + buffer)..." -ForegroundColor Yellow
 
-Start-Sleep -Seconds $totalWaitSeconds
+# Monitor logs during runtime to detect village generation
+$startTime = Get-Date
+$villageGenDetected = $false
+$elapsed = 0
+
+while ($elapsed -lt $totalWaitSeconds) {
+    Start-Sleep -Seconds 10
+    $elapsed = ((Get-Date) - $startTime).TotalSeconds
+    
+    # Check if server is still running
+    if ($serverProcess.HasExited) {
+        Write-Host "X Server process died during simulation" -ForegroundColor Red
+        break
+    }
+    
+    # Check for village generation progress in logs
+    if ((Test-Path "$ServerDir/server.log") -and !$villageGenDetected) {
+        $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+        if ($logContent -match 'Attempting to seed village' -or $logContent -match '\[STRUCT\]') {
+            $villageGenDetected = $true
+            Write-Host "  Village generation detected in logs" -ForegroundColor Green
+        }
+    }
+    
+    Write-Host "  Simulation progress: $([Math]::Floor($elapsed))/$totalWaitSeconds seconds" -ForegroundColor DarkGray
+}
 
 # Check if server is still running
 if (!$serverProcess.HasExited) {
@@ -207,6 +610,47 @@ if (Test-Path "$ServerDir/server.log") {
     } else {
         Write-Host "X $floatingMatches potential floating/embedded structures detected" -ForegroundColor Red
         Write-Host "! Check logs for validation failures" -ForegroundColor Yellow
+    }
+    
+    # Check path connectivity (US2 acceptance criteria: ≥90%)
+    Write-Host ""
+    Write-Host "=== Path Connectivity Validation ===" -ForegroundColor Cyan
+    
+    $pathCompletePattern = '\[STRUCT\] Path network complete: village=[a-f0-9\-]+, paths=[0-9]+, blocks=[0-9]+, connectivity=([0-9]+\.[0-9]+)%'
+    $pathMatches = [regex]::Matches($logContent, $pathCompletePattern)
+    
+    if ($pathMatches.Count -eq 0) {
+        Write-Host "! No path networks found in logs (paths may not be generated yet)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Path networks detected: $($pathMatches.Count)" -ForegroundColor White
+        
+        $failedVillages = 0
+        $minConnectivity = 100.0
+        $maxConnectivity = 0.0
+        
+        foreach ($match in $pathMatches) {
+            $connectivity = [double]$match.Groups[1].Value
+            
+            if ($connectivity -lt $minConnectivity) {
+                $minConnectivity = $connectivity
+            }
+            if ($connectivity -gt $maxConnectivity) {
+                $maxConnectivity = $connectivity
+            }
+            
+            if ($connectivity -lt 90.0) {
+                $failedVillages++
+                Write-Host "X Village with connectivity $connectivity% (below 90% threshold)" -ForegroundColor Red
+            }
+        }
+        
+        Write-Host "Connectivity range: $minConnectivity% - $maxConnectivity%" -ForegroundColor White
+        
+        if ($failedVillages -eq 0) {
+            Write-Host "OK All villages meet 90% path connectivity threshold" -ForegroundColor Green
+        } else {
+            Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
+        }
     }
 }
 
@@ -246,6 +690,26 @@ if (Test-Path "$ServerDir/server.log") {
     $structBegin = ([regex]::Matches($logContent, '\[STRUCT\] Begin placement')).Count
     if ($structBegin -gt 0) {
         Write-Host "OK Structure placement validation passed" -ForegroundColor Green
+    }
+    
+    # Add path connectivity summary
+    $pathCompletePattern = '\[STRUCT\] Path network complete: village=[a-f0-9\-]+, paths=[0-9]+, blocks=[0-9]+, connectivity=([0-9]+\.[0-9]+)%'
+    $pathMatches = [regex]::Matches($logContent, $pathCompletePattern)
+    
+    if ($pathMatches.Count -gt 0) {
+        $failedVillages = 0
+        foreach ($match in $pathMatches) {
+            $connectivity = [double]$match.Groups[1].Value
+            if ($connectivity -lt 90.0) {
+                $failedVillages++
+            }
+        }
+        
+        if ($failedVillages -eq 0) {
+            Write-Host "OK Path connectivity validation passed" -ForegroundColor Green
+        } else {
+            Write-Host "X Path connectivity validation failed" -ForegroundColor Red
+        }
     }
 }
 

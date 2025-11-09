@@ -80,7 +80,10 @@ public class VillageWorldgenAdapter implements Listener {
             return;
         }
         
+        logger.info("Scheduling async village seeding for world: " + world.getName());
+        
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            logger.info("ASYNC: Starting village terrain search and seeding (this may take 10-60 seconds)...");
             try {
                 trySeed(world);
             } catch (Exception e) {
@@ -137,8 +140,32 @@ public class VillageWorldgenAdapter implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> {
             // Use shared metadata store (T012l: singleton for cross-session enforcement)
             VillageMetadataStore metadataStore = plugin.getMetadataStore();
-            VillagePlacementServiceImpl placementService = new VillagePlacementServiceImpl(
-                plugin, metadataStore, plugin.getCultureService());
+            
+            VillagePlacementServiceImpl placementService;
+            try {
+                placementService = new VillagePlacementServiceImpl(
+                    plugin, metadataStore, plugin.getCultureService());
+            } catch (NoClassDefFoundError e) {
+                logger.severe("X Failed to initialize VillagePlacementServiceImpl: " + e.getMessage());
+                logger.severe("  This usually means WorldEdit is not installed or incompatible");
+                logger.severe("  Falling back to procedural structures without WorldEdit/FAWE");
+                
+                // Try fallback constructor without WorldEdit dependency
+                try {
+                    placementService = new VillagePlacementServiceImpl(metadataStore, plugin.getCultureService());
+                    logger.info("OK Using fallback placement service with procedural structures");
+                } catch (Exception ex) {
+                    logger.severe("X Failed to initialize fallback placement service: " + ex.getMessage());
+                    ex.printStackTrace();
+                    
+                    // Ultimate fallback: just place marker pillar
+                    logger.warning("X Placing marker pillar only for village '" + villageName + "'");
+                    safeSet(world, baseX, finalY, baseZ, Material.STONE);
+                    safeSet(world, baseX, finalY + 1, baseZ, Material.STONE);
+                    safeSet(world, baseX, finalY + 2, baseZ, Material.TORCH);
+                    return;
+                }
+            }
             
             // Generate village structures using placement service
             // Note: Village registration now happens INSIDE placeVillage() after spacing validation
@@ -179,11 +206,15 @@ public class VillageWorldgenAdapter implements Listener {
      */
     private Location findSuitableVillageLocation(World world, Location start, int maxRadius) {
         logger.info("Searching for suitable village terrain within " + maxRadius + " blocks of spawn...");
+        logger.info("  Spawn location: " + start.getBlockX() + ", " + start.getBlockY() + ", " + start.getBlockZ());
         
         int startX = start.getBlockX();
         int startZ = start.getBlockZ();
         int checkRadius = 24; // Check 24 block radius for flatness (reduced from 32)
         int sampleInterval = 24; // Check every 24 blocks in spiral (increased from 16 for speed)
+        
+        int locationsChecked = 0;
+        long searchStartTime = System.currentTimeMillis();
         
         // Spiral search pattern - increased max radius for more opportunities
         for (int radius = 16; radius <= Math.min(maxRadius, 768); radius += sampleInterval) {
@@ -193,15 +224,27 @@ public class VillageWorldgenAdapter implements Listener {
                 int x = startX + (int)(radius * Math.cos(angle));
                 int z = startZ + (int)(radius * Math.sin(angle));
                 
+                locationsChecked++;
+                
                 // Check if this location is suitable
                 if (isTerrainSuitable(world, x, z, checkRadius)) {
                     int y = world.getHighestBlockYAt(x, z);
-                    logger.info("Found suitable terrain at distance " + radius + " blocks: (" + x + ", " + y + ", " + z + ")");
+                    long searchTime = System.currentTimeMillis() - searchStartTime;
+                    logger.info("OK Found suitable terrain after checking " + locationsChecked + " locations in " + searchTime + "ms");
+                    logger.info("   Location: distance=" + radius + " blocks, coords=(" + x + ", " + y + ", " + z + ")");
                     return new Location(world, x, y, z);
                 }
             }
+            
+            // Log progress every 100 blocks of radius to show we're not stuck
+            if (radius % 96 == 0) {
+                long elapsed = System.currentTimeMillis() - searchStartTime;
+                logger.info("  Terrain search progress: radius=" + radius + "/" + maxRadius + ", checked=" + locationsChecked + " locations, elapsed=" + elapsed + "ms");
+            }
         }
         
+        long searchTime = System.currentTimeMillis() - searchStartTime;
+        logger.warning("X No suitable terrain found after checking " + locationsChecked + " locations in " + searchTime + "ms");
         return null;
     }
     
@@ -215,6 +258,16 @@ public class VillageWorldgenAdapter implements Listener {
      * @return true if terrain is suitable
      */
     private boolean isTerrainSuitable(World world, int centerX, int centerZ, int checkRadius) {
+        // CRITICAL: Force chunk loading before terrain checks (async terrain search needs loaded chunks!)
+        // Load a 3x3 chunk area around the center point to ensure terrain is accessible
+        int chunkX = centerX >> 4;
+        int chunkZ = centerZ >> 4;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                world.getChunkAt(chunkX + dx, chunkZ + dz); // Force synchronous chunk load
+            }
+        }
+        
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
         int waterBlocks = 0;

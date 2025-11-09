@@ -9,8 +9,8 @@ Automated headless testing infrastructure for Village Overhaul plugin using Pape
 
 ## Prerequisites
 
-- **Java 17+** (Paper 1.20.4 requirement)
-  - Tested with Java 17 and Java 20
+- **Java 21+** (Paper 1.20.4 requirement)
+  - Tested with Java 21
   - Scripts auto-detect installed Java versions
 - **PowerShell 5.1+** (Windows baseline for CI)
 - **Paper 1.20.4** (auto-downloaded by setup script)
@@ -162,7 +162,7 @@ Helper functions for future bot player simulation (requires additional server-si
              │ 5. Validate results
              ▼
 ┌─────────────────────────────────────────┐
-│  Paper Server (Java 17+)                │
+│  Paper Server (Java 21+)                │
 │  - Village Overhaul Plugin              │
 │  - RCON enabled (port 25575)            │
 │  - Headless mode (--nogui)              │
@@ -233,8 +233,8 @@ Helper functions for future bot player simulation (requires additional server-si
 
 ### "Server failed to initialize"
 - **Cause**: Java version too old
-- **Fix**: Install Java 17+ from https://adoptium.net/
-- Scripts auto-detect Java 17/20 at `C:\Program Files\Java\jdk-XX\`
+- **Fix**: Install Java 21+ from https://adoptium.net/
+- Scripts auto-detect Java 21 at `C:\Program Files\Eclipse Adoptium\jdk-21\`
 
 ### "RCON connection failed"
 - **Cause**: Server not running or RCON not enabled

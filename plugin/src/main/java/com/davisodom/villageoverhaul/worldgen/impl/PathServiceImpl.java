@@ -152,12 +152,13 @@ public class PathServiceImpl implements PathService {
         
         int startX = start.getBlockX();
         int startZ = start.getBlockZ();
-        int startY = findGroundLevel(world, startX, startZ);
+        // Use provided start Y as hint (building entrance level) instead of scanning from world highest block
+        int startY = findGroundLevel(world, startX, startZ, start.getBlockY());
         
         int endX = end.getBlockX();
         int endZ = end.getBlockZ();
         // endY stored for potential future use in 3D pathfinding
-        // int endY = findGroundLevel(world, endX, endZ);
+        // int endY = findGroundLevel(world, endX, endZ, end.getBlockY());
         
         LOGGER.info(String.format("[PATH] A* search start: from (%d,%d,%d) to (%d,%d), distance=%.1f",
                 startX, startY, startZ, endX, endZ, 
@@ -194,8 +195,8 @@ public class PathServiceImpl implements PathService {
                     int neighborX = current.x + dx;
                     int neighborZ = current.z + dz;
                     
-                    // Get height at neighbor position (find ground beneath vegetation)
-                    int neighborY = findGroundLevel(world, neighborX, neighborZ);
+                    // Get height at neighbor position (find ground beneath vegetation, using current Y as hint)
+                    int neighborY = findGroundLevel(world, neighborX, neighborZ, current.y);
                     
                     String neighborKey = neighborX + "," + neighborZ;
                     if (closedSet.contains(neighborKey)) {
@@ -516,7 +517,33 @@ public class PathServiceImpl implements PathService {
      * @param z Z coordinate
      * @return Ground level Y coordinate
      */
-    private int findGroundLevel(World world, int x, int z) {
+    /**
+     * Find ground level at given X,Z coordinates, using a Y hint to avoid scanning through tall buildings.
+     * 
+     * @param world World to search
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @param yHint Y coordinate hint (e.g., building origin/door level) to start search from
+     * @return Y coordinate of solid ground
+     */
+    private int findGroundLevel(World world, int x, int z, int yHint) {
+        // Start by checking the hint level and a few blocks around it
+        for (int yOffset = 0; yOffset <= 3; yOffset++) {
+            int checkY = yHint + yOffset;
+            Block block = world.getBlockAt(x, checkY, z);
+            Material type = block.getType();
+            
+            // If we find solid ground at or slightly above the hint, use it
+            if (type.isSolid() && !type.isAir() && 
+                    type != Material.OAK_LEAVES && type != Material.BIRCH_LEAVES &&
+                    type != Material.SPRUCE_LEAVES && type != Material.JUNGLE_LEAVES &&
+                    type != Material.ACACIA_LEAVES && type != Material.DARK_OAK_LEAVES &&
+                    type != Material.MANGROVE_LEAVES && type != Material.CHERRY_LEAVES) {
+                return checkY;
+            }
+        }
+        
+        // If hint didn't work, fall back to original logic (scan from world highest block)
         int highestY = world.getHighestBlockYAt(x, z);
         Block highestBlock = world.getBlockAt(x, highestY, z);
         Material highestType = highestBlock.getType();
@@ -555,8 +582,8 @@ public class PathServiceImpl implements PathService {
             }
         }
         
-        // Fallback: if we didn't find ground in search range, use original highest block
-        return highestY;
+        // Fallback: if we didn't find ground in search range, use original highest block or hint
+        return Math.min(yHint, highestY);
     }
     
     /**

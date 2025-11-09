@@ -18,7 +18,7 @@ deterministic from world/feature seeds and chunk-gated to respect tick budgets.
 
 ## Technical Context
 
-**Language/Version**: Java 17 (Paper 1.20+); optional Kotlin 1.9 (JVM 17)  
+**Language/Version**: Java 21 (Paper 1.20+); optional Kotlin 1.9 (JVM 21)  
 **Primary Dependencies**: Paper API; WorldEdit API (FAWE if present for performance) for
   structure load/rotate/paste; Adventure API (signage/messages); Jackson/Gson for JSON; WorldGuard
   (optional, placement guards); LuckPerms/Vault present in repo but not required for structure gen  

@@ -28,6 +28,20 @@ validations remain, with minimal unit tests for core algorithms where useful.
 - [X] T003 [P] Create package folders for worldgen services in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/`
 - [X] T004 [P] Create package folders for placement/path services in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/`
 - [X] T005 Ensure CI harness scripts recognize new [STRUCT] logs in `scripts/ci/sim/run-scenario.ps1`
+- [X] T005a [CI] Add WorldEdit auto-download and graceful fallback
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`
+  - Description: Add `Install-WorldEdit` function to automatically download WorldEdit 7.2.19 (compatible with Paper 1.20.4) into `test-server/plugins/`. Add try-catch in VillageWorldgenAdapter to gracefully fall back to procedural structures if WorldEdit fails to load (NoClassDefFoundError). This makes WorldEdit optional but recommended.
+  - Acceptance:
+    - ✅ Script checks for worldedit-bukkit JAR in plugins directory
+    - ✅ Downloads WorldEdit 7.2.19 from BukkitDev if missing (not fatal if fails)
+    - ✅ Verifies downloaded file size >1KB
+    - ✅ Plugin catches NoClassDefFoundError and falls back to procedural structures
+    - ✅ Logs clear warnings when WorldEdit is missing: "Falling back to procedural structures without WorldEdit/FAWE"
+    - ✅ Structure placement succeeds with or without WorldEdit
+  - Notes:
+    - WorldEdit 7.3.x requires Paper 1.20.5+, not compatible with 1.20.4
+    - Fallback uses VillagePlacementServiceImpl(metadataStore, cultureService) constructor
+    - Procedural structures are generated using hardcoded dimensions (roman_house, roman_market, etc.)
 
 ---
 
@@ -290,7 +304,7 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
 - [X] T023 [US2] Implement main building designation logic in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/MainBuildingSelector.java`
 - [X] T024 [US2] Persist mainBuildingId and pathNetwork in `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
 - [X] T025 [US2] Extend test command: `votest generate-paths <village-id>` in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
-- [ ] T026 [US2] Harness assertion for path connectivity ≥ 90% in `scripts/ci/sim/run-scenario.ps1`
+- [X] T026 [US2] Harness assertion for path connectivity ≥ 90% in `scripts/ci/sim/run-scenario.ps1`
 - [ ] T026a [US2] Add tests for pathfinding concurrency cap and waypoint cache invalidation in `scripts/ci/sim/run-scenario.ps1`
 - [ ] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
 - [ ] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`.

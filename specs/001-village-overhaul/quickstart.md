@@ -3,7 +3,7 @@
 This guide runs the plugin on a Paper server with Java clients and Bedrock cross-play via Geyser/Floodgate.
 
 ## Prerequisites
-- Java 17 installed
+- Java 21 installed
 - Paper 1.20+ server files
 - Plugins: Geyser, Floodgate, Vault, (optional) LuckPerms, WorldGuard, FAWE, Spark
 - This plugin JAR (to be built later)
