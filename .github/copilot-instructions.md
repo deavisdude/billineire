@@ -41,4 +41,6 @@ When completing a task, if a playtest makes sense, suggest it to the user along 
 Do not leave TODO comments in code snippets. Instead create a complete User Story/Task(s) for any unfinished work.
 
 ./specs/ and ./specift/memory/ are living documents. When requirements change, update these files accordingly. Start with the constitution, then work your way down the spec-kit hierarchy to specification files, the plan files, and finally the tasks files.
+
+When running tests and targeting specific behaviors (like village generation), if logs indicate the event happens well before the end of the test (and we are effectively waiting for nothing): run the test with fewer ticks the next time.
 <!-- MANUAL ADDITIONS END -->

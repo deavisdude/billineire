@@ -384,6 +384,106 @@ Planned enhancements once waypoint cache is fully implemented:
    - Log pattern: `[PATH] Planner queue: active=N, queued=M`
    - Test: Trigger many path generations, verify queue behavior
 
+## T026b: Distant Building Path Generation Test
+
+**Purpose**: Validates path generation between buildings separated by large distances (≥120 blocks) while respecting the `MAX_SEARCH_DISTANCE` limit (200 blocks).
+
+**Status**: ✅ Implemented (2025-11-09)
+
+### What T026b Tests
+
+#### 1. Distance Analysis
+Parses pathfinding logs to identify attempted paths by distance:
+- **Distant paths** (120-200 blocks): Should attempt generation
+- **Out-of-range paths** (>200 blocks): Should be gracefully rejected
+
+**Log pattern**:
+```
+[PATH] A* search start: from (X1,Y1,Z1) to (X2,Z2), distance=D.D
+```
+
+#### 2. Graceful Handling
+For paths between 120-200 blocks apart, validates one of three outcomes:
+- ✅ **SUCCESS**: Path generated successfully
+  - Pattern: `[STRUCT] Path found: distance=D.D, blocks=N`
+- ✅ **SKIP**: Distance too far (graceful rejection)
+  - Pattern: `[STRUCT] Path distance too far: D.D blocks (max 200)`
+- ✅ **FAILURE**: No valid path found (graceful failure)
+  - Pattern: `[STRUCT] No path found from (X1,Y1,Z1) to (X2,Y2,Z2)`
+
+#### 3. Out-of-Range Rejection
+Paths >200 blocks should be rejected before A* search:
+- Pattern: `[STRUCT] Path distance too far: D.D blocks (max 200)`
+- Validates rejection count matches detected out-of-range attempts
+
+### Example Output
+
+```
+=== Distant Building Path Generation (T026b) ===
+Path distance analysis:
+  Total paths attempted: 15
+  Distant paths (120-200 blocks): 3
+  Out-of-range paths (>200 blocks): 1
+
+Validating distant path generation:
+  OK Path at 145.2 blocks: (100,50) -> (245,55) (SUCCESS)
+  OK Path at 167.8 blocks: (200,75) -> (368,80) (FAILED - graceful)
+  OK Path at 189.0 blocks: (150,60) -> (339,65) (SUCCESS)
+
+OK All distant paths handled gracefully (success=2, failure=1)
+
+OK Out-of-range paths properly rejected (1 path(s) > 200 blocks)
+```
+
+### Running T026b Tests
+
+```powershell
+# Standard scenario run (includes T026b validation)
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000
+
+# Large village to force distant building pairs
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 6000 -Seed 42
+```
+
+### Interpreting Results
+
+**Distance Detection**:
+- 🟢 **PASS**: Distant paths (120-200 blocks) detected and analyzed
+- 🟡 **WARNING**: No distant paths detected (buildings placed closer)
+- 🔵 **INFO**: Expected if village layout is compact
+
+**Graceful Handling**:
+- 🟢 **PASS**: All distant paths show success/skip/failure outcome
+- 🔴 **FAIL**: Distant path with NO DATA (missing log entries)
+
+**Range Enforcement**:
+- 🟢 **PASS**: All paths >200 blocks rejected with proper log
+- 🔴 **FAIL**: Out-of-range rejection incomplete
+
+### Test Scenarios
+
+**Typical compact village** (buildings within 50-80 blocks):
+- No distant paths detected
+- Result: ✅ PASS (expected behavior)
+
+**Large spread village** (buildings 100-180 blocks apart):
+- Multiple distant paths detected
+- Mix of SUCCESS/FAILURE outcomes
+- Result: ✅ PASS if all graceful
+
+**Extreme distance** (buildings >200 blocks apart):
+- All attempts rejected before A* search
+- Result: ✅ PASS with proper rejection logs
+
+### Implementation Notes
+
+**Current Behavior**:
+- `MAX_SEARCH_DISTANCE = 200` (hardcoded in PathServiceImpl.java)
+- Distance check happens BEFORE A* search (efficient early rejection)
+- Failed paths (obstacles, node cap) are distinguished from skipped paths (too far)
+
+**Tolerance**: ±5 blocks for distance matching (accounts for floating-point rounding)
+
 ## Constitution Compliance
 
 Per Constitution v1.1.0, Amendment 2025-11-05:

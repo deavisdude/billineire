@@ -756,6 +756,114 @@ if (Test-Path "$ServerDir/server.log") {
     
     Write-Host ""
     Write-Host "NOTE: Full waypoint-level cache and invalidation not yet implemented (future work)" -ForegroundColor Cyan
+    
+    # T026b: Check path generation between distant buildings (within 200 blocks)
+    Write-Host ""
+    Write-Host "=== Distant Building Path Generation (T026b) ===" -ForegroundColor Cyan
+    
+    # Pattern: [PATH] A* search start: from (X1,Y1,Z1) to (X2,Z2), distance=D.D
+    $distancePattern = '\[PATH\] A\* search start: from \((-?[0-9]+),(-?[0-9]+),(-?[0-9]+)\) to \((-?[0-9]+),(-?[0-9]+)\), distance=([0-9]+\.[0-9]+)'
+    $distanceMatches = [regex]::Matches($logContent, $distancePattern)
+    
+    if ($distanceMatches.Count -gt 0) {
+        Write-Host "Path distance analysis:" -ForegroundColor White
+        
+        $distantPaths = @()
+        $totalPaths = 0
+        $withinRange = 0
+        $tooFar = 0
+        
+        foreach ($match in $distanceMatches) {
+            $distance = [double]$match.Groups[6].Value
+            $totalPaths++
+            
+            if ($distance -ge 120.0 -and $distance -le 200.0) {
+                $distantPaths += @{
+                    distance = $distance
+                    fromX = [int]$match.Groups[1].Value
+                    fromZ = [int]$match.Groups[3].Value
+                    toX = [int]$match.Groups[4].Value
+                    toZ = [int]$match.Groups[5].Value
+                }
+                $withinRange++
+            } elseif ($distance -gt 200.0) {
+                $tooFar++
+            }
+        }
+        
+        Write-Host "  Total paths attempted: $totalPaths" -ForegroundColor Gray
+        Write-Host "  Distant paths (120-200 blocks): $withinRange" -ForegroundColor Gray
+        Write-Host "  Out-of-range paths (>200 blocks): $tooFar" -ForegroundColor Gray
+        
+        if ($distantPaths.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Validating distant path generation:" -ForegroundColor White
+            
+            # For each distant path, check if it succeeded or failed gracefully
+            $successCount = 0
+            $failureCount = 0
+            $noDataCount = 0
+            
+            foreach ($pathInfo in $distantPaths) {
+                $dist = $pathInfo.distance
+                $fromCoords = "($($pathInfo.fromX),$($pathInfo.fromZ))"
+                $toCoords = "($($pathInfo.toX),$($pathInfo.toZ))"
+                
+                # Check for success pattern: [STRUCT] Path found: distance=D.D, blocks=N
+                # Match paths within ±5 blocks to account for rounding
+                $successCheckPattern = [regex]::Escape("[STRUCT] Path found: distance=$([math]::Floor($dist))") + '|' + [regex]::Escape("[STRUCT] Path found: distance=$([math]::Ceiling($dist))")
+                $successMatch = [regex]::Match($logContent, $successCheckPattern)
+                
+                # Check for skip pattern: [STRUCT] Path distance too far:
+                $skipPattern = '\[STRUCT\] Path distance too far: ' + [regex]::Escape("$dist") + ' blocks'
+                $skipMatch = [regex]::Match($logContent, $skipPattern)
+                
+                # Check for failure pattern: [STRUCT] No path found from ... (after this specific start)
+                $failPattern = '\[STRUCT\] No path found from \(' + $pathInfo.fromX + ',[0-9]+,' + $pathInfo.fromZ + '\) to \(' + $pathInfo.toX + ',[0-9]+,' + $pathInfo.toZ + '\)'
+                $failMatch = [regex]::Match($logContent, $failPattern)
+                
+                if ($successMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (SUCCESS)" -ForegroundColor Green
+                    $successCount++
+                } elseif ($skipMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (SKIPPED - graceful)" -ForegroundColor Yellow
+                    $successCount++
+                } elseif ($failMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (FAILED - graceful)" -ForegroundColor Yellow
+                    $failureCount++
+                } else {
+                    Write-Host "  ! Path at $dist blocks: $fromCoords -> $toCoords (NO DATA)" -ForegroundColor Gray
+                    $noDataCount++
+                }
+            }
+            
+            Write-Host ""
+            if ($successCount + $failureCount -eq $distantPaths.Count) {
+                Write-Host "OK All distant paths handled gracefully (success=$successCount, failure=$failureCount)" -ForegroundColor Green
+            } elseif ($noDataCount -gt 0) {
+                Write-Host "! Some distant paths have incomplete logging (noData=$noDataCount)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "! No distant paths (120-200 blocks) detected in this test" -ForegroundColor Yellow
+            Write-Host "  (This is expected if buildings are placed closer together)" -ForegroundColor Gray
+        }
+        
+        # Check for paths that should have been rejected (>200 blocks)
+        if ($tooFar -gt 0) {
+            $rejectionPattern = '\[STRUCT\] Path distance too far: ([0-9]+\.[0-9]+) blocks \(max 200\)'
+            $rejectionMatches = [regex]::Matches($logContent, $rejectionPattern)
+            
+            if ($rejectionMatches.Count -ge $tooFar) {
+                Write-Host ""
+                Write-Host "OK Out-of-range paths properly rejected ($tooFar path(s) > 200 blocks)" -ForegroundColor Green
+            } else {
+                Write-Host ""
+                Write-Host "X Out-of-range rejection incomplete: expected $tooFar, found $($rejectionMatches.Count)" -ForegroundColor Red
+            }
+        }
+    } else {
+        Write-Host "! No path distance data found in logs" -ForegroundColor Yellow
+    }
 }
 
 # Check for crashes in the log

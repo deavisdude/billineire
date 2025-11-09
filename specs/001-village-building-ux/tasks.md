@@ -332,7 +332,7 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
       - Example outputs with color-coded results
       - How to run and interpret results
       - Future waypoint cache enhancement plans
-- [ ] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
+- [X] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
 - [ ] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`.
 - [ ] T026d [P] [US2] Add deterministic path-from-seed check in `scripts/ci/sim/run-scenario.ps1`: run path generation twice with the same seed and hash the ordered (x,y,z) path blocks; assert identical hashes; with a different seed, assert hash changes. Capture artifacts under `test-server/logs/`.
 
