@@ -2,7 +2,13 @@ package com.davisodom.villageoverhaul.villages;
 
 import com.davisodom.villageoverhaul.model.Building;
 import com.davisodom.villageoverhaul.model.PathNetwork;
+import com.davisodom.villageoverhaul.persistence.JsonStore;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
@@ -21,6 +27,7 @@ public class VillageMetadataStore {
     private final Plugin plugin;
     private final Logger logger;
     private final File storageDir;
+    private final JsonStore jsonStore;
     
     // In-memory caches (thread-safe)
     private final Map<UUID, VillageMetadata> villages = new ConcurrentHashMap<>();
@@ -32,6 +39,7 @@ public class VillageMetadataStore {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.storageDir = new File(plugin.getDataFolder(), "villages");
+        this.jsonStore = new JsonStore(storageDir, logger);
         
         if (!storageDir.exists()) {
             storageDir.mkdirs();
@@ -133,18 +141,124 @@ public class VillageMetadataStore {
     
     /**
      * Save all village data to disk (JSON format).
+     * Persists mainBuildingId and pathNetwork for each village.
      */
     public void saveAll() throws IOException {
-        // TODO: Implement JSON serialization in future tasks
-        logger.fine(String.format("[STRUCT] Saved %d villages to disk", villages.size()));
+        int savedCount = 0;
+        
+        for (VillageMetadata metadata : villages.values()) {
+            UUID villageId = metadata.getVillageId();
+            
+            // Create persistence DTO
+            VillageDataDTO dto = new VillageDataDTO();
+            dto.villageId = villageId.toString();
+            dto.cultureId = metadata.getCultureId();
+            dto.worldName = metadata.getOrigin().getWorld().getName();
+            dto.originX = metadata.getOrigin().getBlockX();
+            dto.originY = metadata.getOrigin().getBlockY();
+            dto.originZ = metadata.getOrigin().getBlockZ();
+            dto.seed = metadata.getSeed();
+            dto.createdTimestamp = metadata.getCreatedTimestamp();
+            
+            // Persist mainBuildingId
+            dto.mainBuildingId = mainBuildings.containsKey(villageId) 
+                ? mainBuildings.get(villageId).toString() 
+                : null;
+            
+            // Persist pathNetwork
+            if (pathNetworks.containsKey(villageId)) {
+                PathNetwork network = pathNetworks.get(villageId);
+                dto.pathNetwork = convertPathNetworkToDTO(network);
+            }
+            
+            // Persist border
+            VillageBorder border = metadata.getBorder();
+            dto.border = new BorderDTO(
+                border.getMinX(), border.getMaxX(),
+                border.getMinZ(), border.getMaxZ()
+            );
+            dto.lastBorderUpdateTick = metadata.getLastBorderUpdateTick();
+            
+            // Save to individual village file
+            String filename = "village_" + villageId + ".json";
+            jsonStore.saveJson(filename, dto, JsonStore.SCHEMA_VERSION);
+            savedCount++;
+        }
+        
+        logger.info(String.format("[STRUCT] Saved %d villages to disk", savedCount));
     }
     
     /**
      * Load all village data from disk.
      */
     public void loadAll() throws IOException {
-        // TODO: Implement JSON deserialization in future tasks
-        logger.fine("[STRUCT] Loaded village data from disk");
+        File[] files = storageDir.listFiles((dir, name) -> 
+            name.startsWith("village_") && name.endsWith(".json"));
+        
+        if (files == null || files.length == 0) {
+            logger.info("[STRUCT] No village data files found");
+            return;
+        }
+        
+        int loadedCount = 0;
+        
+        for (File file : files) {
+            try {
+                VillageDataDTO dto = jsonStore.loadJson(file.getName(), VillageDataDTO.class);
+                if (dto == null) continue;
+                
+                UUID villageId = UUID.fromString(dto.villageId);
+                World world = Bukkit.getWorld(dto.worldName);
+                
+                if (world == null) {
+                    logger.warning(String.format(
+                        "[STRUCT] Skipping village %s: world '%s' not loaded", 
+                        villageId, dto.worldName));
+                    continue;
+                }
+                
+                Location origin = new Location(world, dto.originX, dto.originY, dto.originZ);
+                
+                // Restore village metadata
+                VillageMetadata metadata = new VillageMetadata(
+                    villageId, dto.cultureId, origin, dto.seed, dto.createdTimestamp);
+                
+                // Restore border
+                if (dto.border != null) {
+                    metadata.getBorder().expand(
+                        dto.border.minX, dto.border.maxX,
+                        dto.border.minZ, dto.border.maxZ
+                    );
+                    metadata.lastBorderUpdateTick = dto.lastBorderUpdateTick;
+                }
+                
+                villages.put(villageId, metadata);
+                villageBuildings.put(villageId, new ArrayList<>());
+                
+                // Restore mainBuildingId
+                if (dto.mainBuildingId != null) {
+                    mainBuildings.put(villageId, UUID.fromString(dto.mainBuildingId));
+                    logger.fine(String.format("[STRUCT] Restored main building %s for village %s",
+                        dto.mainBuildingId, villageId));
+                }
+                
+                // Restore pathNetwork
+                if (dto.pathNetwork != null) {
+                    PathNetwork network = convertPathNetworkFromDTO(dto.pathNetwork, villageId, world);
+                    pathNetworks.put(villageId, network);
+                    logger.fine(String.format("[STRUCT] Restored path network for village %s (%d segments)",
+                        villageId, network.getSegments().size()));
+                }
+                
+                loadedCount++;
+                
+            } catch (Exception e) {
+                logger.warning(String.format("[STRUCT] Failed to load %s: %s", 
+                    file.getName(), e.getMessage()));
+            }
+        }
+        
+        logger.info(String.format("[STRUCT] Loaded %d villages from disk", loadedCount));
     }
     
     /**
@@ -301,6 +415,134 @@ public class VillageMetadataStore {
                 minX, maxX, minZ, maxZ, getWidth(), getDepth());
         }
     }
+    
+    /**
+     * Conversion methods for PathNetwork serialization.
+     */
+    private PathNetworkDTO convertPathNetworkToDTO(PathNetwork network) {
+        PathNetworkDTO dto = new PathNetworkDTO();
+        dto.villageId = network.getVillageId().toString();
+        dto.generatedTimestamp = network.getGeneratedTimestamp();
+        dto.totalBlocksPlaced = network.getTotalBlocksPlaced();
+        dto.segments = new ArrayList<>();
+        
+        for (PathNetwork.PathSegment segment : network.getSegments()) {
+            PathSegmentDTO segmentDTO = new PathSegmentDTO();
+            segmentDTO.startX = segment.getStart().getBlockX();
+            segmentDTO.startY = segment.getStart().getBlockY();
+            segmentDTO.startZ = segment.getStart().getBlockZ();
+            segmentDTO.endX = segment.getEnd().getBlockX();
+            segmentDTO.endY = segment.getEnd().getBlockY();
+            segmentDTO.endZ = segment.getEnd().getBlockZ();
+            segmentDTO.blockCount = segment.getBlocks().size();
+            
+            // Store block locations (for reconstruction)
+            segmentDTO.blocks = new ArrayList<>();
+            for (Block block : segment.getBlocks()) {
+                BlockLocationDTO blockDTO = new BlockLocationDTO();
+                blockDTO.x = block.getX();
+                blockDTO.y = block.getY();
+                blockDTO.z = block.getZ();
+                segmentDTO.blocks.add(blockDTO);
+            }
+            
+            dto.segments.add(segmentDTO);
+        }
+        
+        return dto;
+    }
+    
+    private PathNetwork convertPathNetworkFromDTO(PathNetworkDTO dto, UUID villageId, World world) {
+        PathNetwork.Builder builder = new PathNetwork.Builder()
+            .villageId(villageId)
+            .generatedTimestamp(dto.generatedTimestamp);
+        
+        for (PathSegmentDTO segmentDTO : dto.segments) {
+            Location start = new Location(world, segmentDTO.startX, segmentDTO.startY, segmentDTO.startZ);
+            Location end = new Location(world, segmentDTO.endX, segmentDTO.endY, segmentDTO.endZ);
+            
+            List<Block> blocks = new ArrayList<>();
+            for (BlockLocationDTO blockDTO : segmentDTO.blocks) {
+                blocks.add(world.getBlockAt(blockDTO.x, blockDTO.y, blockDTO.z));
+            }
+            
+            PathNetwork.PathSegment segment = new PathNetwork.PathSegment(start, end, blocks);
+            builder.addSegment(segment);
+        }
+        
+        return builder.build();
+    }
+    
+    /**
+     * Data Transfer Objects for JSON persistence.
+     */
+    public static class VillageDataDTO {
+        public String villageId;
+        public String cultureId;
+        public String worldName;
+        public int originX;
+        public int originY;
+        public int originZ;
+        public long seed;
+        public long createdTimestamp;
+        public String mainBuildingId; // nullable
+        public PathNetworkDTO pathNetwork; // nullable
+        public BorderDTO border;
+        public long lastBorderUpdateTick;
+        
+        public VillageDataDTO() {} // For Jackson
+    }
+    
+    public static class PathNetworkDTO {
+        public String villageId;
+        public long generatedTimestamp;
+        public int totalBlocksPlaced;
+        public List<PathSegmentDTO> segments;
+        
+        public PathNetworkDTO() {} // For Jackson
+    }
+    
+    public static class PathSegmentDTO {
+        public int startX;
+        public int startY;
+        public int startZ;
+        public int endX;
+        public int endY;
+        public int endZ;
+        public int blockCount;
+        public List<BlockLocationDTO> blocks;
+        
+        public PathSegmentDTO() {} // For Jackson
+    }
+    
+    public static class BlockLocationDTO {
+        public int x;
+        public int y;
+        public int z;
+        
+        public BlockLocationDTO() {} // For Jackson
+    }
+    
+    public static class BorderDTO {
+        public int minX;
+        public int maxX;
+        public int minZ;
+        public int maxZ;
+        
+        public BorderDTO() {} // For Jackson
+        
+        @JsonCreator
+        public BorderDTO(
+            @JsonProperty("minX") int minX, 
+            @JsonProperty("maxX") int maxX,
+            @JsonProperty("minZ") int minZ, 
+            @JsonProperty("maxZ") int maxZ
+        ) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+        }
+    }
 }
-
 
