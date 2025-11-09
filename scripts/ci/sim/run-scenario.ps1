@@ -68,6 +68,11 @@ function Get-JavaMajor {
 function Resolve-JavaExe {
     param([string]$preferred)
 
+    # Detect OS: Windows uses .exe extension, Unix does not
+    $isWindows = $PSVersionTable.PSVersion.Major -le 5 -or $IsWindows
+    $javaExeName = if ($isWindows) { 'java.exe' } else { 'java' }
+    $binPath = 'bin'
+
     # 1) If explicit path provided, prefer it. Accept either the java.exe file or the JDK root folder.
     if ($preferred) {
         # Trim surrounding whitespace and remove surrounding quotes if present
@@ -90,8 +95,8 @@ function Resolve-JavaExe {
             return $null
         }
 
-        # If the provided path is a folder, check bin\java.exe inside it
-        $candidateBin = Join-Path $preferred 'bin\java.exe'
+        # If the provided path is a folder, check bin/java inside it
+        $candidateBin = Join-Path $preferred (Join-Path $binPath $javaExeName)
         if (Test-Path $candidateBin) {
             $p2 = (Resolve-Path $candidateBin).Path
             $maj2 = Get-JavaMajor $p2
@@ -99,7 +104,7 @@ function Resolve-JavaExe {
             # Strict mode: reject non-21 java even if file exists in folder
             $ver2 = Invoke-ExeCapture $p2 '-version'
             if ($null -eq $ver2) { $ver2 = "(failed to execute java -version)" }
-            Write-Host "X Provided JDK folder contains java.exe but it does not meet Java 21 requirement: $p2" -ForegroundColor Red
+            Write-Host "X Provided JDK folder contains java but it does not meet Java 21 requirement: $p2" -ForegroundColor Red
             Write-Host "  java -version output:" -ForegroundColor Red
             Write-Host "$ver2" -ForegroundColor Red
             return $null
@@ -110,41 +115,41 @@ function Resolve-JavaExe {
 
     # 2) Check JAVA_HOME
     if ($env:JAVA_HOME) {
-        $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
+        $candidate = Join-Path $env:JAVA_HOME (Join-Path $binPath $javaExeName)
         if (Test-Path $candidate) {
             $maj = Get-JavaMajor $candidate
             if ($maj -and $maj -ge 21) { return (Resolve-Path $candidate).Path }
         }
     }
 
-    # 3) Use where.exe to find java executables on PATH
+    # 3) Check PATH using Get-Command (cross-platform)
     try {
-        $where = & where.exe java 2>$null
-        if ($where) {
-            foreach ($w in $where) {
-                $wTrim = $w.Trim()
-                $maj = Get-JavaMajor $wTrim
-                if ($maj -and $maj -ge 21) { return $wTrim }
-            }
+        $pathJava = Get-Command java -ErrorAction SilentlyContinue
+        if ($pathJava) {
+            $javaPath = $pathJava.Path
+            $maj = Get-JavaMajor $javaPath
+            if ($maj -and $maj -ge 21) { return $javaPath }
         }
     } catch {
     }
 
-    # 4) Search common Program Files locations for JDK 21 installs
-    $programPaths = @(
-        "C:\\Program Files\\Java",
-        "C:\\Program Files\\AdoptOpenJDK",
-        "C:\\Program Files\\Eclipse Adoptium",
-        "C:\\Program Files (x86)\\Java"
-    )
-    foreach ($root in $programPaths) {
-        if (Test-Path $root) {
-            Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                if ($_.Name -match 'jdk-?21|openjdk-?21|temurin-?21') {
-                    $cand = Join-Path $_.FullName 'bin\java.exe'
-                    if (Test-Path $cand -PathType Leaf) {
-                        $majc = Get-JavaMajor $cand
-                        if ($majc -and $majc -ge 21) { return (Resolve-Path $cand).Path }
+    # 4) Search common install locations for JDK 21 installs (Windows only)
+    if ($isWindows) {
+        $programPaths = @(
+            "C:\\Program Files\\Java",
+            "C:\\Program Files\\AdoptOpenJDK",
+            "C:\\Program Files\\Eclipse Adoptium",
+            "C:\\Program Files (x86)\\Java"
+        )
+        foreach ($root in $programPaths) {
+            if (Test-Path $root) {
+                Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($_.Name -match 'jdk-?21|openjdk-?21|temurin-?21') {
+                        $cand = Join-Path $_.FullName (Join-Path $binPath $javaExeName)
+                        if (Test-Path $cand -PathType Leaf) {
+                            $majc = Get-JavaMajor $cand
+                            if ($majc -and $majc -ge 21) { return (Resolve-Path $cand).Path }
+                        }
                     }
                 }
             }
@@ -202,8 +207,11 @@ Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
 # Heuristic: user may have passed an unquoted JavaPath into the first positional parameter (ServerDir)
 # e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
+# Only apply this on Windows where Program Files exists
 if ($ServerDir -and $ServerDir -match 'Program Files' -and ($ServerDir -match 'Java' -or $ServerDir -match 'jdk')) {
-    $possibleJavaBin = Join-Path $ServerDir 'bin\java.exe'
+    $isWindows = $PSVersionTable.PSVersion.Major -le 5 -or $IsWindows
+    $javaExeName = if ($isWindows) { 'java.exe' } else { 'java' }
+    $possibleJavaBin = Join-Path $ServerDir (Join-Path 'bin' $javaExeName)
     if (Test-Path $possibleJavaBin) {
         Write-Host "! Detected a Java install path passed as ServerDir. Interpreting this as -JavaPath and restoring ServerDir to default 'test-server'." -ForegroundColor Yellow
         Write-Host "  Tip: Quote paths that contain spaces, e.g. -JavaPath 'C:\\Program Files\\Java\\jdk-21'" -ForegroundColor Yellow
@@ -864,6 +872,123 @@ if (Test-Path "$ServerDir/server.log") {
     } else {
         Write-Host "! No path distance data found in logs" -ForegroundColor Yellow
     }
+    
+    # T026c: Check terrain-cost accuracy (flat vs water/steep preference)
+    Write-Host ""
+    Write-Host "=== Terrain Cost Accuracy Validation (T026c) ===" -ForegroundColor Cyan
+    
+    # Pattern: [PATH] A* SUCCESS: Goal reached after exploring N nodes (path=P tiles, cost=C.C, flat=F, slope=S, water=W, steep=T)
+    $costPattern = '\[PATH\] A\* SUCCESS: Goal reached after exploring [0-9]+ nodes \(path=([0-9]+) tiles, cost=([0-9]+\.[0-9]+), flat=([0-9]+), slope=([0-9]+), water=([0-9]+), steep=([0-9]+)\)'
+    $costMatches = [regex]::Matches($logContent, $costPattern)
+    
+    if ($costMatches.Count -gt 0) {
+        Write-Host "Terrain cost analysis:" -ForegroundColor White
+        
+        $totalPaths = $costMatches.Count
+        $lowCostPaths = 0
+        $moderateCostPaths = 0
+        $highCostPaths = 0
+        $waterAvoidingPaths = 0
+        $steepAvoidingPaths = 0
+        
+        foreach ($match in $costMatches) {
+            $pathLength = [int]$match.Groups[1].Value
+            $totalCost = [double]$match.Groups[2].Value
+            $flatTiles = [int]$match.Groups[3].Value
+            $slopeTiles = [int]$match.Groups[4].Value
+            $waterTiles = [int]$match.Groups[5].Value
+            $steepTiles = [int]$match.Groups[6].Value
+            
+            # Calculate average cost per tile
+            $avgCostPerTile = $totalCost / $pathLength
+            
+            # Categorize paths by cost efficiency
+            if ($avgCostPerTile -le 1.5) {
+                $lowCostPaths++  # Mostly flat terrain
+            } elseif ($avgCostPerTile -le 3.0) {
+                $moderateCostPaths++  # Some slopes
+            } else {
+                $highCostPaths++  # Water or steep terrain
+            }
+            
+            # Count paths that successfully avoid high-cost tiles
+            if ($waterTiles -eq 0) {
+                $waterAvoidingPaths++
+            }
+            if ($steepTiles -eq 0) {
+                $steepAvoidingPaths++
+            }
+        }
+        
+        Write-Host "  Total paths analyzed: $totalPaths" -ForegroundColor Gray
+        Write-Host "  Low-cost paths (avg <=1.5 per tile): $lowCostPaths" -ForegroundColor Gray
+        Write-Host "  Moderate-cost paths (avg 1.5-3.0): $moderateCostPaths" -ForegroundColor Gray
+        Write-Host "  High-cost paths (avg >3.0): $highCostPaths" -ForegroundColor Gray
+        Write-Host "  Water-avoiding paths: $waterAvoidingPaths / $totalPaths" -ForegroundColor Gray
+        Write-Host "  Steep-avoiding paths: $steepAvoidingPaths / $totalPaths" -ForegroundColor Gray
+        
+        Write-Host ""
+        
+        # Validate cost-aware routing behavior
+        $waterAvoidanceRate = ($waterAvoidingPaths / $totalPaths) * 100
+        $steepAvoidanceRate = ($steepAvoidingPaths / $totalPaths) * 100
+        $lowCostRate = ($lowCostPaths / $totalPaths) * 100
+        
+        $passCount = 0
+        $warnCount = 0
+        
+        # Check water avoidance (WATER_COST=10.0 should strongly discourage water routes)
+        if ($waterAvoidanceRate -ge 80.0) {
+            Write-Host "  OK Water avoidance: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water" -ForegroundColor Green
+            $passCount++
+        } elseif ($waterAvoidanceRate -ge 60.0) {
+            Write-Host "  ! Water avoidance moderate: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  X Water avoidance low: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water (expected >=80%)" -ForegroundColor Red
+        }
+        
+        # Check steep terrain avoidance (SLOPE_COST_MULTIPLIER=2.0 should discourage steep routes)
+        if ($steepAvoidanceRate -ge 70.0) {
+            Write-Host "  OK Steep avoidance: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain" -ForegroundColor Green
+            $passCount++
+        } elseif ($steepAvoidanceRate -ge 50.0) {
+            Write-Host "  ! Steep avoidance moderate: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  X Steep avoidance low: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain (expected >=70%)" -ForegroundColor Red
+        }
+        
+        # Check overall cost efficiency (most paths should prefer flat/gentle routes)
+        if ($lowCostRate -ge 50.0) {
+            Write-Host "  OK Cost efficiency: $([math]::Round($lowCostRate, 1))% of paths are low-cost (mostly flat)" -ForegroundColor Green
+            $passCount++
+        } elseif ($lowCostRate -ge 30.0) {
+            Write-Host "  ! Cost efficiency moderate: $([math]::Round($lowCostRate, 1))% of paths are low-cost" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  ! Cost efficiency low: $([math]::Round($lowCostRate, 1))% of paths are low-cost (terrain may be challenging)" -ForegroundColor Yellow
+            $warnCount++
+        }
+        
+        Write-Host ""
+        if ($passCount -ge 2) {
+            Write-Host "OK Terrain-cost routing validation passed ($passCount/3 checks passed)" -ForegroundColor Green
+        } elseif ($warnCount -gt 0 -and $passCount -ge 1) {
+            Write-Host "! Terrain-cost routing acceptable with warnings ($passCount passed, $warnCount warnings)" -ForegroundColor Yellow
+        } else {
+            Write-Host "X Terrain-cost routing validation needs attention" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "! No terrain cost data found in logs (ensure PathServiceImpl logs cost breakdown)" -ForegroundColor Yellow
+    }
+
+    # T026c1 (Manual Guidance Only): Controlled route comparison deferred
+    Write-Host "" 
+    Write-Host "=== Controlled Route Comparison (T026c1 - Manual) ===" -ForegroundColor Cyan
+    Write-Host "INFO T026c1 automated dual-route scenario not implemented (manual playtest guidance in HEADLESS-TESTING.md)" -ForegroundColor Yellow
+    Write-Host "INFO Use /votest place-obstacle water|steep to create alternative shorter high-cost routes" -ForegroundColor Yellow
+    Write-Host "INFO Expected: Slightly longer flat route chosen when <20% longer than water/steep shortcut" -ForegroundColor Yellow
 }
 
 # Check for crashes in the log

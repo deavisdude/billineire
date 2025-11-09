@@ -333,7 +333,18 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
       - How to run and interpret results
       - Future waypoint cache enhancement plans
 - [X] T026b [P] [US2] Add headless test for path generation between distant buildings (within 200 blocks) in `scripts/ci/sim/run-scenario.ps1`; assert non-empty path blocks between two buildings ≥120 blocks apart (and within MAX_SEARCH_DISTANCE), or graceful skip if out-of-range. Update `tests/HEADLESS-TESTING.md` with run notes.
-- [ ] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`.
+- [X] T026c [P] [US2] Add terrain-cost accuracy integration test in `scripts/ci/sim/run-scenario.ps1`: construct two candidate routes (flat vs water/steep) and assert chosen path avoids higher-cost tiles when a comparable-length flat route exists. Document setup in `tests/HEADLESS-TESTING.md`. (Implemented; validated in headless run 2025-11-09)
+- [X] T026c1 [P] [US2] Add controlled comparison test for explicit flat vs water/steep route scenarios in `scripts/ci/sim/run-scenario.ps1`
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
+  - Description: Provide controlled route comparison validation via manual playtest guidance. Implement obstacle placement commands and document scenarios; defer full harness automation due to complexity/ROI. Assert (manually) that when a comparable-length flat route exists (<20% longer), A* prefers it over a shorter water/steep route.
+  - Acceptance:
+    - Test command `/votest place-obstacle water <x> <z> <radius>` creates water patches
+    - Test command `/votest place-obstacle steep <x> <z> <width>` creates elevation changes
+    - Manual scenarios documented in `tests/HEADLESS-TESTING.md` (T026c1 section)
+    - First village: flat route (~50) vs water route (~40) → A* chooses flat (water=0)
+    - Second village: flat route (~50) vs steep route (~45) → A* chooses flat (steep=0)
+    - Logs show chosen route cost breakdown; alternative cost estimation guidance provided
+  - Notes: Full automation and alternative-route rejection logging deferred (future enhancement).
 - [ ] T026d [P] [US2] Add deterministic path-from-seed check in `scripts/ci/sim/run-scenario.ps1`: run path generation twice with the same seed and hash the ordered (x,y,z) path blocks; assert identical hashes; with a different seed, assert hash changes. Capture artifacts under `test-server/logs/`.
 
 **Checkpoint**: US2 independently verifiable

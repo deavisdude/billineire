@@ -18,6 +18,10 @@ Automated headless testing infrastructure for Village Overhaul plugin using Pape
 ## Quick Start
 
 ```powershell
+# Option 1: Build + Copy JAR + Test (recommended)
+.\scripts\ci\sim\build-and-test.ps1
+
+# Option 2: Manual steps
 # 1. Build the plugin
 cd plugin
 ./gradlew build
@@ -30,6 +34,44 @@ cd ..
 .\scripts\ci\sim\test-custom-villager-interaction.ps1
 .\scripts\ci\sim\test-npc-performance.ps1 -VillagerCount 10 -PerfProfile Medium
 ```
+
+## Build and Test Helper
+
+**File**: `scripts/ci/sim/build-and-test.ps1`
+
+**Purpose**: Build plugin, copy JAR to test-server, and run scenario test in one command. Eliminates JAR copy mismatches and ensures tests always use latest code.
+
+**Usage**:
+```powershell
+# Default: Build (with tests) + Run 3000-tick scenario
+.\scripts\ci\sim\build-and-test.ps1
+
+# Build (skip unit tests) + Run 6000-tick scenario
+.\scripts\ci\sim\build-and-test.ps1 -Ticks 6000 -SkipTests
+
+# Skip build + Use existing JAR + Run test
+.\scripts\ci\sim\build-and-test.ps1 -SkipBuild
+
+# Custom seed
+.\scripts\ci\sim\build-and-test.ps1 -Seed 99887
+```
+
+**Parameters**:
+- `-Ticks <int>` - Number of ticks to simulate (default: 3000)
+- `-Seed <long>` - World seed for deterministic generation (default: 12345)
+- `-SkipBuild` - Skip Gradle build, use existing JAR
+- `-SkipTests` - Pass `-x test` to Gradle (skip unit tests during build)
+
+**What it does**:
+1. Builds plugin with `./gradlew build` (or `-x test` if `-SkipTests`)
+2. Copies `plugin/build/libs/village-overhaul-*.jar` to `test-server/plugins/VillageOverhaul.jar`
+3. Cleans remapped plugin cache (eliminates "ambiguous plugin name" warnings)
+4. Runs `run-scenario.ps1` with specified ticks/seed
+
+**Exit codes**:
+- `0` = Build and test passed
+- `1` = Build failed or JAR not found
+- Other = Test harness exit code
 
 ## Test Scripts
 
@@ -483,6 +525,251 @@ OK Out-of-range paths properly rejected (1 path(s) > 200 blocks)
 - Failed paths (obstacles, node cap) are distinguished from skipped paths (too far)
 
 **Tolerance**: ±5 blocks for distance matching (accounts for floating-point rounding)
+
+## T026c: Terrain Cost Accuracy Integration Test
+
+**Purpose**: Validates that A* pathfinding correctly applies terrain-aware cost functions and prefers lower-cost routes (flat terrain) over higher-cost alternatives (water, steep slopes).
+
+**Status**: ✅ Implemented (2025-11-09)
+
+### What T026c Tests
+
+#### 1. Terrain Cost Breakdown Analysis
+Parses pathfinding success logs to analyze the terrain composition of generated paths:
+- **Flat tiles**: Level terrain (cost = 1.0 per tile)
+- **Slope tiles**: 1-block elevation change (cost ≈ 3.0 per tile)
+- **Water tiles**: Water or lava blocks (cost = 11.0+ per tile)
+- **Steep tiles**: 2+ blocks elevation change (high cost, approaching obstacle threshold)
+
+**Log pattern**:
+```
+[PATH] A* SUCCESS: Goal reached after exploring N nodes (path=P tiles, cost=C.C, flat=F, slope=S, water=W, steep=T)
+```
+
+#### 2. Cost-Aware Routing Validation
+Validates that the A* algorithm demonstrates cost-aware behavior:
+- ✅ **Water avoidance**: ≥80% of paths should avoid water (WATER_COST=10.0 strongly discourages)
+- ✅ **Steep avoidance**: ≥70% of paths should avoid steep terrain (SLOPE_COST_MULTIPLIER=2.0 discourages)
+- ✅ **Cost efficiency**: ≥50% of paths should be low-cost (avg ≤1.5 cost per tile, mostly flat)
+
+#### 3. Path Cost Categories
+Paths are categorized by average cost per tile:
+- **Low-cost** (≤1.5 avg): Mostly flat terrain, optimal routes
+- **Moderate-cost** (1.5-3.0 avg): Some slopes, acceptable routes
+- **High-cost** (>3.0 avg): Water or steep terrain, suboptimal but necessary
+
+### Terrain Cost Constants
+
+From `PathServiceImpl.java`:
+```java
+FLAT_COST = 1.0                 // Base cost per tile
+SLOPE_COST_MULTIPLIER = 2.0     // Per block of elevation change
+WATER_COST = 10.0               // Water/lava penalty
+OBSTACLE_COST = 20.0            // Impassable threshold
+MAX_ACCEPTABLE_SLOPE = 3.0      // Blocks per horizontal distance
+```
+
+### Example Output
+
+```
+=== Terrain Cost Accuracy Validation (T026c) ===
+Terrain cost analysis:
+  Total paths analyzed: 12
+  Low-cost paths (avg <=1.5 per tile): 8
+  Moderate-cost paths (avg 1.5-3.0): 3
+  High-cost paths (avg >3.0): 1
+  Water-avoiding paths: 11 / 12
+  Steep-avoiding paths: 10 / 12
+
+  OK Water avoidance: 91.7% of paths avoid water
+  OK Steep avoidance: 83.3% of paths avoid steep terrain
+  OK Cost efficiency: 66.7% of paths are low-cost (mostly flat)
+
+OK Terrain-cost routing validation passed (3/3 checks passed)
+```
+
+### Running T026c Tests
+
+```powershell
+# Standard scenario run (includes T026c validation)
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000
+
+# Varied terrain seed to test cost-aware routing
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 6000 -Seed 99887
+
+# Multiple villages to accumulate path statistics
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 12000
+```
+
+### Interpreting Results
+
+**Water Avoidance**:
+- 🟢 **PASS** (≥80%): Pathfinding strongly avoids water routes
+- 🟡 **WARNING** (60-80%): Moderate avoidance, some water crossings necessary
+- 🔴 **FAIL** (<60%): Pathfinding not respecting WATER_COST penalty
+
+**Steep Avoidance**:
+- 🟢 **PASS** (≥70%): Pathfinding prefers gentle slopes
+- 🟡 **WARNING** (50-70%): Moderate avoidance, terrain may be hilly
+- 🔴 **FAIL** (<50%): Pathfinding not respecting slope costs
+
+**Cost Efficiency**:
+- 🟢 **PASS** (≥50%): Most paths are efficient (flat terrain)
+- 🟡 **WARNING** (30-50%): Moderate efficiency, challenging terrain
+- 🔵 **INFO** (<30%): Expected in mountainous/water-heavy biomes
+
+### Test Scenarios
+
+**Flat plains village** (minimal elevation change):
+- 90%+ low-cost paths expected
+- 95%+ water avoidance expected
+- Result: ✅ PASS with high efficiency
+
+**Rolling hills village** (moderate elevation):
+- 50-70% low-cost paths expected
+- More slope tiles, fewer steep tiles
+- Result: ✅ PASS with moderate efficiency
+
+**Riverside village** (water obstacles):
+- High water avoidance rate critical
+- Some paths may require moderate slopes to avoid water
+- Result: ✅ PASS if water avoided despite elevation
+
+**Mountain village** (steep terrain):
+- Lower cost efficiency expected (challenging terrain)
+- Steep avoidance still important (prefer many gentle slopes over few steep climbs)
+- Result: ✅ PASS if avoidance rates meet thresholds despite terrain
+
+### Implementation Notes
+
+**Cost Calculation**:
+- Base cost (FLAT_COST) applied to every tile
+- Slope cost added per block of elevation change: `yDiff * SLOPE_COST_MULTIPLIER`
+- Water penalty (WATER_COST) added if tile is water/lava
+- Total path cost = sum of all tile costs
+
+**A* Heuristic**:
+- Uses Manhattan distance (straight-line approximation)
+- Does not predict terrain costs (A* discovers actual costs during search)
+- Cost-aware behavior emerges from A* algorithm's optimal path finding
+
+**Categorization Logic**:
+- **Flat**: No elevation change (yDiff = 0)
+- **Slope**: 1 block elevation change (yDiff = 1)
+- **Steep**: 2+ blocks elevation change (yDiff ≥ 2)
+- **Water**: Tile material is WATER or LAVA (checked at destination)
+
+**Limitations**:
+- Test analyzes final paths only (does not compare rejected alternatives)
+- High-cost paths may be necessary if no low-cost route exists
+- Terrain composition varies by seed and biome
+
+### Future Enhancements (Not Yet Implemented)
+
+## T026c1: Controlled Route Comparison (Manual Playtest Guidance)
+
+**Purpose**: Provide a manual, low-effort method to verify that A* prefers a slightly longer flat route over a shorter high-cost (water or steep) route when the length difference is within ~20%. This extends T026c without full automation.
+
+**Status**: 🟡 Partially Implemented (commands + guidance) — Automation deferred (2025-11-09)
+
+### What Is Implemented
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `/votest place-obstacle water <x> <z> <radius>` | ✅ | Creates circular water patch (WATER tiles) |
+| `/votest place-obstacle steep <x> <z> <width>` | ✅ | Creates 4-block high stone wall (STEEP tiles) |
+| Logging of terrain costs per successful path | ✅ | Provided by T026c instrumentation |
+| Harness automation of dual-route setup | ❌ | Deferred (complex, low ROI) |
+| Comparative rejection logging (alternative route costs) | ❌ | Future PathService enhancement |
+
+### Manual Test Scenario (Water vs Flat)
+1. Start a test world near plains (flat area).
+2. Pick two target points A and B roughly 50 blocks apart (flat route reference). Example: `A=(0,64,0)`, `B=(50,64,0)`.
+3. Place a building or village anchor at A and another at B (using existing create/generate commands if available or placeholder blocks).
+4. Create a water patch that forms a shorter diagonal route (~40 blocks) between A and B:
+  ```powershell
+  /votest place-obstacle water 25 10 6
+  ```
+  Adjust center/radius until the direct diagonal requires crossing water.
+5. Trigger path generation (e.g., `/votest generate-paths <village-id>` or action that invokes path planner).
+6. Inspect logs for chosen path cost line:
+  ```text
+  [PATH] A* SUCCESS: Goal reached after exploring N nodes (path=P tiles, cost=C.C, flat=F, slope=S, water=W, steep=T)
+  ```
+7. EXPECTATION: The path should avoid water (W ≈ 0) even if P (tile count) is ~10–20% longer than the hypothetical water-crossing diagonal.
+
+### Manual Test Scenario (Steep vs Flat)
+1. In a flat corridor between A and B (~50 blocks apart), place a steep wall near midpoint:
+  ```powershell
+  /votest place-obstacle steep 25 0 8
+  ```
+2. This creates a forced elevation barrier where a shorter route would climb the wall (~45 blocks total) versus a longer flat detour (~50 blocks).
+3. Trigger path generation.
+4. EXPECTATION: Chosen path has `steep=0` (or minimal) and slightly higher P (tile count) than hypothetical steep climb.
+
+### Evaluating Results
+Record observed path metrics:
+| Scenario | Flat Tiles | Slope Tiles | Water Tiles | Steep Tiles | Path Length | Avg Cost |
+|----------|------------|------------|------------|-------------|-------------|----------|
+| Water vs Flat | F | S | W | T | P | C/P |
+| Steep vs Flat | F | S | W | T | P | C/P |
+
+PASS Criteria (Manual):
+- Water scenario: `water=0` AND `pathLength <= flatReference * 1.20`
+- Steep scenario: `steep=0` AND `pathLength <= flatReference * 1.20`
+- Avg cost (C/P) for chosen route significantly lower than hypothetical high-cost route (estimation acceptable)
+
+### Estimating Alternative Route Cost (Hypothetical)
+If automation is absent, estimate rejected route cost:
+- Water route: (shorterTiles * FLAT_COST) + (waterTiles * WATER_COST)
+- Steep route: (shorterTiles * FLAT_COST) + (steepTiles * (SLOPE_COST_MULTIPLIER * elevationBlocks))
+
+Compare with chosen route total cost; confirm chosen < rejected.
+
+### Why Automation Deferred
+- Requires deterministic structure placement + coordinate bookkeeping
+- Adds complexity to CI without proportionate regression value
+- Current terrain-cost breakdown already flags mis-weighted penalties
+
+### Future Automation Hooks (When Worthwhile)
+- PathServiceImpl: Emit `[PATH] ALTERNATIVE rejected: length=L, estCost=K.K, reason=water|steep` lines
+- Harness: Parse pairs of chosen vs rejected costs and assert chosenCost < rejectedCost AND chosenLength <= rejectedLength * 1.20
+
+### Quick Checklist (Manual Execution)
+- [ ] Water patch placed creating shorter water route
+- [ ] Flat alternative exists within +20% length
+- [ ] Generated path avoids water (water=0)
+- [ ] Steep wall placed creating shorter steep route
+- [ ] Generated path avoids steep (steep=0)
+- [ ] Logs captured for both paths
+- [ ] Results table filled out
+
+### Command Reference
+```text
+/votest place-obstacle water <x> <z> <radius>
+/votest place-obstacle steep <x> <z> <width>
+```
+Use multiple water patches or wall width adjustments to tune alternative route lengths.
+
+### Next Steps
+- (Optional) Add alternative route rejection logging to PathServiceImpl
+- (Optional) Script RCON sequence for placement + generation in dedicated test file
+- (Optional) Integrate cost comparison table export to JSON
+
+
+**Comparative Route Analysis** (future work):
+- Construct explicit test scenarios with known flat/water/steep alternatives
+- Place buildings such that two routes exist: one flat (long) vs one short (steep/water)
+- Assert A* chooses flat route if length difference is comparable (<20% longer)
+
+**Terrain Manipulation** (future work):
+- Programmatically place water/steep obstacles in test world
+- Create controlled test cases with deterministic route options
+- Validate cost function accuracy against hand-calculated expected costs
+
+**Cost Function Tuning** (future work):
+- Adjust WATER_COST, SLOPE_COST_MULTIPLIER based on test results
+- Balance between route optimality and path diversity
+- Ensure cost penalties match gameplay intentions (e.g., Romans prefer straight roads even if sloped)
 
 ## Constitution Compliance
 

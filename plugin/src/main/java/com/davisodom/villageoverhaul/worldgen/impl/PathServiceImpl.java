@@ -181,8 +181,9 @@ public class PathServiceImpl implements PathService {
             
             // Check if we reached the goal
             if (Math.abs(current.x - endX) <= 2 && Math.abs(current.z - endZ) <= 2) {
-                LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes", nodesExplored));
-                return reconstructPath(current);
+                List<PathNode> path = reconstructPath(current);
+                logPathTerrainCosts(world, path, nodesExplored);
+                return path;
             }
             
             closedSet.add(current.key());
@@ -285,13 +286,22 @@ public class PathServiceImpl implements PathService {
             cost += yDiff * SLOPE_COST_MULTIPLIER;
         }
         
-        // Check for water or lava
-        Block block = world.getBlockAt(to);
-        Material type = block.getType();
+        // Check for water or lava at destination (path walks on top of blocks, so check the block itself)
+        Block blockAt = world.getBlockAt(to);
+        Block blockBelow = world.getBlockAt(to.getBlockX(), to.getBlockY() - 1, to.getBlockZ());
         
-        if (type == Material.WATER || type == Material.LAVA) {
+        Material typeAt = blockAt.getType();
+        Material typeBelow = blockBelow.getType();
+        
+        // Water penalty applies if walking through water OR walking on top of water surface
+        boolean hasWater = (typeAt == Material.WATER || typeAt == Material.LAVA || 
+                           typeBelow == Material.WATER || typeBelow == Material.LAVA);
+        if (hasWater) {
             cost += WATER_COST;
         }
+        
+        // Use typeAt for passability checks (the block at the path level)
+        Material type = typeAt;
         
         // Allow paths through most natural materials
         // Only veto truly impassable blocks (structures, ores, bedrock)
@@ -319,6 +329,64 @@ public class PathServiceImpl implements PathService {
         }
         
         return cost;
+    }
+    
+    /**
+     * Log terrain cost breakdown for a successful path.
+     * Analyzes the final path to report flat, slope, water, and steep tile counts.
+     */
+    private void logPathTerrainCosts(World world, List<PathNode> path, int nodesExplored) {
+        if (path.isEmpty()) {
+            LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes (empty path)", nodesExplored));
+            return;
+        }
+        
+        int flatTiles = 0;
+        int slopeTiles = 0;
+        int waterTiles = 0;
+        int steepTiles = 0;
+        double totalCost = 0.0;
+        
+        for (int i = 0; i < path.size() - 1; i++) {
+            PathNode from = path.get(i);
+            PathNode to = path.get(i + 1);
+            
+            Location fromLoc = new Location(world, from.x, from.y, from.z);
+            Location toLoc = new Location(world, to.x, to.y, to.z);
+            
+            int yDiff = Math.abs(to.y - from.y);
+            
+            // Check block at path level and block below for water detection
+            Block blockAt = world.getBlockAt(toLoc);
+            Block blockBelow = world.getBlockAt(to.x, to.y - 1, to.z);
+            Material typeAt = blockAt.getType();
+            Material typeBelow = blockBelow.getType();
+            
+            double segmentCost = calculateTerrainCost(world, fromLoc, toLoc);
+            totalCost += segmentCost;
+            
+            // Categorize tile by dominant cost factor
+            // Water check needs to look at both the path level AND the block below
+            boolean isWater = (typeAt == Material.WATER || typeAt == Material.LAVA ||
+                              typeBelow == Material.WATER || typeBelow == Material.LAVA);
+            boolean isSteep = (yDiff >= 2); // 2+ blocks elevation change
+            boolean isSlope = (yDiff == 1);
+            
+            if (isWater) {
+                waterTiles++;
+            } else if (isSteep) {
+                steepTiles++;
+            } else if (isSlope) {
+                slopeTiles++;
+            } else {
+                flatTiles++;
+            }
+        }
+        
+        LOGGER.info(String.format(
+            "[PATH] A* SUCCESS: Goal reached after exploring %d nodes (path=%d tiles, cost=%.1f, flat=%d, slope=%d, water=%d, steep=%d)",
+            nodesExplored, path.size(), totalCost, flatTiles, slopeTiles, waterTiles, steepTiles
+        ));
     }
     
     @Override
