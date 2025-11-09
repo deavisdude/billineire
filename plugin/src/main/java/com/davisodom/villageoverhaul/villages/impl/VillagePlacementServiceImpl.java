@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.villages.impl;
 
+import com.davisodom.villageoverhaul.cultures.CultureService;
 import com.davisodom.villageoverhaul.model.Building;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
@@ -48,17 +49,25 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     // Metadata storage
     private final VillageMetadataStore metadataStore;
     
+    // Culture service for structure selection
+    private final CultureService cultureService;
+    
+    // Main building selector
+    private final MainBuildingSelector mainBuildingSelector;
+    
     // In-memory cache of villages (villageId -> buildings)
     private final Map<UUID, List<Building>> villageBuildings = new HashMap<>();
     
     /**
      * Constructor for testing without plugin reference (uses procedural structures).
      */
-    public VillagePlacementServiceImpl(VillageMetadataStore metadataStore) {
+    public VillagePlacementServiceImpl(VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = new StructureServiceImpl();
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        this.cultureService = cultureService;
+        this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
     }
@@ -68,12 +77,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * 
      * @param plugin Plugin instance (provides data folder)
      * @param metadataStore Metadata storage
+     * @param cultureService Culture service for main building selection
      */
-    public VillagePlacementServiceImpl(Plugin plugin, VillageMetadataStore metadataStore) {
+    public VillagePlacementServiceImpl(Plugin plugin, VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = new StructureServiceImpl(plugin.getDataFolder());
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        this.cultureService = cultureService;
+        this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         // Load spacing from plugin config
         this.minBuildingSpacing = plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
         this.minVillageSpacing = plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
@@ -82,11 +94,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     /**
      * Constructor with custom structure service (for dependency injection).
      */
-    public VillagePlacementServiceImpl(StructureService structureService, VillageMetadataStore metadataStore) {
+    public VillagePlacementServiceImpl(StructureService structureService, VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = structureService;
         this.pathService = new PathServiceImpl();
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
+        this.cultureService = cultureService;
+        this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
     }
@@ -238,12 +252,35 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             metadataStore.addBuilding(villageId, building);
         }
         
-        // Generate path network connecting buildings to the first (main) building
+        // Designate main building using culture-specific structure (T023)
+        Optional<UUID> mainBuildingId = mainBuildingSelector.selectMainBuilding(cultureId, placedBuildings);
+        if (mainBuildingId.isPresent()) {
+            metadataStore.setMainBuilding(villageId, mainBuildingId.get());
+            LOGGER.info(String.format("[STRUCT] Main building designated for village %s: %s", 
+                villageId, mainBuildingId.get()));
+        } else {
+            LOGGER.warning(String.format("[STRUCT] Could not designate main building for village %s (culture: %s)", 
+                villageId, cultureId));
+        }
+        
+        // Generate path network connecting buildings to the main building
         if (placedBuildings.size() > 1) {
             LOGGER.info(String.format("[STRUCT] Generating path network for village %s", villageId));
             
-            // Use first building as main building (temporary until T023 implements proper selection)
-            Location mainBuildingLocation = placedBuildings.get(0).getOrigin();
+            // Use designated main building, or fall back to first building if main building not set
+            Location mainBuildingLocation;
+            if (mainBuildingId.isPresent()) {
+                // Find the main building in the list
+                Optional<Building> mainBuilding = placedBuildings.stream()
+                        .filter(b -> b.getBuildingId().equals(mainBuildingId.get()))
+                        .findFirst();
+                mainBuildingLocation = mainBuilding.isPresent() ? 
+                        mainBuilding.get().getOrigin() : 
+                        placedBuildings.get(0).getOrigin();
+            } else {
+                // Fallback to first building if main building not designated
+                mainBuildingLocation = placedBuildings.get(0).getOrigin();
+            }
             
             // Collect all building locations
             List<Location> buildingLocations = new ArrayList<>();
@@ -407,28 +444,54 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     /**
      * Get structure IDs for a given culture.
-     * Returns appropriate structure names based on loaded schematics.
+     * 
+     * CRITICAL: The main building MUST always be placed first to ensure every village has it.
+     * Other buildings are randomly selected from the culture's structure set.
+     * 
+     * @param cultureId Culture ID to get structures for
+     * @return List of structure IDs with main building first, followed by randomly selected others
      */
     private List<String> getCultureStructures(String cultureId) {
-        // For Roman culture, use full structure names that match the schematics
-        if ("roman".equalsIgnoreCase(cultureId)) {
-            return Arrays.asList(
-                "house_roman_small",
-                "house_roman_medium",
-                "house_roman_villa",
-                "workshop_roman_forge",
-                "market_roman_stall"
-            );
+        Optional<CultureService.Culture> cultureOpt = cultureService.get(cultureId);
+        if (!cultureOpt.isPresent()) {
+            LOGGER.warning(String.format("[STRUCT] Culture '%s' not found, using empty structure list", cultureId));
+            return Collections.emptyList();
         }
         
-        // Default fallback for unknown cultures
-        return Arrays.asList(
-            "house_roman_small",
-            "house_roman_medium",
-            "house_roman_villa",
-            "workshop_roman_forge",
-            "market_roman_stall"
-        );
+        CultureService.Culture culture = cultureOpt.get();
+        List<String> structureSet = culture.getStructureSet();
+        
+        if (structureSet == null || structureSet.isEmpty()) {
+            LOGGER.warning(String.format("[STRUCT] Culture '%s' has no structures defined", cultureId));
+            return Collections.emptyList();
+        }
+        
+        // Get main building structure ID (or default to first if not specified)
+        String mainBuildingStructureId = culture.getMainBuildingStructureId();
+        if (mainBuildingStructureId == null || mainBuildingStructureId.isEmpty()) {
+            mainBuildingStructureId = structureSet.get(0);
+        }
+        
+        // Build result list: main building FIRST, then other structures
+        List<String> result = new ArrayList<>();
+        result.add(mainBuildingStructureId);
+        
+        // Add remaining structures (excluding the main building)
+        List<String> otherStructures = new ArrayList<>();
+        for (String structureId : structureSet) {
+            if (!structureId.equals(mainBuildingStructureId)) {
+                otherStructures.add(structureId);
+            }
+        }
+        
+        // Shuffle other structures for variety (but keep main building first!)
+        Collections.shuffle(otherStructures, new Random());
+        result.addAll(otherStructures);
+        
+        LOGGER.info(String.format("[STRUCT] Structure placement order for culture '%s': main building '%s' + %d others", 
+            cultureId, mainBuildingStructureId, otherStructures.size()));
+        
+        return result;
     }
     
     /**

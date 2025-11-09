@@ -137,7 +137,8 @@ public class VillageWorldgenAdapter implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> {
             // Use shared metadata store (T012l: singleton for cross-session enforcement)
             VillageMetadataStore metadataStore = plugin.getMetadataStore();
-            VillagePlacementServiceImpl placementService = new VillagePlacementServiceImpl(plugin, metadataStore);
+            VillagePlacementServiceImpl placementService = new VillagePlacementServiceImpl(
+                plugin, metadataStore, plugin.getCultureService());
             
             // Generate village structures using placement service
             // Note: Village registration now happens INSIDE placeVillage() after spacing validation

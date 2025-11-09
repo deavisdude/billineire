@@ -13,8 +13,10 @@ Spec: ../001-village-overhaul/spec.md
   trimming) to achieve natural placement; forbid large artificial platforms/cliff cuts.
 - Path Generation: 2D heightmap A* with terrain-aware costs; emit minimal path with light smoothing (steps/slabs);
   avoid block spam and unnatural boardwalks.
-- Main Building Designation: One per village per culture, persisted in village metadata; consistent selection from
-  structure set using seeded choice + constraints (centrality/proximity to paths).
+- Main Building Designation: One per village per culture, persisted in village metadata. Selection uses the culture's
+  `mainBuildingStructureId` field (e.g., "building_roman_forum" for Roman) to identify the designated structure. If not 
+  specified, defaults to the first structure in the culture's `structureSet`. The main building is ALWAYS placed first 
+  during village generation to guarantee its presence, while other structures are randomly selected and may fail placement.
 - Determinism: Seed = H(worldSeed, featureSeed, villageId); no reliance on nondeterministic iteration; snapshot inputs
   in logs for replay.
 - Async Placement, Chunk-Gating & Budgeting: Prepare large structures off-thread. Maintain a
