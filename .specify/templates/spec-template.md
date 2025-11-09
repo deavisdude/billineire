@@ -130,3 +130,18 @@ Confirm the feature satisfies or has a plan for:
 - Scripting & CI Portability (PowerShell 5.1-compatible scripts on Windows;
   ASCII-only logs for CI readability; single-quoted regex with explicit [0-9]
   classes; avoid fragile 'Done' regexes—prefer simple substring readiness checks)
+
+- Village Building & UX (if village-related): Grounded building placement, inter-building
+  paths, culture-defined main building, signage for projects/requirements, and greeter
+  villager behavior on main-building entry are addressed.
+
+- Inter-Village Spacing & Borders (if village-related): Configurable minimum border-to-border
+  distance (default 200) enforced bidirectionally; spawn-proximal initial village; subsequent
+  villages biased to be as close as possible without violating min distance; dynamic border
+  expansion clipped when neighboring border lies within threshold; deterministic calculations.
+
+- Structure Integration & NPC Construction (if applicable): WorldEdit/FAWE for structure
+  load/rotate/paste with footprint validation, async preparation and batched main-thread
+  placement, deterministic builder state machine with visible progress and persisted
+  checkpoints, material manager, and pathfinding limits (local radius, waypointing, caching,
+  concurrency caps); note registration/Paper pipeline approach.

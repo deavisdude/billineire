@@ -4,7 +4,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
-group = 'com.example'
+group = 'com.davisodom'
 version = '0.1.0-SNAPSHOT'
 description = 'Village Overhaul - Millénaire-inspired village mod for modern Minecraft'
 
@@ -65,6 +65,14 @@ dependencies {
     // WorldGuard (optional, for regions)
     compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
     
+    // WorldEdit (for schematic loading)
+    compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.2.15') {
+        transitive = false
+    }
+    compileOnly('com.sk89q.worldedit:worldedit-core:7.2.15') {
+        transitive = false
+    }
+    
     // FAWE (optional, for safe edits)
     compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.8.0') {
         transitive = false
@@ -117,7 +125,7 @@ shadowJar {
     archiveClassifier.set('')
     
     // Relocate Jackson to avoid conflicts
-    relocate 'com.fasterxml.jackson', 'com.example.villageoverhaul.libs.jackson'
+    relocate 'com.fasterxml.jackson', 'com.davisodom.villageoverhaul.libs.jackson'
     
     minimize()
 }

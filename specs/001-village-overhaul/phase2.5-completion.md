@@ -18,8 +18,8 @@ Phase 2.5 establishes the village foundation required for User Story 1 (Trade-Fu
 ### 1. Village Management System
 
 **Files Created:**
-- `plugin/src/main/java/com/example/villageoverhaul/villages/Village.java`
-- `plugin/src/main/java/com/example/villageoverhaul/villages/VillageService.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/villages/Village.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageService.java`
 
 **Features:**
 - Minimal Village model with id, cultureId, name, wealthMillz
@@ -34,7 +34,7 @@ Phase 2.5 establishes the village foundation required for User Story 1 (Trade-Fu
 ### 2. Admin API Enhancement (T019a)
 
 **File Modified:**
-- `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/admin/AdminHttpServer.java`
 
 **Endpoint Implemented:**
 - `GET /v1/villages` - Returns JSON array of all villages with id, cultureId, name, wealthMillz
@@ -104,7 +104,7 @@ Phase 2.5 establishes the village foundation required for User Story 1 (Trade-Fu
 ### 6. Per-Village Performance Metrics (T019h)
 
 **File Modified:**
-- `plugin/src/main/java/com/example/villageoverhaul/obs/Metrics.java`
+- `plugin/src/main/java/com/davisodom/villageoverhaul/obs/Metrics.java`
 
 **New Methods:**
 - `recordVillageTickTime(UUID villageId, long micros)` - Record per-village tick cost
@@ -119,7 +119,7 @@ Phase 2.5 establishes the village foundation required for User Story 1 (Trade-Fu
 ### 7. Economy Anti-Dupe Tests (T019i)
 
 **File Created:**
-- `plugin/src/test/java/com/example/villageoverhaul/economy/EconomyAntiDupeTest.java`
+- `plugin/src/test/java/com/davisodom/villageoverhaul/economy/EconomyAntiDupeTest.java`
 
 **Test Coverage:**
 - ✅ Concurrent credits (no duplication)
@@ -194,9 +194,9 @@ BUILD SUCCESSFUL in 4s
 ## Files Created/Modified Summary
 
 ### Created (15 files)
-1. `plugin/src/main/java/com/example/villageoverhaul/villages/Village.java`
-2. `plugin/src/main/java/com/example/villageoverhaul/villages/VillageService.java`
-3. `plugin/src/test/java/com/example/villageoverhaul/economy/EconomyAntiDupeTest.java`
+1. `plugin/src/main/java/com/davisodom/villageoverhaul/villages/Village.java`
+2. `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageService.java`
+3. `plugin/src/test/java/com/davisodom/villageoverhaul/economy/EconomyAntiDupeTest.java`
 4. `tests/fixtures/test-village-spec.md`
 5. `tests/fixtures/test-village-alpha.json`
 6. `plugin/src/main/resources/datapacks/villageoverhaul/trades/roman.json`
@@ -204,16 +204,16 @@ BUILD SUCCESSFUL in 4s
 8. `docs/culture-review.md`
 9. (From earlier Phase 2.5 work)
 10. `plugin/src/main/resources/schemas/dungeon.json`
-11. `plugin/src/main/java/com/example/villageoverhaul/cultures/CultureService.java`
+11. `plugin/src/main/java/com/davisodom/villageoverhaul/cultures/CultureService.java`
 12. `plugin/src/main/resources/cultures/_manifest.txt`
 13. `plugin/src/main/resources/cultures/roman.json`
 14. `plugin/src/main/resources/datapacks/villageoverhaul/cultures/README.md`
 
 ### Modified (5 files)
-1. `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java`
-2. `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
-3. `plugin/src/main/java/com/example/villageoverhaul/obs/Metrics.java`
-4. `plugin/src/main/java/com/example/villageoverhaul/economy/WalletService.java` (bug fixes)
+1. `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
+2. `plugin/src/main/java/com/davisodom/villageoverhaul/admin/AdminHttpServer.java`
+3. `plugin/src/main/java/com/davisodom/villageoverhaul/obs/Metrics.java`
+4. `plugin/src/main/java/com/davisodom/villageoverhaul/economy/WalletService.java` (bug fixes)
 5. `specs/001-village-overhaul/tasks.md` (marked T019a-j complete)
 
 ---
@@ -301,3 +301,4 @@ BUILD SUCCESSFUL in 4s
 *Generated: 2025-11-04 by GitHub Copilot*  
 *Constitution Version: v1.0.0*  
 *Plan Version: Plan A (Plugin-first)*
+

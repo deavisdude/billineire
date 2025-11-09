@@ -1,17 +1,19 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0
+- Version change: 1.4.0 → 1.5.0
 - Modified sections:
-  - Engineering Standards & Constraints (added "Scripting & CI Portability")
-  - Development Workflow, Review Process, and Quality Gates (added scripting gate)
-- Added sections: None (material expansion of existing sections)
+	- XII. Terrain Suitability, Spacing, and Cartography → expanded to include Inter-Village Minimum Distance, Spawn Proximity bias, and Dynamic Borders
+- Added sections: None
 - Removed sections: None
 - Templates requiring updates:
-	- ✅ .specify/templates/plan-template.md (added scripting/CI portability gate)
-	- ✅ .specify/templates/spec-template.md (gates checklist includes scripting/CI)
-	- ✅ .specify/templates/tasks-template.md (added scripting/CI task type)
-	- ⚠ .specify/templates/commands/* (not present; N/A)
-- Follow-up TODOs: None
+	- OK .specify/templates/plan-template.md (add Inter-Village Spacing & Borders gate: default 200 blocks, border-to-border, spawn-proximal placement, dynamic borders)
+	- OK .specify/templates/spec-template.md (add checklist item for inter-village spacing/borders with default 200 and deterministic enforcement)
+	- OK .specify/templates/tasks-template.md (add constitution-driven task type for inter-village spacing enforcement and dynamic border updates)
+	- N/A .specify/templates/commands/* (no specific commands templates present)
+	- ! README.md / docs/* (note village inter-spacing rules and border dynamics)
+- Follow-up TODOs:
+	- TODO(DOCS_VILLAGE_MAP): Add docs/quickstart section describing the "Village Map" sign interaction and GUI parity for Bedrock.
+	- TODO(DOCS_VILLAGE_SPACING): Document inter-village minimum distance (default 200), spawn-proximal placement, and dynamic border behavior in docs/.
 -->
 
 # Spec Billineire Constitution
@@ -98,6 +100,108 @@ tools. Document known exploit mitigations and test for dupe paths in CI where fe
 
 Rationale: Multiplayer at scale attracts exploits; prevention protects the economy and reputation.
 
+### X. Village Building & Player Onboarding
+Village construction and player-facing UX MUST follow deterministic, grounded placement rules and
+provide clear wayfinding:
+
+- Grounded Placement: Spawn/expand village buildings only on solid, loadable terrain with
+	collision-safe clearance. No floating/embedded structures. Validate foundation blocks and ensure
+	interior air-space before placement; abort or re-seat if invalid.
+- Inter-Building Paths: Generate simple, traversable paths connecting key village buildings. Paths
+	MUST avoid placing blocks that break player or mob movement and SHOULD prefer existing terrain.
+- Main Building: Each culture MUST designate a single "main building" type used for first-contact
+	UX. Persist this designation in data and ensure only one is active per village.
+- Signage for Projects: The main building MUST surface current village projects and material
+	requirements via in-world signage or UI-equivalent, server-side authoritative and localized via
+	the language/Adventure API.
+- Greeter Villager: On player entry into the main building area, a designated greeter villager (or
+	equivalent server-driven prompt) MUST introduce the village, surface active projects, and provide
+	a clear next action. Triggering MUST be server-side and rate-limited; no client-only logic.
+- Performance/Determinism: All placement, pathing, and triggers MUST be chunk-gated and
+	deterministic from world seed/state. Heavy calculations MUST be budgeted under Performance
+	Principles and never block the main thread beyond budget.
+
+Cross-reference: See Principle XII for explicit terrain suitability, spacing, non-overlap, and
+village cartography requirements.
+
+Rationale: Grounded placement, simple paths, and an explicit main-building greeter create a
+coherent onboarding experience without sacrificing determinism or performance on large servers.
+
+### XI. Programmatic Structure Integration & NPC Construction (NON-NEGOTIABLE)
+Village overhauls MUST implement structure placement and builder AI using proven, production-ready
+patterns to ensure performance, determinism, and a great player experience:
+
+- Structure Manipulation: Use WorldEdit/FAWE APIs as the standard for loading, rotating, and
+	pasting schematics. Prefer pre-validation of footprints and chunk-gated operations.
+- Asynchronous Placement: Large structure preparation MUST be off-thread. Apply block mutations on
+	the main thread only via minimal, batched tasks; never paste large structures synchronously.
+- Builder State Machine: Implement a deterministic state machine for builder NPCs with states at
+	minimum: IDLE → WALKING_TO_BUILDING → REQUESTING_MATERIALS → GATHERING_MATERIALS →
+	CLEARING_SITE → PLACING_BLOCKS → COMPLETING → STUCK (recovery). Persist progress.
+- Visible Progress: Place blocks row-by-row, layer-by-layer to produce visible construction
+	progress. Emit server-side progress signals and optional scaffolding/markers.
+- Material Management: Provide a material manager that reconciles builder inventories with
+	warehouses/chests; requests, pickups, and consumption MUST be server-authoritative and logged.
+- Pathfinding Limits: Treat vanilla-like pathfinding as local (~10 blocks). For longer distances,
+	use waypoint segments, cache paths, invalidate on terrain change, and cap concurrent planners.
+- Modular Architecture: Separate structure generation, NPC AI, village management, and construction
+	visualization into modules with clear interfaces and tests.
+- Structure Registration: Where structure registration is needed, prefer integrating with a
+	widely-used system (e.g., CustomStructures) and leverage Paper’s structure generation pipeline.
+
+Rationale: Patterns from Minecolonies/Millénaire demonstrate reliable, scalable construction.
+Codifying them prevents server lag, preserves determinism, and improves playability at scale.
+
+### XII. Terrain Suitability, Spacing, and Cartography (NON-NEGOTIABLE)
+Village buildings MUST respect explicit terrain and layout constraints, and the village MUST
+maintain a live, server-authoritative cartographic model:
+
+- Water/Fluid Avoidance: Buildings MUST NOT be spawned on or overlapping bodies of water or lava.
+	Foundation and interior validation MUST treat fluids as invalid blocks. Seating attempts that
+	encounter fluids MUST abort or re-seat elsewhere.
+- Configurable Spacing: Buildings MUST respect a configurable minimum spacing (in blocks) between
+	building footprints. The spacing rule applies to the final, rotation-aware axis-aligned footprint
+	boxes and MUST be enforced deterministically during placement.
+- Non-Overlap of Footprints: Building footprints MUST NOT overlap. Placement code MUST compute
+	rotation-aware bounds and reject/adjust placements that collide with existing structures.
+- Living Village Map: Maintain a live in-memory model of building placements and a terrain
+	suitability classification (acceptable vs unacceptable tiles, including fluid/steep/blocked).
+	Expose this to players at the main building via a clearly labeled sign "Village Map"; right-click
+	MUST open a GUI that displays the current map. Provide Bedrock-parity via inventory GUI or map
+	item equivalents—no client-only logic.
+- Determinism & Performance: Map updates and placement decisions MUST be derived from world state
+	and seeds; updates MUST be chunk-gated and budgeted per Performance Principles.
+- Observability: Emit structured logs when placements skip due to water/spacing/overlap, including
+	counts and coordinates where safe. Provide metrics for rejected sites and map update latency.
+
+Inter-Village Placement & Borders:
+
+- Inter-Village Minimum Distance: Villages MUST maintain a configurable minimum border-to-border
+	distance from any other village. Default: 200 blocks. Enforcement is bidirectional: both new
+	placements and subsequent expansions MUST respect this distance on both sides, measured between
+	current dynamic borders (not just seeds/centers).
+- Spawn Proximity Preference: The first/early villages MUST start near (but not at) world spawn.
+	Village search SHOULD begin near spawn and pick the nearest valid site that does not violate the
+	minimum inter-village distance.
+- Proximity-to-Existing Bias: After the first village, new villages SHOULD generate as close as
+	possible to an existing village without violating the minimum distance. Search procedures SHOULD
+	prefer the smallest feasible distance to the nearest neighbor’s border while remaining ≥ min
+	distance.
+- Dynamic Borders: Village borders MUST expand as new buildings and construction projects are
+	completed. Border growth MUST be persisted and recalculated deterministically. Expansion MUST be
+	limited in any direction where another village’s border exists within the configured minimum
+	distance. The cartographic model MUST expose current borders for both enforcement and UX.
+- Determinism & Configurability: The inter-village minimum distance MUST be configurable and have a
+	sensible default (200). Site searches MUST be deterministic from world seed and inputs for both
+	user-invoked and natural generation flows.
+- Observability: Emit structured logs and counters for inter-village rejections (e.g.,
+	`rejectedVillageSites.minDistance=N`) and border-limited expansions. Include coordinates where
+	safe and summary metrics per generation event.
+
+Rationale: Explicit terrain constraints prevent immersion-breaking placements, spacing ensures
+readable and navigable villages, and a live cartographic view improves player UX without breaking
+determinism or performance budgets.
+
 ## Engineering Standards & Constraints
 
 - Coding standards: consistent naming, null-safety, and immutable data where practical for shared
@@ -113,6 +217,25 @@ Rationale: Multiplayer at scale attracts exploits; prevention protects the econo
 - Compatibility: Keep mixins/hooks minimal and feature-scoped; prefer official APIs/extension
 	points; feature flags to soft-disable incompatible modules.
 - Documentation: Public APIs and data schemas MUST be documented and versioned.
+
+### Structures & Construction (Addendum)
+
+- WorldEdit/FAWE Integration: Treat WorldEdit (or FAWE) as the default abstraction for structure
+	load/rotate/paste. Validate foundations (solid blocks, interior air) before placement.
+- Async Placement Queues: Pre-compute and queue block placements off-thread; commit small batches
+	on the main thread respecting tick budgets and chunk load state. Never paste large schematics on
+	the main thread.
+- Builder State Machine: Implement the canonical states (IDLE, WALKING_TO_BUILDING,
+	REQUESTING_MATERIALS, GATHERING_MATERIALS, CLEARING_SITE, PLACING_BLOCKS, COMPLETING, STUCK)
+	and persist progress so work survives restarts.
+- Visible Construction: Provide scaffolding/progress indicators and layer-by-layer placement for
+	clear player feedback.
+- Materials Flow: Centralize material requests, pickups, and consumption with audit logs; prefer
+	warehouse/chest rendezvous over ad-hoc pulls.
+- Pathfinding: Limit expensive path searches, segment long walks via waypoints, cache results, and
+	cap concurrent pathfinding operations; re-plan only on invalidation events.
+- Registration: When registering structures, prefer a shared registry (e.g., CustomStructures) and
+	integrate with Paper’s structure generation pipeline where appropriate.
 
 ### Scripting & CI Portability (Windows PowerShell 5.1 baseline)
 
@@ -151,8 +274,27 @@ Every feature/PR MUST pass the following Constitution Check before merge:
 	explicit [0-9] character classes, and keep server readiness detection simple
 	(e.g., substring 'Done').
 
+- Structure Integration & NPC Construction (if applicable):
+	- WorldEdit/FAWE used for structure load/rotate/paste with footprint validation
+	- Asynchronous preparation and main-thread batched placement (no large synchronous pastes)
+	- Deterministic builder state machine with visible row/layer progress and persisted checkpoints
+	- Material manager coordinates builder/storage, server-authoritative
+	- Pathfinding respects local radius, waypointing for long routes, caching, and concurrency caps
+	- Integration approach for registration/Paper pipeline (e.g., CustomStructures) documented
+
 Gate failures require a written justification in the plan’s Complexity Tracking section and an
 explicit follow-up task with an owner and due date.
+
+### Planning & Task Dependencies (/speckit.tasks)
+
+When generating task breakdowns, enforce these dependency chains and require tests per component
+before integration begins:
+
+- WorldEdit integration layer → Structure loading system → Placement engine
+- NPC base class → State machine → Builder AI → Material manager
+- Village data model → Village manager → Expansion system
+- Pathfinding util → Navigator → Builder movement
+- Configuration system → All subsystems
 
 ## Governance
 
@@ -169,4 +311,4 @@ This Constitution supersedes ad-hoc practices. Amendments follow an RFC process:
 	 with an expiration and tracking issue.
 6. Review cadence: Quarterly review of principles, budgets, and compatibility targets.
 
-**Version**: 1.1.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-05
+**Version**: 1.5.0 | **Ratified**: 2025-11-04 | **Last Amended**: 2025-11-07

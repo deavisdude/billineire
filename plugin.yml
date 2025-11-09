@@ -1,0 +1,57 @@
+name: VillageOverhaul
+version: 0.1.0-SNAPSHOT
+description: Village Overhaul - Millénaire-inspired village mod for modern Minecraft
+main: com.davisodom.villageoverhaul.VillageOverhaulPlugin
+api-version: '1.20'
+author: spec-billineire
+website: https://github.com/your-org/village-overhaul
+
+loadbefore:
+  - WorldEdit
+
+softdepend:
+  - Vault
+  - LuckPerms
+  - WorldGuard
+  - FastAsyncWorldEdit
+
+commands:
+  vo:
+    description: Village Overhaul admin commands
+    usage: /vo <subcommand>
+    permission: villageoverhaul.admin
+    aliases: [villageoverhaul]
+  votest:
+    description: Village Overhaul test commands (CI/testing only)
+    usage: /votest <spawn-villager|trigger-interaction|metrics|performance>
+    permission: villageoverhaul.test
+  villages:
+    description: List all villages with distances
+    usage: /villages
+    permission: villageoverhaul.use
+    aliases: [vlist]
+  village:
+    description: Village information and navigation
+    usage: /village <list|locate|nearest>
+    permission: villageoverhaul.use
+    aliases: [v]
+
+permissions:
+  villageoverhaul.admin:
+    description: Access to admin commands
+    default: op
+  villageoverhaul.test:
+    description: Access to test commands (for CI automation)
+    default: op
+  villageoverhaul.use:
+    description: Access to player village commands
+    default: true
+  villageoverhaul.trade:
+    description: Ability to trade with villagers
+    default: true
+  villageoverhaul.contract.accept:
+    description: Accept village contracts
+    default: true
+  villageoverhaul.property.buy:
+    description: Purchase village properties
+    default: true

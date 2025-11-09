@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://villageoverhaul.example.com/schemas/contract.json",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/contract.json",
   "title": "Village Contract",
   "description": "A contract issued by a village for players to complete",
   "type": "object",

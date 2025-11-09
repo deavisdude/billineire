@@ -31,26 +31,26 @@ Write-Host "=== Village Overhaul CI: State Assertions ===" -ForegroundColor Cyan
 
 # Load snapshot
 if (!(Test-Path $SnapshotFile)) {
-    Write-Host "✗ Snapshot file not found: $SnapshotFile" -ForegroundColor Red
+    Write-Host "X Snapshot file not found: $SnapshotFile" -ForegroundColor Red
     exit 1
 }
 
 $snapshot = Get-Content $SnapshotFile | ConvertFrom-Json
-Write-Host "✓ Loaded snapshot from $SnapshotFile" -ForegroundColor Green
+Write-Host "OK Loaded snapshot from $SnapshotFile" -ForegroundColor Green
 
 # Basic validations
 $passed = $true
 
 # Validate structure
-if (!$snapshot.tick -or !$snapshot.seed) {
-    Write-Host "✗ Snapshot missing required fields (tick, seed)" -ForegroundColor Red
+    if (!$snapshot.tick -or !$snapshot.seed) {
+    Write-Host "X Snapshot missing required fields (tick, seed)" -ForegroundColor Red
     $passed = $false
 }
 
 # Validate wallets are non-negative
 foreach ($wallet in $snapshot.wallets.PSObject.Properties) {
     if ($wallet.Value -lt 0) {
-        Write-Host "✗ Wallet $($wallet.Name) has negative balance: $($wallet.Value)" -ForegroundColor Red
+        Write-Host "X Wallet $($wallet.Name) has negative balance: $($wallet.Value)" -ForegroundColor Red
         $passed = $false
     }
 }
@@ -62,7 +62,7 @@ if ($ExpectedFile -and (Test-Path $ExpectedFile)) {
     
     # Compare critical fields
     if ($snapshot.tick -ne $expected.tick) {
-        Write-Host "✗ Tick mismatch: got $($snapshot.tick), expected $($expected.tick)" -ForegroundColor Red
+        Write-Host "X Tick mismatch: got $($snapshot.tick), expected $($expected.tick)" -ForegroundColor Red
         $passed = $false
     }
     
@@ -71,11 +71,32 @@ if ($ExpectedFile -and (Test-Path $ExpectedFile)) {
     $expectedTotal = ($expected.wallets.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
     
     if ($snapshotTotal -ne $expectedTotal) {
-        Write-Host "✗ Wallet total mismatch: got $snapshotTotal, expected $expectedTotal" -ForegroundColor Red
+        Write-Host "X Wallet total mismatch: got $snapshotTotal, expected $expectedTotal" -ForegroundColor Red
         $passed = $false
     }
     
-    Write-Host "✓ Determinism check complete" -ForegroundColor Green
+    Write-Host "OK Determinism check complete" -ForegroundColor Green
+}
+
+# Validate structure placement logs (if present)
+# Look for [STRUCT] log markers in server.log for observability
+$serverLogPath = "test-server/server.log"
+if (Test-Path $serverLogPath) {
+    $logContent = Get-Content $serverLogPath -Raw -ErrorAction SilentlyContinue
+    
+    # Check for structure placement events
+    if ($logContent -match '\[STRUCT\]') {
+        $structLogs = ($logContent | Select-String -Pattern '\[STRUCT\]' -AllMatches).Matches.Count
+        Write-Host "OK Found $structLogs [STRUCT] log entries" -ForegroundColor Green
+        
+        # Validate no error-level structure logs
+        if ($logContent -match '\[STRUCT\].*(?i)(error|fail|exception)') {
+            Write-Host "X Structure placement errors detected in logs" -ForegroundColor Red
+            $passed = $false
+        }
+    } else {
+        Write-Host "! No [STRUCT] logs found (expected if no structures placed)" -ForegroundColor DarkGray
+    }
 }
 
 # Report results

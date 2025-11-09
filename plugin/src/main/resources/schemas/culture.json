@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://villageoverhaul.example.com/schemas/culture.json",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/culture.json",
   "title": "Village Culture",
   "description": "Defines a village culture with styles, professions, and trades",
   "type": "object",

@@ -1,0 +1,90 @@
+openapi: 3.0.3
+info:
+  title: Admin Harness API (Planning)
+  version: 0.1.0
+  description: |
+    Conceptual admin/test endpoints to drive structure generation, paths, and onboarding
+    in CI. Actual implementation uses Paper plugin commands; this OpenAPI captures
+    inputs/outputs for planning and contract tests.
+servers:
+  - url: http://localhost/admin
+paths:
+  /villages:
+    post:
+      summary: Create a test village
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cultureId: { type: string }
+                center: { type: object, properties: { x: {type: integer}, z: {type: integer} }, required: [x, z] }
+      responses:
+        '201': { description: Village created, returns villageId }
+  /structures:
+    post:
+      summary: Generate structures with grounded placement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                villageId: { type: string, format: uuid }
+                structureSetId: { type: string }
+      responses:
+        '200': { description: Placement results including seats/re-seats/aborts }
+  /paths/generate:
+    post:
+      summary: Generate inter-building paths
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                villageId: { type: string, format: uuid }
+      responses:
+        '200': { description: Path coverage and smoothing summary }
+  /villages/{id}/main-building:
+    post:
+      summary: Designate the main building
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Main building designated and persisted }
+  /villages/{id}/onboarding/signage/refresh:
+    post:
+      summary: Refresh signage at main building
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Signage refreshed }
+  /villages/{id}/onboarding/trigger:
+    post:
+      summary: Trigger greeter as if a player entered the main building
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                playerId: { type: string }
+      responses:
+        '200': { description: Greeter triggered (rate-limited) }

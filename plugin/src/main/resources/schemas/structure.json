@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://villageoverhaul.davisodom.com/schemas/structure.json",
+  "title": "Village Structure",
+  "description": "Defines a village building structure template with placement and requirements",
+  "type": "object",
+  "required": ["id", "name", "schematicPath", "dimensions", "foundationRequirements"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Unique structure identifier (lowercase, alphanumeric, underscores)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Display name for this structure"
+    },
+    "localizationKey": {
+      "type": "string",
+      "description": "Localization key for structure name"
+    },
+    "schematicPath": {
+      "type": "string",
+      "description": "Path to Sponge Schematic v2 file (relative to structures/ directory)"
+    },
+    "dimensions": {
+      "type": "object",
+      "required": ["width", "height", "depth"],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Structure width (X-axis)"
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256,
+          "description": "Structure height (Y-axis)"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Structure depth (Z-axis)"
+        }
+      }
+    },
+    "foundationRequirements": {
+      "type": "object",
+      "properties": {
+        "solidityPercent": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.75,
+          "description": "Minimum fraction of foundation blocks that must be solid (default 75%)"
+        },
+        "allowedSlopeAngle": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 45.0,
+          "default": 15.0,
+          "description": "Maximum allowed terrain slope in degrees (default 15°)"
+        },
+        "minClearanceAbove": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3,
+          "description": "Minimum clear air blocks above foundation level (default 3)"
+        }
+      }
+    },
+    "placementRules": {
+      "type": "object",
+      "properties": {
+        "allowMinorTerraforming": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow light grading/filling to improve placement (default true)"
+        },
+        "maxTerraformRadius": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8,
+          "default": 3,
+          "description": "Maximum radius for terraforming operations in blocks (default 3)"
+        },
+        "clearVegetation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Clear grass/flowers/small plants before placement (default true)"
+        },
+        "collisionBufferBlocks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4,
+          "description": "Minimum clearance from other structures in blocks (default 4)"
+        }
+      }
+    },
+    "buildingType": {
+      "type": "string",
+      "enum": ["residential", "workshop", "farm", "civic", "religious", "defensive", "special"],
+      "description": "Building category for main building designation"
+    },
+    "eligibleForMainBuilding": {
+      "type": "boolean",
+      "default": false,
+      "description": "Can this structure serve as the village main building? (default false)"
+    },
+    "spawnWeight": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 10,
+      "description": "Relative spawn weight for structure selection (0=never, higher=more common)"
+    },
+    "projectRequirement": {
+      "type": "object",
+      "properties": {
+        "resourceCost": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Resources required for funded construction (itemId -> quantity)"
+        },
+        "prerequisiteStructures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Structure IDs that must exist before this can be built"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "author": {
+          "type": "string",
+          "description": "Structure creator attribution"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+(\\.\\d+)?$",
+          "description": "Semantic version of this structure definition"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional design notes or usage guidance"
+        }
+      }
+    }
+  }
+}

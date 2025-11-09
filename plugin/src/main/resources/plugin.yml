@@ -1,7 +1,7 @@
 name: VillageOverhaul
 version: ${version}
 description: ${description}
-main: com.example.villageoverhaul.VillageOverhaulPlugin
+main: com.davisodom.villageoverhaul.VillageOverhaulPlugin
 api-version: '1.20'
 author: spec-billineire
 website: https://github.com/your-org/village-overhaul

@@ -214,17 +214,17 @@ Phase 2 is the prerequisite foundation, not a user story itself. Awaiting user i
 ## Artifacts
 
 ### Created Files (19 total):
-1. `plugin/src/main/java/com/example/villageoverhaul/VillageOverhaulPlugin.java` (updated)
-2. `plugin/src/main/java/com/example/villageoverhaul/core/TickEngine.java`
-3. `plugin/src/main/java/com/example/villageoverhaul/economy/WalletService.java`
-4. `plugin/src/main/java/com/example/villageoverhaul/persistence/JsonStore.java`
+1. `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java` (updated)
+2. `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`
+3. `plugin/src/main/java/com/davisodom/villageoverhaul/economy/WalletService.java`
+4. `plugin/src/main/java/com/davisodom/villageoverhaul/persistence/JsonStore.java`
 5. `plugin/src/main/resources/schemas/culture.json`
 6. `plugin/src/main/resources/schemas/project.json`
 7. `plugin/src/main/resources/schemas/contract.json`
-8. `plugin/src/main/java/com/example/villageoverhaul/data/SchemaValidator.java`
-9. `plugin/src/main/java/com/example/villageoverhaul/obs/Metrics.java`
-10. `plugin/src/test/java/com/example/villageoverhaul/TickHarnessTest.java`
-11. `plugin/src/main/java/com/example/villageoverhaul/admin/AdminHttpServer.java`
+8. `plugin/src/main/java/com/davisodom/villageoverhaul/data/SchemaValidator.java`
+9. `plugin/src/main/java/com/davisodom/villageoverhaul/obs/Metrics.java`
+10. `plugin/src/test/java/com/davisodom/villageoverhaul/TickHarnessTest.java`
+11. `plugin/src/main/java/com/davisodom/villageoverhaul/admin/AdminHttpServer.java`
 
 ### Updated Files (2 total):
 1. `plugin/build.gradle` (added JSON schema validator dependency)
@@ -268,3 +268,4 @@ Phase 2 is the prerequisite foundation, not a user story itself. Awaiting user i
 *Generated: 2025-01-XX by GitHub Copilot*  
 *Constitution Version: v1.0.0*  
 *Plan Version: Plan A (Plugin-first)*
+
