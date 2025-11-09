@@ -17,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -50,7 +51,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             @NotNull String label, @NotNull String[] args) {
         
         if (args.length == 0) {
-            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|spawn-villager|trigger-interaction|simulate-interaction|metrics|performance>");
+            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|metrics|performance>");
             return true;
         }
         
@@ -62,6 +63,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "generate-structures":
                 return handleGenerateStructures(sender, args);
+                
+            case "generate-paths":
+                return handleGeneratePaths(sender, args);
                 
             case "spawn-villager":
                 return handleSpawnVillager(sender, args);
@@ -176,6 +180,152 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // 4. Persist placed buildings to VillageMetadataStore
         
         plugin.getLogger().info(String.format("[STRUCT] Structure generation complete for village %s (placeholder)", villageId));
+        
+        return true;
+    }
+    
+    /**
+     * Generate path network for a village
+     * Usage: /votest generate-paths <village-id>
+     */
+    private boolean handleGeneratePaths(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /votest generate-paths <village-id>");
+            return true;
+        }
+        
+        String villageIdStr = args[1];
+        UUID villageId;
+        
+        try {
+            villageId = UUID.fromString(villageIdStr);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cInvalid village ID format");
+            return true;
+        }
+        
+        // Get shared metadata store from plugin
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = 
+            plugin.getMetadataStore();
+        
+        // Verify village exists
+        Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt = 
+            metadataStore.getVillage(villageId);
+        
+        if (villageOpt.isEmpty()) {
+            sender.sendMessage("§cVillage not found: " + villageId);
+            return true;
+        }
+        
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata village = 
+            villageOpt.get();
+        
+        // Get buildings for this village
+        List<com.davisodom.villageoverhaul.model.Building> buildings = 
+            metadataStore.getVillageBuildings(villageId);
+        
+        if (buildings.isEmpty()) {
+            sender.sendMessage("§cNo buildings found for village: " + villageId);
+            sender.sendMessage("§7Run /votest generate-structures first");
+            return true;
+        }
+        
+        // Get main building location
+        Optional<UUID> mainBuildingIdOpt = metadataStore.getMainBuilding(villageId);
+        if (mainBuildingIdOpt.isEmpty()) {
+            sender.sendMessage("§cNo main building designated for village: " + villageId);
+            sender.sendMessage("§7Main building should be designated during structure generation");
+            return true;
+        }
+        
+        UUID mainBuildingId = mainBuildingIdOpt.get();
+        com.davisodom.villageoverhaul.model.Building mainBuilding = null;
+        
+        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+            if (building.getBuildingId().equals(mainBuildingId)) {
+                mainBuilding = building;
+                break;
+            }
+        }
+        
+        if (mainBuilding == null) {
+            sender.sendMessage("§cMain building not found in building list: " + mainBuildingId);
+            return true;
+        }
+        
+        // Get world
+        org.bukkit.World world = village.getOrigin().getWorld();
+        if (world == null) {
+            sender.sendMessage("§cWorld not found for village");
+            return true;
+        }
+        
+        // Collect building locations
+        List<Location> buildingLocations = new java.util.ArrayList<>();
+        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+            buildingLocations.add(building.getOrigin());
+        }
+        
+        // Initialize PathService (use plugin's instance if available, or create one)
+        com.davisodom.villageoverhaul.worldgen.PathService pathService = 
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl();
+        
+        // Log path generation start
+        plugin.getLogger().info(String.format(
+            "[STRUCT] Begin path network generation for village %s: buildings=%d, mainBuilding=%s",
+            villageId, buildings.size(), mainBuildingId));
+        
+        sender.sendMessage("§aGenerating path network for village: " + villageId);
+        sender.sendMessage(String.format("§7Buildings: %d, Main building: %s", 
+            buildings.size(), mainBuilding.getStructureId()));
+        
+        // Generate path network
+        boolean success = pathService.generatePathNetwork(
+            world, 
+            villageId, 
+            buildingLocations, 
+            mainBuilding.getOrigin(), 
+            village.getSeed()
+        );
+        
+        if (success) {
+            sender.sendMessage("§aPath network generated successfully!");
+            
+            // Retrieve path segments using the interface method
+            List<List<org.bukkit.block.Block>> pathSegments = 
+                pathService.getVillagePathNetwork(villageId);
+            
+            if (!pathSegments.isEmpty()) {
+                // Emit path blocks using PathEmitter
+                com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
+                    new com.davisodom.villageoverhaul.worldgen.impl.PathEmitter();
+                
+                int totalBlocksPlaced = 0;
+                for (List<org.bukkit.block.Block> pathBlocks : pathSegments) {
+                    int blocksPlaced = pathEmitter.emitPath(
+                        world, 
+                        pathBlocks, 
+                        village.getCultureId()
+                    );
+                    totalBlocksPlaced += blocksPlaced;
+                }
+                
+                sender.sendMessage(String.format("§7Path segments: %d, Blocks placed: %d", 
+                    pathSegments.size(), totalBlocksPlaced));
+                
+                plugin.getLogger().info(String.format(
+                    "[STRUCT] Path network complete for village %s: segments=%d, blocks=%d",
+                    villageId, pathSegments.size(), totalBlocksPlaced));
+            } else {
+                sender.sendMessage("§eWarning: Path network generated but no segments retrievable");
+            }
+        } else {
+            sender.sendMessage("§cPath network generation failed");
+            sender.sendMessage("§7Check logs for [STRUCT] markers with failure details");
+            
+            plugin.getLogger().warning(String.format(
+                "[STRUCT] Path network generation failed for village %s", villageId));
+        }
         
         return true;
     }
@@ -450,8 +600,12 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         if (args.length == 1) {
             // Subcommands
+            completions.add("create-village");
+            completions.add("generate-structures");
+            completions.add("generate-paths");
             completions.add("spawn-villager");
             completions.add("trigger-interaction");
+            completions.add("simulate-interaction");
             completions.add("metrics");
             completions.add("performance");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("spawn-villager")) {
