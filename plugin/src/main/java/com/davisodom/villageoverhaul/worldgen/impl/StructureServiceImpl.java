@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
+import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.SiteValidator;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
@@ -207,35 +208,53 @@ public class StructureServiceImpl implements StructureService {
     
     @Override
     public boolean placeStructure(String structureId, World world, Location origin, long seed) {
+        Optional<PlacementResult> result = placeStructureAndGetResult(structureId, world, origin, seed);
+        return result.isPresent();
+    }
+    
+    @Override
+    public Optional<PlacementResult> placeStructureAndGetResult(String structureId, World world, Location origin, long seed) {
         StructureTemplate template = loadedStructures.get(structureId);
         
         if (template == null) {
             LOGGER.warning(String.format("[STRUCT] Structure '%s' not loaded", structureId));
-            return false;
+            return Optional.empty();
         }
         
         LOGGER.info(String.format("[STRUCT] Begin placement: structureId=%s, origin=%s, seed=%d, world=%s",
                 structureId, formatLocation(origin), seed, world.getName()));
         
-        // Attempt placement with re-seating logic
-        boolean placed = attemptPlacementWithReseating(template, world, origin, seed);
+        // Calculate rotation BEFORE placement (deterministic from seed)
+        Random random = new Random(seed);
+        int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
-        if (placed) {
-            LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, seed=%d",
-                    structureId, formatLocation(origin), seed));
+        // Attempt placement with re-seating logic and get actual location
+        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed);
+        
+        if (actualLocation.isPresent()) {
+            PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
+            LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
+                    structureId, formatLocation(actualLocation.get()), rotationDegrees, seed));
+            return Optional.of(result);
         } else {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
                     structureId, seed, MAX_RESEAT_ATTEMPTS));
+            return Optional.empty();
         }
-        
-        return placed;
+    }
+    
+    @Override
+    public Optional<Location> placeStructureAndGetLocation(String structureId, World world, Location origin, long seed) {
+        Optional<PlacementResult> result = placeStructureAndGetResult(structureId, world, origin, seed);
+        return result.map(PlacementResult::getActualLocation);
     }
     
     /**
-     * Attempt placement with re-seating logic.
+     * Attempt placement with re-seating logic, returning the actual placed location.
      * Tries initial location, then searches nearby if validation fails.
+     * @return Optional containing the actual placed location, empty if all attempts failed
      */
-    private boolean attemptPlacementWithReseating(StructureTemplate template, World world, Location origin, long seed) {
+    private Optional<Location> attemptPlacementWithReseatingAndGetLocation(StructureTemplate template, World world, Location origin, long seed) {
         Random random = new Random(seed);
         
         for (int attempt = 0; attempt < MAX_RESEAT_ATTEMPTS; attempt++) {
@@ -304,11 +323,11 @@ public class StructureServiceImpl implements StructureService {
                     LOGGER.info(String.format("[STRUCT] Re-seat successful: structure='%s', final_location=%s, attempts=%d, seed=%d",
                             template.id, formatLocation(currentOrigin), attempt + 1, seed));
                 }
-                return true;
+                return Optional.of(currentOrigin); // Return the actual placed location
             }
         }
         
-        return false;
+        return Optional.empty();
     }
     
     /**

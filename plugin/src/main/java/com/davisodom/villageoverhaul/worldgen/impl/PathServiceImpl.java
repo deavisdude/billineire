@@ -47,6 +47,12 @@ public class PathServiceImpl implements PathService {
     // Path network cache (villageId -> PathNetwork)
     private final Map<UUID, PathNetwork> pathNetworks = new HashMap<>();
     
+    // Building footprints per village (villageId -> List of BuildingBounds)
+    private final Map<UUID, List<BuildingBounds>> buildingFootprints = new HashMap<>();
+    
+    // Current village context for pathfinding (to avoid building footprints)
+    private UUID currentVillageContext = null;
+    
     @Override
     public boolean generatePathNetwork(World world, UUID villageId, List<Location> buildingLocations,
                                        Location mainBuildingLocation, long seed) {
@@ -57,6 +63,9 @@ public class PathServiceImpl implements PathService {
             LOGGER.warning("[STRUCT] No buildings to connect");
             return false;
         }
+        
+        // Set village context for building footprint avoidance (T021b)
+        currentVillageContext = villageId;
         
         PathNetwork.Builder networkBuilder = new PathNetwork.Builder()
                 .villageId(villageId)
@@ -88,6 +97,9 @@ public class PathServiceImpl implements PathService {
                 LOGGER.warning(String.format("[STRUCT] Failed to generate path from main to building %d", i));
             }
         }
+        
+        // Clear village context after path generation
+        currentVillageContext = null;
         
         if (successfulPaths == 0) {
             LOGGER.warning(String.format("[STRUCT] Path network generation failed: no paths created for village %s", villageId));
@@ -146,6 +158,14 @@ public class PathServiceImpl implements PathService {
      * Returns list of path nodes from start to end, or null if no path found.
      */
     private List<PathNode> findPathAStar(World world, Location start, Location end) {
+        return findPathAStar(world, start, end, null);
+    }
+    
+    /**
+     * A* pathfinding on 2D heightmap with optional village context for building avoidance.
+     * Returns list of path nodes from start to end, or null if no path found.
+     */
+    private List<PathNode> findPathAStar(World world, Location start, Location end, UUID villageId) {
         PriorityQueue<PathNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fScore));
         Set<String> closedSet = new HashSet<>();
         Map<String, PathNode> allNodes = new HashMap<>();
@@ -173,6 +193,7 @@ public class PathServiceImpl implements PathService {
         
         int nodesExplored = 0;
         int obstaclesEncountered = 0;
+        int buildingTilesAvoided = 0; // T021b: count building footprint obstacles
         double maxTerrainCostSeen = 0.0;
         
         while (!openSet.isEmpty() && nodesExplored < MAX_NODES_EXPLORED) {
@@ -182,13 +203,14 @@ public class PathServiceImpl implements PathService {
             // Check if we reached the goal
             if (Math.abs(current.x - endX) <= 2 && Math.abs(current.z - endZ) <= 2) {
                 List<PathNode> path = reconstructPath(current);
-                logPathTerrainCosts(world, path, nodesExplored);
+                logPathTerrainCosts(world, path, nodesExplored, buildingTilesAvoided);
                 return path;
             }
             
             closedSet.add(current.key());
             
-            // Explore neighbors (8 directions)
+            // T021c: Explore neighbors in 3D (8 horizontal directions × 3 vertical levels = 24 neighbors)
+            // Allow Y±1 per step to follow natural terrain slopes
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     if (dx == 0 && dz == 0) continue;
@@ -196,43 +218,74 @@ public class PathServiceImpl implements PathService {
                     int neighborX = current.x + dx;
                     int neighborZ = current.z + dz;
                     
-                    // Get height at neighbor position (find ground beneath vegetation, using current Y as hint)
-                    int neighborY = findGroundLevel(world, neighborX, neighborZ, current.y);
-                    
-                    String neighborKey = neighborX + "," + neighborZ;
-                    if (closedSet.contains(neighborKey)) {
-                        continue;
-                    }
-                    
-                    // Calculate movement cost
-                    Location fromLoc = new Location(world, current.x, current.y, current.z);
-                    Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
-                    double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
-                    
-                    maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
-                    
-                    // Skip if terrain is impassable
-                    if (movementCost >= OBSTACLE_COST) {
-                        obstaclesEncountered++;
-                        continue;
-                    }
-                    
-                    double tentativeGScore = current.gScore + movementCost;
-                    
-                    PathNode neighbor = allNodes.get(neighborKey);
-                    if (neighbor == null) {
-                        neighbor = new PathNode(neighborX, neighborY, neighborZ);
-                        neighbor.gScore = Double.POSITIVE_INFINITY;
-                        allNodes.put(neighborKey, neighbor);
-                    }
-                    
-                    if (tentativeGScore < neighbor.gScore) {
-                        neighbor.parent = current;
-                        neighbor.gScore = tentativeGScore;
-                        neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
+                    // T021c: Try multiple Y levels (same level, +1, -1)
+                    // This allows paths to follow gentle slopes naturally
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int neighborY = current.y + dy;
                         
-                        openSet.remove(neighbor); // Re-add with updated priority
-                        openSet.add(neighbor);
+                        // Validate Y coordinate is within world bounds
+                        if (neighborY < world.getMinHeight() || neighborY > world.getMaxHeight()) {
+                            continue;
+                        }
+                        
+                        // Create unique 3D key (include Y for closed set check)
+                        String neighborKey = neighborX + "," + neighborY + "," + neighborZ;
+                        if (closedSet.contains(neighborKey)) {
+                            continue;
+                        }
+                        
+                        // T021b: Check if neighbor position is inside any building footprint FIRST
+                        // This prevents paths from entering or crossing building volumes
+                        if (isInsideBuildingFootprint(neighborX, neighborY, neighborZ)) {
+                            buildingTilesAvoided++;
+                            continue; // Skip this neighbor (treat as obstacle)
+                        }
+                        
+                        // T021c: Check if the block BELOW neighbor is inside a building footprint
+                        // This prevents paths from walking on top of building roofs/floors
+                        Block blockBelow = world.getBlockAt(neighborX, neighborY - 1, neighborZ);
+                        if (isInsideBuildingFootprint(neighborX, neighborY - 1, neighborZ)) {
+                            buildingTilesAvoided++;
+                            continue; // Skip - would be walking on building structure
+                        }
+                        
+                        // T021c: Only allow stepping onto natural ground materials
+                        // This prevents paths from climbing onto roofs or man-made structures
+                        if (!isNaturalGroundMaterial(blockBelow.getType())) {
+                            // Cannot step onto this block - it's not natural ground
+                            continue;
+                        }
+                        
+                        // Calculate movement cost
+                        Location fromLoc = new Location(world, current.x, current.y, current.z);
+                        Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
+                        double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
+                        
+                        maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
+                        
+                        // Skip if terrain is impassable
+                        if (movementCost >= OBSTACLE_COST) {
+                            obstaclesEncountered++;
+                            continue;
+                        }
+                        
+                        double tentativeGScore = current.gScore + movementCost;
+                        
+                        PathNode neighbor = allNodes.get(neighborKey);
+                        if (neighbor == null) {
+                            neighbor = new PathNode(neighborX, neighborY, neighborZ);
+                            neighbor.gScore = Double.POSITIVE_INFINITY;
+                            allNodes.put(neighborKey, neighbor);
+                        }
+                        
+                        if (tentativeGScore < neighbor.gScore) {
+                            neighbor.parent = current;
+                            neighbor.gScore = tentativeGScore;
+                            neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
+                            
+                            openSet.remove(neighbor); // Re-add with updated priority
+                            openSet.add(neighbor);
+                        }
                     }
                 }
             }
@@ -245,10 +298,64 @@ public class PathServiceImpl implements PathService {
     }
     
     /**
+     * Check if a material is natural ground suitable for path placement (T021c).
+     * Whitelists natural terrain blocks and rejects man-made structures.
+     * 
+     * @param material Block material to check
+     * @return true if natural ground, false if man-made or unsuitable
+     */
+    private boolean isNaturalGroundMaterial(Material material) {
+        // Natural ground materials that paths can traverse
+        return material == Material.GRASS_BLOCK ||
+               material == Material.DIRT ||
+               material == Material.COARSE_DIRT ||
+               material == Material.PODZOL ||
+               material == Material.MYCELIUM ||
+               material == Material.STONE ||
+               material == Material.ANDESITE ||
+               material == Material.DIORITE ||
+               material == Material.GRANITE ||
+               material == Material.SAND ||
+               material == Material.RED_SAND ||
+               material == Material.SANDSTONE ||
+               material == Material.RED_SANDSTONE ||
+               material == Material.GRAVEL ||
+               material == Material.CLAY ||
+               material == Material.TERRACOTTA ||
+               material == Material.PACKED_ICE ||
+               material == Material.SNOW_BLOCK ||
+               material == Material.SNOW;
+    }
+    
+    /**
      * Heuristic function for A* (Manhattan distance).
      */
     private double heuristic(int x1, int z1, int x2, int z2) {
         return Math.abs(x1 - x2) + Math.abs(z1 - z2);
+    }
+    
+    /**
+     * Check if a position is inside any registered building footprint for the current village context.
+     * T021b: Building footprint avoidance for pathfinding.
+     */
+    private boolean isInsideBuildingFootprint(int x, int y, int z) {
+        if (currentVillageContext == null) {
+            return false; // No village context, no building avoidance
+        }
+        
+        List<BuildingBounds> bounds = buildingFootprints.get(currentVillageContext);
+        if (bounds == null || bounds.isEmpty()) {
+            return false; // No registered footprints for this village
+        }
+        
+        // Check if position is inside any building bounds
+        for (BuildingBounds building : bounds) {
+            if (building.contains(x, y, z)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     /**
@@ -334,8 +441,9 @@ public class PathServiceImpl implements PathService {
     /**
      * Log terrain cost breakdown for a successful path.
      * Analyzes the final path to report flat, slope, water, and steep tile counts.
+     * T021b: Also logs building tiles avoided during pathfinding.
      */
-    private void logPathTerrainCosts(World world, List<PathNode> path, int nodesExplored) {
+    private void logPathTerrainCosts(World world, List<PathNode> path, int nodesExplored, int buildingTilesAvoided) {
         if (path.isEmpty()) {
             LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes (empty path)", nodesExplored));
             return;
@@ -383,10 +491,19 @@ public class PathServiceImpl implements PathService {
             }
         }
         
-        LOGGER.info(String.format(
-            "[PATH] A* SUCCESS: Goal reached after exploring %d nodes (path=%d tiles, cost=%.1f, flat=%d, slope=%d, water=%d, steep=%d)",
+        // Build log message with terrain breakdown and building avoidance stats (T021b)
+        String logMessage = String.format(
+            "[PATH] A* SUCCESS: Goal reached after exploring %d nodes (path=%d tiles, cost=%.1f, flat=%d, slope=%d, water=%d, steep=%d",
             nodesExplored, path.size(), totalCost, flatTiles, slopeTiles, waterTiles, steepTiles
-        ));
+        );
+        
+        // Append building avoidance info if applicable
+        if (buildingTilesAvoided > 0) {
+            logMessage += String.format(", avoided %d building tiles", buildingTilesAvoided);
+        }
+        logMessage += ")";
+        
+        LOGGER.info(logMessage);
         
         // Log path hash for determinism testing (T026d)
         String pathHash = computePathHash(path);
@@ -591,12 +708,13 @@ public class PathServiceImpl implements PathService {
      */
     /**
      * Find ground level at given X,Z coordinates, using a Y hint to avoid scanning through tall buildings.
+     * CRITICAL: Skips Y-levels that are inside registered building footprints to prevent paths on rooftops.
      * 
      * @param world World to search
      * @param x X coordinate
      * @param z Z coordinate
      * @param yHint Y coordinate hint (e.g., building origin/door level) to start search from
-     * @return Y coordinate of solid ground
+     * @return Y coordinate of solid ground, guaranteed to be outside building footprints
      */
     private int findGroundLevel(World world, int x, int z, int yHint) {
         // Start by checking the hint level and a few blocks around it
@@ -604,6 +722,12 @@ public class PathServiceImpl implements PathService {
             int checkY = yHint + yOffset;
             Block block = world.getBlockAt(x, checkY, z);
             Material type = block.getType();
+            
+            // CRITICAL: Skip this Y-level if it's inside a building footprint (T021b)
+            // This prevents paths from being placed on building floors/rooftops
+            if (isInsideBuildingFootprint(x, checkY, z)) {
+                continue; // Skip this Y-level, try next
+            }
             
             // If we find solid ground at or slightly above the hint, use it
             if (type.isSolid() && !type.isAir() && 
@@ -616,6 +740,7 @@ public class PathServiceImpl implements PathService {
         }
         
         // If hint didn't work, fall back to original logic (scan from world highest block)
+        // But still skip Y-levels inside building footprints
         int highestY = world.getHighestBlockYAt(x, z);
         Block highestBlock = world.getBlockAt(x, highestY, z);
         Material highestType = highestBlock.getType();
@@ -634,17 +759,22 @@ public class PathServiceImpl implements PathService {
                 highestType == Material.FERN ||
                 highestType == Material.LARGE_FERN;
         
-        if (!isVegetation && highestType.isSolid()) {
-            // Highest block is already solid ground
+        if (!isVegetation && highestType.isSolid() && !isInsideBuildingFootprint(x, highestY, z)) {
+            // Highest block is already solid ground AND not inside a building
             return highestY;
         }
         
         // Search downward up to 20 blocks to find solid ground beneath vegetation
         for (int y = highestY - 1; y > highestY - 20 && y > world.getMinHeight(); y--) {
+            // Skip Y-levels inside building footprints
+            if (isInsideBuildingFootprint(x, y, z)) {
+                continue;
+            }
+            
             Block current = world.getBlockAt(x, y, z);
             Material currentType = current.getType();
             
-            // Found solid ground
+            // Found solid ground outside building footprints
             if (currentType.isSolid() && !currentType.isAir() && currentType != Material.OAK_LEAVES &&
                     currentType != Material.BIRCH_LEAVES && currentType != Material.SPRUCE_LEAVES &&
                     currentType != Material.JUNGLE_LEAVES && currentType != Material.ACACIA_LEAVES &&
@@ -655,7 +785,15 @@ public class PathServiceImpl implements PathService {
         }
         
         // Fallback: if we didn't find ground in search range, use original highest block or hint
-        return Math.min(yHint, highestY);
+        // CRITICAL: Make sure fallback is also not inside a building footprint
+        int fallbackY = Math.min(yHint, highestY);
+        // Scan down from fallback to find first Y outside building footprints
+        for (int y = fallbackY; y > fallbackY - 10 && y > world.getMinHeight(); y--) {
+            if (!isInsideBuildingFootprint(x, y, z)) {
+                return y;
+            }
+        }
+        return fallbackY; // Last resort
     }
     
     /**
@@ -703,8 +841,53 @@ public class PathServiceImpl implements PathService {
             this.z = z;
         }
         
+        /**
+         * Generate unique 3D key for this node (T021c).
+         * Used for closed set and node lookup in A* pathfinding.
+         */
         String key() {
-            return x + "," + z;
+            return x + "," + y + "," + z;
         }
+    }
+    
+    /**
+     * Building bounds for obstacle avoidance in pathfinding (T021b).
+     * Represents a 3D axis-aligned bounding box.
+     */
+    private static class BuildingBounds {
+        final int minX;
+        final int maxX;
+        final int minY;
+        final int maxY;
+        final int minZ;
+        final int maxZ;
+        
+        BuildingBounds(int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minY = minY;
+            this.maxY = maxY;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+        }
+        
+        /**
+         * Check if a point (x,y,z) is inside this building's bounds (inclusive).
+         */
+        boolean contains(int x, int y, int z) {
+            return x >= minX && x <= maxX &&
+                   y >= minY && y <= maxY &&
+                   z >= minZ && z <= maxZ;
+        }
+    }
+    
+    @Override
+    public void registerBuildingFootprint(UUID villageId, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+        buildingFootprints.computeIfAbsent(villageId, k -> new ArrayList<>())
+                .add(new BuildingBounds(minX, maxX, minY, maxY, minZ, maxZ));
+        
+        LOGGER.info(String.format("[PATH] FOOTPRINT REGISTERED for village %s: X[%d to %d] Y[%d to %d] Z[%d to %d] (size: %dx%dx%d)",
+                villageId, minX, maxX, minY, maxY, minZ, maxZ, 
+                (maxX - minX + 1), (maxY - minY + 1), (maxZ - minZ + 1)));
     }
 }

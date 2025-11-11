@@ -36,6 +36,33 @@ public interface StructureService {
     boolean placeStructure(String structureId, World world, Location origin, long seed);
     
     /**
+     * Place a loaded structure at the specified location, returning the actual placed location.
+     * This method attempts placement with re-seating logic and returns the final location if successful.
+     * 
+     * @param structureId Structure identifier (from schema)
+     * @param world Target world
+     * @param origin Requested placement origin (may be adjusted during re-seating)
+     * @param seed Deterministic seed for randomized blocks
+     * @return Optional containing the actual placed location, empty if placement failed
+     * @deprecated Use placeStructureAndGetResult() instead to get rotation information
+     */
+    @Deprecated
+    Optional<Location> placeStructureAndGetLocation(String structureId, World world, Location origin, long seed);
+    
+    /**
+     * Place a loaded structure at the specified location, returning complete placement information.
+     * This method attempts placement with re-seating logic and returns location + rotation if successful.
+     * T021b: Critical for accurate building footprint tracking.
+     * 
+     * @param structureId Structure identifier (from schema)
+     * @param world Target world
+     * @param origin Requested placement origin (may be adjusted during re-seating)
+     * @param seed Deterministic seed for randomized blocks and rotation
+     * @return Optional containing PlacementResult with actual location and rotation, empty if placement failed
+     */
+    Optional<PlacementResult> placeStructureAndGetResult(String structureId, World world, Location origin, long seed);
+    
+    /**
      * Get the dimensions of a loaded structure.
      * 
      * @param structureId Structure identifier

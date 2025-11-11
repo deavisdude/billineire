@@ -5,12 +5,14 @@ import com.davisodom.villageoverhaul.model.Building;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
+import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.impl.PathEmitter;
 import com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl;
 import com.davisodom.villageoverhaul.worldgen.impl.StructureServiceImpl;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.plugin.Plugin;
@@ -159,6 +161,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Track occupied footprints to prevent overlaps DURING placement
         List<Footprint> occupiedFootprints = new ArrayList<>();
         
+        // T021b: Track placement results with rotation info for correct path avoidance
+        Map<UUID, com.davisodom.villageoverhaul.worldgen.PlacementResult> buildingPlacements = new HashMap<>();
+        
         // Track rejection reasons for all placement attempts (Constitution v1.4.0, Principle XII)
         PlacementRejectionTracker villageRejectionTracker = new PlacementRejectionTracker();
         
@@ -181,19 +186,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // Derive building-specific seed
             long buildingSeed = seed + i;
             
-            // Determine rotation for this building
-            Random rotationRandom = new Random(buildingSeed);
-            int rotationDegrees = rotationRandom.nextInt(4) * 90;
-            
-            // Calculate effective footprint after rotation
-            int effectiveWidth, effectiveDepth;
-            if (rotationDegrees == 90 || rotationDegrees == 270) {
-                effectiveWidth = depth;
-                effectiveDepth = width;
-            } else {
-                effectiveWidth = width;
-                effectiveDepth = depth;
-            }
+            // T021b FIX: We can't predict rotation before placement because re-seating might change it!
+            // Instead, we need to estimate max footprint for collision detection, then get ACTUAL rotation after placement
+            // Use max dimension for conservative collision detection during position finding
+            int maxDimension = Math.max(width, depth);
+            int effectiveWidth = maxDimension;
+            int effectiveDepth = maxDimension;
             
             // Find suitable position with integrated terrain/spacing/overlap checks
             PlacementResult placementResult = findSuitablePlacementPosition(
@@ -213,25 +211,44 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     placementResult.position.z
             );
             
-            Optional<Building> building = placeBuilding(world, buildingLocation, structureId, villageId, buildingSeed);
+            // T021b FIX: Place structure and get ACTUAL rotation used during placement
+            Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> actualPlacement = 
+                    structureService.placeStructureAndGetResult(structureId, world, buildingLocation, buildingSeed);
             
-            if (building.isPresent()) {
-                placedBuildings.add(building.get());
+            if (actualPlacement.isPresent()) {
+                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = actualPlacement.get();
+                Location actualOrigin = placement.getActualLocation();
+                int actualRotation = placement.getRotationDegrees();
                 
-                // IMPORTANT: Track actual placed location for collision detection
-                // actualOrigin is the CORNER of the schematic (not center), so use it directly
-                Location actualOrigin = building.get().getOrigin();
+                // Calculate ACTUAL effective dimensions using ACTUAL rotation
+                int actualEffectiveWidth = placement.getEffectiveWidth(width, depth);
+                int actualEffectiveDepth = placement.getEffectiveDepth(width, depth);
                 
+                // Create building metadata with actual placement info
+                Building building = new Building.Builder()
+                        .villageId(villageId)
+                        .structureId(structureId)
+                        .origin(actualOrigin)
+                        .dimensions(dims[0], dims[1], dims[2])
+                        .build();
+                
+                placedBuildings.add(building);
+                
+                // Store placement result for later footprint registration
+                buildingPlacements.put(building.getBuildingId(), placement);
+                
+                // Track footprint for collision detection with ACTUAL dimensions
                 Footprint footprint = new Footprint(
                         actualOrigin.getBlockX(), 
                         actualOrigin.getBlockZ(), 
-                        effectiveWidth, 
-                        effectiveDepth);
+                        actualEffectiveWidth, 
+                        actualEffectiveDepth);
                 occupiedFootprints.add(footprint);
                 
-                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d), tracking footprint: x=%d, z=%d, w=%d, d=%d", 
+                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d) rotation=%d°, tracking footprint: x=%d, z=%d, w=%d, d=%d", 
                         structureId, 
                         actualOrigin.getBlockX(), actualOrigin.getBlockY(), actualOrigin.getBlockZ(),
+                        actualRotation,
                         footprint.x, footprint.z, footprint.width, footprint.depth));
             } else {
                 LOGGER.warning(String.format("[STRUCT] Failed to place building %s", structureId));
@@ -267,33 +284,139 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         if (placedBuildings.size() > 1) {
             LOGGER.info(String.format("[STRUCT] Generating path network for village %s", villageId));
             
-            // Use designated main building, or fall back to first building if main building not set
-            Location mainBuildingLocation;
-            if (mainBuildingId.isPresent()) {
-                // Find the main building in the list
-                Optional<Building> mainBuilding = placedBuildings.stream()
-                        .filter(b -> b.getBuildingId().equals(mainBuildingId.get()))
-                        .findFirst();
-                mainBuildingLocation = mainBuilding.isPresent() ? 
-                        mainBuilding.get().getOrigin() : 
-                        placedBuildings.get(0).getOrigin();
-            } else {
-                // Fallback to first building if main building not designated
-                mainBuildingLocation = placedBuildings.get(0).getOrigin();
-            }
+            // T021c: Calculate entrance points for all buildings
+            // Use entrance locations (outside footprints) instead of raw building origins
+            List<Location> buildingEntrances = new ArrayList<>();
+            Location mainBuildingEntrance = null;
             
-            // Collect all building locations
-            List<Location> buildingLocations = new ArrayList<>();
             for (Building building : placedBuildings) {
-                buildingLocations.add(building.getOrigin());
+                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = 
+                        buildingPlacements.get(building.getBuildingId());
+                
+                if (placement == null) {
+                    LOGGER.warning(String.format("[STRUCT] Missing placement result for building %s, using origin as entrance",
+                            building.getBuildingId()));
+                    buildingEntrances.add(building.getOrigin());
+                    continue;
+                }
+                
+                Location entrance = calculateEntrancePoint(building, placement, world);
+                buildingEntrances.add(entrance);
+                
+                // Track main building entrance separately
+                if (mainBuildingId.isPresent() && building.getBuildingId().equals(mainBuildingId.get())) {
+                    mainBuildingEntrance = entrance;
+                }
             }
             
-            // Generate path network (A* pathfinding)
+            // Fallback: if no main building was designated, use first building's entrance
+            if (mainBuildingEntrance == null && !buildingEntrances.isEmpty()) {
+                mainBuildingEntrance = buildingEntrances.get(0);
+                LOGGER.warning(String.format("[STRUCT] No main building designated for village %s, using first building entrance",
+                        villageId));
+            }
+            
+            // T021b: Register building footprints for pathfinding obstacle avoidance
+            // CRITICAL: Use ACTUAL rotation from placement to calculate correct effective dimensions
+            // CRITICAL: Account for WorldEdit rotation behavior - origin point shifts based on rotation
+            // At 0°: origin is northwest corner (minX, minZ)
+            // At 90°: origin is northeast corner (minX, maxZ)
+            // At 180°: origin is southeast corner (maxX, maxZ)
+            // At 270°: origin is southwest corner (maxX, minZ)
+            final int FOOTPRINT_BUFFER = 3; // Blocks to expand footprint on all sides
+            
+            for (Building building : placedBuildings) {
+                // Get the PlacementResult which contains the actual rotation used
+                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = 
+                        buildingPlacements.get(building.getBuildingId());
+                
+                if (placement == null) {
+                    LOGGER.warning(String.format("[STRUCT] Missing placement result for building %s, skipping footprint registration",
+                            building.getBuildingId()));
+                    continue;
+                }
+                
+                Location buildingOrigin = building.getOrigin();
+                int[] dims = building.getDimensions();
+                int width = dims[0];
+                int height = dims[1];
+                int depth = dims[2];
+                int rotationDegrees = placement.getRotationDegrees();
+                
+                // Calculate ACTUAL effective dimensions using rotation from placement
+                int effectiveWidth = placement.getEffectiveWidth(width, depth);
+                int effectiveDepth = placement.getEffectiveDepth(width, depth);
+                
+                // Calculate actual structure bounds based on WorldEdit rotation behavior
+                // WorldEdit rotates around origin point, changing which corner the origin represents
+                int structureMinX, structureMaxX, structureMinZ, structureMaxZ;
+                
+                int originX = buildingOrigin.getBlockX();
+                int originZ = buildingOrigin.getBlockZ();
+                
+                switch (rotationDegrees) {
+                    case 0: // Origin is northwest corner (minX, minZ)
+                        structureMinX = originX;
+                        structureMaxX = originX + effectiveWidth - 1;
+                        structureMinZ = originZ;
+                        structureMaxZ = originZ + effectiveDepth - 1;
+                        break;
+                    case 90: // Origin is northeast corner (minX, maxZ) - structure extends -Z
+                        structureMinX = originX;
+                        structureMaxX = originX + effectiveWidth - 1;
+                        structureMinZ = originZ - effectiveDepth + 1;
+                        structureMaxZ = originZ;
+                        break;
+                    case 180: // Origin is southeast corner (maxX, maxZ) - structure extends -X, -Z
+                        structureMinX = originX - effectiveWidth + 1;
+                        structureMaxX = originX;
+                        structureMinZ = originZ - effectiveDepth + 1;
+                        structureMaxZ = originZ;
+                        break;
+                    case 270: // Origin is southwest corner (maxX, minZ) - structure extends -X
+                        structureMinX = originX - effectiveWidth + 1;
+                        structureMaxX = originX;
+                        structureMinZ = originZ;
+                        structureMaxZ = originZ + effectiveDepth - 1;
+                        break;
+                    default:
+                        LOGGER.warning(String.format("[STRUCT] Unexpected rotation %d° for building %s, using 0° logic",
+                                rotationDegrees, building.getBuildingId()));
+                        structureMinX = originX;
+                        structureMaxX = originX + effectiveWidth - 1;
+                        structureMinZ = originZ;
+                        structureMaxZ = originZ + effectiveDepth - 1;
+                }
+                
+                // Apply buffer zone AFTER calculating structure bounds
+                int minX = structureMinX - FOOTPRINT_BUFFER;
+                int maxX = structureMaxX + FOOTPRINT_BUFFER;
+                int minY = buildingOrigin.getBlockY();
+                int maxY = minY + height - 1;
+                int minZ = structureMinZ - FOOTPRINT_BUFFER;
+                int maxZ = structureMaxZ + FOOTPRINT_BUFFER;
+                
+                pathService.registerBuildingFootprint(villageId, minX, maxX, minY, maxY, minZ, maxZ);
+                
+                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: building=%s, structureId=%s", 
+                        building.getBuildingId(), building.getStructureId()));
+                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: origin=(%d,%d,%d), rotation=%d°",
+                        buildingOrigin.getBlockX(), buildingOrigin.getBlockY(), buildingOrigin.getBlockZ(),
+                        placement.getRotationDegrees()));
+                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: schematic dims: width=%d, height=%d, depth=%d",
+                        width, height, depth));
+                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: effective dims: width=%d, depth=%d (after rotation)",
+                        effectiveWidth, effectiveDepth));
+                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: bounds: minX=%d, maxX=%d, minY=%d, maxY=%d, minZ=%d, maxZ=%d",
+                        minX, maxX, minY, maxY, minZ, maxZ));
+            }
+            
+            // Generate path network (A* pathfinding) using entrance points
             boolean pathSuccess = pathService.generatePathNetwork(
                     world, 
                     villageId, 
-                    buildingLocations, 
-                    mainBuildingLocation, 
+                    buildingEntrances,  // T021c: Use entrance points instead of origins
+                    mainBuildingEntrance,  // T021c: Use main building entrance
                     seed
             );
             
@@ -365,24 +488,28 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             return Optional.empty();
         }
         
-        // Attempt placement with seating via StructureService
-        boolean placed = structureService.placeStructure(structureId, world, location, seed);
+        // T021b: Use new method that returns BOTH the final re-seated location AND rotation
+        // This is critical for calculating correct building footprints - rotation swaps width/depth
+        Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> placementResult = 
+                structureService.placeStructureAndGetResult(structureId, world, location, seed);
         
-        if (!placed) {
+        if (!placementResult.isPresent()) {
             LOGGER.warning(String.format("[STRUCT] Failed to place structure '%s' at %s", structureId, location));
             return Optional.empty();
         }
         
-        // Create building metadata using Builder pattern
+        // Create building metadata using the ACTUAL placed location (not the requested location)
         int[] dims = dimensions.get();
         Building building = new Building.Builder()
                 .villageId(villageId)
                 .structureId(structureId)
-                .origin(location)
+                .origin(placementResult.get().getActualLocation()) // Use actual final location, not requested location
                 .dimensions(dims[0], dims[1], dims[2])
                 .build();
         
-        LOGGER.fine(String.format("[STRUCT] Building placed successfully: buildingId=%s", building.getBuildingId()));
+        LOGGER.fine(String.format("[STRUCT] Building placed successfully: buildingId=%s at actual location=%s, rotation=%d°", 
+                building.getBuildingId(), placementResult.get().getActualLocation(), 
+                placementResult.get().getRotationDegrees()));
         
         return Optional.of(building);
     }
@@ -992,6 +1119,246 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     private String formatLocation(Location loc) {
         return String.format("(%d, %d, %d)", loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+    }
+    
+    /**
+     * Calculate entrance point for a building (T021c).
+     * Returns a ground-level location outside the building footprint based on rotation.
+     * Entrance is positioned 1-2 blocks away from the building face in the direction the entrance faces.
+     * CRITICAL: Accounts for WorldEdit rotation behavior where origin point represents different corners.
+     * 
+     * @param building Building with origin, dimensions, and rotation
+     * @param placement PlacementResult containing actual rotation applied
+     * @param world World to check ground level
+     * @return Entrance location (ground level, outside footprint)
+     */
+    private Location calculateEntrancePoint(Building building, 
+            com.davisodom.villageoverhaul.worldgen.PlacementResult placement, World world) {
+        Location origin = building.getOrigin();
+        int[] dims = building.getDimensions();
+        int width = dims[0];
+        int depth = dims[2];
+        int rotationDegrees = placement.getRotationDegrees();
+        
+        // Calculate effective dimensions after rotation
+        int effectiveWidth = placement.getEffectiveWidth(width, depth);
+        int effectiveDepth = placement.getEffectiveDepth(width, depth);
+        
+        // CRITICAL: Calculate actual structure bounds based on WorldEdit rotation behavior
+        // WorldEdit rotates clipboard around origin, changing which corner origin represents:
+        // 0°: origin = NW corner (minX, minZ), extends +X, +Z
+        // 90°: origin = NE corner (minX, maxZ), extends +X, -Z
+        // 180°: origin = SE corner (maxX, maxZ), extends -X, -Z
+        // 270°: origin = SW corner (maxX, minZ), extends -X, +Z
+        
+        int originX = origin.getBlockX();
+        int originZ = origin.getBlockZ();
+        
+        int structureMinX, structureMaxX, structureMinZ, structureMaxZ;
+        
+        switch (rotationDegrees) {
+            case 0: // Origin is NW corner
+                structureMinX = originX;
+                structureMaxX = originX + effectiveWidth - 1;
+                structureMinZ = originZ;
+                structureMaxZ = originZ + effectiveDepth - 1;
+                break;
+            case 90: // Origin is NE corner
+                structureMinX = originX;
+                structureMaxX = originX + effectiveWidth - 1;
+                structureMinZ = originZ - effectiveDepth + 1;
+                structureMaxZ = originZ;
+                break;
+            case 180: // Origin is SE corner
+                structureMinX = originX - effectiveWidth + 1;
+                structureMaxX = originX;
+                structureMinZ = originZ - effectiveDepth + 1;
+                structureMaxZ = originZ;
+                break;
+            case 270: // Origin is SW corner
+                structureMinX = originX - effectiveWidth + 1;
+                structureMaxX = originX;
+                structureMinZ = originZ;
+                structureMaxZ = originZ + effectiveDepth - 1;
+                break;
+            default:
+                LOGGER.warning(String.format("[PATH] Invalid rotation %d° for building %s, using origin",
+                        rotationDegrees, building.getBuildingId()));
+                return origin.clone();
+        }
+        
+        // Calculate entrance at center of appropriate face, 2 blocks outside structure bounds
+        // Default entrance faces SOUTH (positive Z) at 0° rotation
+        // Rotation transforms: 0°=South, 90°=West, 180°=North, 270°=East
+        
+        int entranceX, entranceZ;
+        
+        switch (rotationDegrees) {
+            case 0: // South face (positive Z) - outside maxZ
+                entranceX = (structureMinX + structureMaxX) / 2;
+                entranceZ = structureMaxZ + 2;
+                break;
+            case 90: // West face (negative X) - outside minX
+                entranceX = structureMinX - 2;
+                entranceZ = (structureMinZ + structureMaxZ) / 2;
+                break;
+            case 180: // North face (negative Z) - outside minZ
+                entranceX = (structureMinX + structureMaxX) / 2;
+                entranceZ = structureMinZ - 2;
+                break;
+            case 270: // East face (positive X) - outside maxX
+                entranceX = structureMaxX + 2;
+                entranceZ = (structureMinZ + structureMaxZ) / 2;
+                break;
+            default:
+                LOGGER.warning(String.format("[PATH] Invalid rotation %d° for building %s, using origin",
+                        rotationDegrees, building.getBuildingId()));
+                return origin.clone();
+        }
+        
+        // CRITICAL: Find actual ground level OUTSIDE the building footprint
+        // Scan DOWN from building base to find actual terrain
+        // Since entrance X/Z is already outside footprint (2 blocks away),
+        // we just need to find the first solid block below building base
+        int buildingMinY = origin.getBlockY();
+        int groundY = buildingMinY - 1; // Start scan from just below building
+        
+        // Scan down to find first solid block (actual terrain)
+        for (int checkY = groundY; checkY >= buildingMinY - 10 && checkY >= world.getMinHeight(); checkY--) {
+            Block block = world.getBlockAt(entranceX, checkY, entranceZ);
+            if (block.getType().isSolid()) {
+                groundY = checkY;
+                break;
+            }
+        }
+        
+        Location entranceLocation = new Location(world, entranceX, groundY, entranceZ);
+        
+        LOGGER.info(String.format("[PATH] Building entrance: %s at (%d,%d,%d) facing %s (rotation=%d°) [buildingMinY=%d] [structure bounds: X[%d-%d] Z[%d-%d]]",
+                building.getBuildingId(), entranceX, groundY, entranceZ, 
+                getDirectionName(rotationDegrees), rotationDegrees, buildingMinY,
+                structureMinX, structureMaxX, structureMinZ, structureMaxZ));
+        
+        return entranceLocation;
+    }
+    
+    /**
+     * Find ground level at given X,Z coordinates, starting from hint Y.
+     * Scans down to find first solid block suitable for path placement.
+     * 
+     * DEPRECATED: Use findGroundLevelBelowBuilding for entrance calculations to avoid
+     * finding building floor blocks.
+     * 
+     * @param world World to scan
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @param hintY Starting Y coordinate (typically building origin Y)
+     * @return Ground level Y coordinate
+     */
+    private int findGroundLevel(World world, int x, int z, int hintY) {
+        // Scan down from hint Y to find solid ground
+        for (int y = hintY; y > world.getMinHeight(); y--) {
+            Block block = world.getBlockAt(x, y, z);
+            Material type = block.getType();
+            
+            // Found solid ground that's suitable for walking
+            if (type.isSolid() && !type.isAir()) {
+                // Return Y+1 (on top of the solid block)
+                return y + 1;
+            }
+        }
+        
+        // Fallback to hint Y if no solid ground found
+        return hintY;
+    }
+    
+    /**
+     * Find ground level BELOW a building footprint.
+     * Scans down from maxY to find natural terrain, skipping all building/terraformed blocks.
+     * CRITICAL: Must skip foundation/grading blocks that extend outside footprint.
+     * 
+     * @param world World to scan
+     * @param x X coordinate
+     * @param z Z coordinate
+     * @param maxY Maximum Y to start scan (should be buildingMinY - 5 to skip foundation)
+     * @return Ground level Y coordinate on natural terrain, guaranteed <= buildingMinY
+     */
+    private int findGroundLevelBelowBuilding(World world, int x, int z, int maxY) {
+        int firstNaturalY = -1;
+        
+        // Scan down from maxY to find natural solid ground (not building blocks)
+        for (int y = maxY; y > world.getMinHeight(); y--) {
+            Block block = world.getBlockAt(x, y, z);
+            Material type = block.getType();
+            
+            // Skip non-solid blocks (air, water, etc.)
+            if (!type.isSolid() || type.isAir()) {
+                continue;
+            }
+            
+            // Check if this is natural ground (not building materials)
+            if (isNaturalGroundForEntrance(type)) {
+                firstNaturalY = y + 1; // Y+1 = standing on top of block
+                break;
+            }
+            
+            // If we hit a non-natural solid block, continue scanning down
+            // (might be building foundation blocks or terraformed grading)
+        }
+        
+        // If we found natural terrain, return it
+        if (firstNaturalY > 0) {
+            return firstNaturalY;
+        }
+        
+        // Fallback: scan up from bedrock if we somehow missed natural terrain
+        for (int y = world.getMinHeight(); y <= maxY; y++) {
+            Block block = world.getBlockAt(x, y, z);
+            Material type = block.getType();
+            
+            if (type.isSolid() && !type.isAir() && isNaturalGroundForEntrance(type)) {
+                return y + 1;
+            }
+        }
+        
+        // Last resort: return maxY (should rarely happen)
+        LOGGER.warning(String.format("[PATH] Could not find natural ground at (%d,%d), using fallback Y=%d",
+                x, z, maxY));
+        return maxY;
+    }
+    
+    /**
+     * Check if a material is natural ground suitable for building entrances.
+     * More restrictive than path traversal - excludes building materials.
+     * 
+     * @param material Material to check
+     * @return true if natural ground, false if building material or unsuitable
+     */
+    private boolean isNaturalGroundForEntrance(Material material) {
+        // Only allow natural terrain blocks for entrance ground
+        return material == Material.GRASS_BLOCK ||
+               material == Material.DIRT ||
+               material == Material.COARSE_DIRT ||
+               material == Material.PODZOL ||
+               material == Material.MYCELIUM ||
+               material == Material.SAND ||
+               material == Material.RED_SAND ||
+               material == Material.GRAVEL ||
+               material == Material.CLAY;
+        // NOTE: Excludes STONE, COBBLESTONE, PLANKS, etc. (building materials)
+    }
+    
+    /**
+     * Get direction name for rotation angle.
+     */
+    private String getDirectionName(int rotationDegrees) {
+        switch (rotationDegrees) {
+            case 0: return "South";
+            case 90: return "West";
+            case 180: return "North";
+            case 270: return "East";
+            default: return "Unknown";
+        }
     }
     
     // ==================== Inner Classes ====================

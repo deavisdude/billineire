@@ -380,106 +380,96 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
 
 ---
 
-## Phase 4.5: US2 Stabilization & Terrain Integration (Priority: P1)
+## Phase 4.5: Foundational Rewrite — Persistence & Pathfinding (Priority: P0)
 
-Purpose: Fix rooftop paths, floating path slabs, treetop dirt, unused terraforming, and rotation variety while keeping the current stable build intact. These tasks target minimal, safe changes with clear acceptance criteria and tests.
+Purpose: Replace the current placement/persistence/path pipeline with a rigorously verified, ground-truth-first system. Eliminate reliance on heuristics or ambiguous logs. All coordinates persisted must be proven against in-game reality before any path is generated.
 
-- [ ] T021b [US2] Register and avoid building footprints in pathfinding
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/PathService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
-	- Description: Add a method to register building bounds (minX..maxX, minY..maxY, minZ..maxZ) with the path service per village, and treat any node inside these bounds as an obstacle during A*; populate from actual placed buildings right before path generation.
-	- Acceptance:
-		- 0 blocks of any path are placed on top of structure materials (roof/walls/floors) when buildings are adjacent.
-		- Path generation logs show "avoided N building tiles" when applicable.
+Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not iterate further on them.
 
-- [ ] T021c [US2] Reinstate 3D terrain-following (±1 Y per step) with natural terrain whitelist
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
-	- Description: Restore 3D A* (consider Y) with a whitelist of natural ground (grass/dirt/stone/sand/gravel/packed_ice/snow) so paths will not route over man-made blocks (wood/planks/bricks/terracotta/concrete/wool). Keep MAX_NODES and distance caps as before.
-	- Acceptance:
-		- Paths follow gentle slopes; no flat floating spans across ledges.
-		- Paths refuse to climb onto non-natural blocks; rooftop crossings eliminated.
-
-- [ ] T022a [P] [US2] Fix floating slabs/stairs in PathEmitter
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
-	- Description: When smoothing, only place slab/stair if (a) target block is path material and (b) the block below is solid natural terrain; otherwise downgrade to full block at ground or skip smoothing step. Remove any previously placed slab that would end up floating.
-	- Acceptance:
-		- No slabs/stairs render with air directly beneath; zero "floating slab" sightings in smoke test.
-
-- [ ] T014b [P] [US1] Prevent dirt mounds on treetops during grading
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
-	- Description: Before fill/grade, treat leaves/logs as non-foundation; never place dirt on top of leaf/log blocks. Prefer trimming foliage and seeking true ground (soil/stone) or skipping fill for that column.
-	- Acceptance:
-		- After structure placement or path emission, no dirt columns cap tree leaves; canopy remains natural or trimmed, not buried.
-
-- [ ] T015b [US1] Roll back unused terraforming when a seating attempt is abandoned
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
-	- Description: When seating attempts fail and the algorithm re-seats elsewhere, revert prior grading/trim/fill in that attempt (simple block-change journal scoped to the attempt). Commit changes only on final successful seat.
-	- Acceptance:
-		- No stray graded patches or dirt fills remain at rejected sites; logs show "terraform rollback applied" for aborted seats.
-
-- [ ] T017b [P] [US1] Diversify building rotation while preserving footprint accuracy
-	- Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-	- Description: Use per-building mixed seed (e.g., hash of villageId, structureId, index) for 0/90/180/270; ensure the same rotation is used for both footprint computation and paste. Do not allow vertical flips.
-	- Acceptance:
-		- In a 5-building village, at least two distinct rotations occur consistently; no overlaps; structures remain grounded.
-
-- [ ] T026e [P] [US2] Headless test: "no rooftop paths"
-	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-	- Description: Detect any path block whose underlying or target block is non-natural and belongs to a building footprint; fail if found. Capture a small world snapshot or log hash.
-
-- [ ] T026f [P] [US2] Headless test: "no floating smoothing blocks"
-	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-	- Description: Scan emitted path segments; assert slabs/stairs have solid under-support or are replaced by full blocks.
-
-- [ ] T026g [P] [US1] Headless test: "no treetop dirt mounds"
-	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-	- Description: In the affected area, ensure no dirt/grass blocks sit directly atop leaf/log blocks introduced by grading.
-
-- [ ] T026h [P] [US1] Headless test: "terraform rollback on abort"
-
-- [ ] T026i [P] [US1] Headless test: "reject water foundations"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: Force generation near shallow water and assert all candidate seats over water are rejected; log count; succeed only if final placements exclude fluid tiles.
+- [ ] R001 [Core] Canonical placement transform and receipt
+  - Files: `plugin/src/main/java/.../worldgen/impl/StructureServiceImpl.java`, `.../villages/impl/VillagePlacementServiceImpl.java`, `.../model/PlacementReceipt.java`
+  - Description: Define a canonical world transform T for every paste: {origin(x,y,z), rotation(0/90/180/270), effectiveWidth, effectiveDepth, height}. After paste, compute exact AABB in world coords. Emit a PlacementReceipt containing: structureId, villageId, world, minX/maxX/minY/maxY/minZ/maxZ, rotation, effective dims, and four foundation-corner samples with block types.
   - Acceptance:
-    - Harness fails if any placed building footprint includes water/lava.
-    - Log contains `rejectedFluidSeats=NN` metric.
+    - After every successful paste, a PlacementReceipt is produced and persisted.
+    - Corner samples match non-air solid blocks in-world (proof of paste alignment).
+    - Logs include one-line receipt summary `[STRUCT][RECEIPT] ...` with bounds.
 
-- [ ] T026j [P] [US1] Headless test: "spacing enforcement"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: Generate a dense village scenario; compute min inter-footprint distance; assert ≥ configured spacing.
+- [ ] R002 [Core] Verified persistence model (VolumeMask)
+  - Files: `.../villages/VillageMetadataStore.java`, `.../model/VolumeMask.java`
+  - Description: Replace ad-hoc footprint persistence with a VolumeMask that stores the exact 3D bounds and optional per-layer occupancy flags. Persist alongside PlacementReceipt. Provide queries: `contains(x,y,z)`, `contains2D(x,z,yMin..yMax)`, and `expand(buffer)`.
   - Acceptance:
-    - Test prints minDistance and configuredSpacing; fails if minDistance < configuredSpacing.
+    - All placed structures have a persisted VolumeMask with min/max bounds identical to the receipt.
+    - `contains` checks match in-world block reality on a random 32-sample audit (see R006).
 
-- [ ] T026k [P] [US1] Headless test: "non-overlapping footprints"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: Hash all footprint block coords and assert no duplicates; verify count matches building count.
+- [ ] R003 [Core] Entrance anchors from data or palette
+  - Files: `.../worldgen/StructureService.java`, structure JSON in `plugins/VillageOverhaul/structures/*.json`
+  - Description: Add entrance anchors per structure (relative to schematic) or auto-detect doors during paste. Transform anchor via T and then snap to adjacent walkable ground outside the AABB+buffer.
   - Acceptance:
-    - Fails if any overlap detected.
+    - Each placed building has exactly one entrance world coordinate persisted.
+    - The entrance lies strictly outside `VolumeMask.expand(buffer=2)` and is on solid natural ground.
 
-- [ ] T026l [P] [US4] Headless test: "village map integrity"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: After generation, query map service via test command, parse returned footprint and terrain summary; assert counts match placed structures, and unacceptable tiles summary non-zero when near fluids.
+- [ ] R004 [Core] Ground-truth surface solver
+  - Files: `.../worldgen/SurfaceSolver.java`
+  - Description: Build a deterministic surface function G(x,z) by scanning down from world max height, ignoring any blocks whose (x,y,z) fall inside any VolumeMask. Expose `nearestWalkable(x,z,yHint)` which returns y within {G(x,z)-1..G(x,z)+1}.
   - Acceptance:
-    - Map reports each placed building exactly once.
-    - Terrain classification totals reflect environment.
-	- Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-	- Description: Simulate a forced re-seat; assert no net block changes remain at the first attempt location after rollback.
+    - For 100 random samples around a village, `nearestWalkable` never returns a y that is inside any VolumeMask.
+    - Performance: <2ms per 64×64 query window (cache accepted).
 
-- [ ] T026m [P] [US1] Headless test: "inter-village spacing enforcement"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: Attempt to place a second village within `minVillageSpacing` of the first; assert rejection; then place just beyond and assert success.
+- [ ] R005 [Core] Walkable graph and obstacle field
+  - Files: `.../worldgen/impl/PathServiceImpl.java`
+  - Description: Generate a walkable node graph over a window that includes all entrances. Nodes exist only at y = G(x,z) ± 1. Obstacles are `VolumeMask.expand(buffer=2)` and fluids. No node may enter an obstacle at any y.
   - Acceptance:
-    - Harness fails if any village borders are closer than configured spacing.
-    - Log contains `rejectedVillageSites.minDistance=NN` metric.
+    - Constructed graph contains 0 nodes whose coordinates intersect any VolumeMask.
+    - Node degree <= 8, with vertical delta |dy| ≤ 1 between neighbors.
 
-- [ ] T026n [P] [US1] Headless test: "spawn-proximal initial village"
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: With a fresh world, assert the first village is generated within the configured spawn proximity range (not at exact spawn).
+- [ ] R006 [QA] Manual validation utility (in-game proof)
+  - Files: `.../commands/TestCommands.java`
+  - Description: Add `/votest verify-persistence <villageId>` that: (1) draws particles at persisted AABB corners and entrance; (2) samples 32 random points inside VolumeMask and asserts blocks are non-air; (3) samples 32 just-outside points and asserts not-in-mask. Output a PASS/FAIL summary.
   - Acceptance:
-    - Test prints distance to spawn and threshold; fails if outside range or equals 0.
+    - Command prints PASS only if all checks succeed; failures include exact coordinates.
+    - Screenshot checklist provided in tests guide (see R011).
 
-- [ ] T026o [P] [US1] Headless test: "nearest-neighbor bias"
+- [ ] R007 [Core] A* over walkable graph (3D, slope-aware)
+  - Files: `.../worldgen/impl/PathServiceImpl.java`
+  - Description: Implement A* that expands neighbors strictly within the walkable graph. Costs: flat=1, slope=1.5, water=+∞ (blocked). Start/end are the verified entrances, snapped with `nearestWalkable`.
+  - Acceptance:
+    - Paths never include nodes inside any VolumeMask (by construction).
+    - Report `[PATH] avoided N structure nodes` and determinism hash for each path.
+
+- [ ] R008 [Emitter] Support-checked path emission
+  - Files: `.../worldgen/impl/PathEmitter.java`
+  - Description: Place path blocks only when the block below is solid natural ground and the target is not inside any VolumeMask. Apply simple widening after emission; never place slabs/stairs when support is missing.
+  - Acceptance:
+    - Zero floating slabs in smoke test; zero placements inside VolumeMask.
+
+- [ ] R009 [Migration] Replace old persistence and path calls
+  - Files: `VillagePlacementServiceImpl`, `PathServiceImpl`, `StructureServiceImpl`
+  - Description: Remove legacy footprint code, `findGroundLevel` heuristics, and any path code that probes world state without the SurfaceSolver. Wire the new pipeline end-to-end.
+  - Acceptance:
+    - Build passes; legacy methods no longer referenced; logs updated.
+
+- [ ] R010 [Harness] Headless proof-of-reality tests
   - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: With an existing village, request a new village and assert its distance to the nearest neighbor’s border is minimized subject to the spacing constraint.
+  - Description: Add checks that fail if any path block is within a VolumeMask; add AABB-vs-world audit sampler identical to `/votest verify-persistence`.
+  - Acceptance:
+    - CI fails on any mismatch; outputs coordinate list for reproduction.
+
+- [ ] R011 [Guide] Manual validation checklist (one page)
+  - Files: `tests/HEADLESS-TESTING.md`
+  - Description: Step-by-step operator guide to validate receipts vs reality. Includes how to run `/votest verify-persistence`, what screenshots to capture, and how to report mismatches.
+  - Acceptance:
+    - Document lives next to existing headless docs; references exact log lines and commands.
+
+- [ ] R012 [Diagnostics] Minimal, truthful logs
+  - Files: `PathServiceImpl`, `VillagePlacementServiceImpl`
+  - Description: Consolidate logs to receipt summaries, entrance world coords, A* node counts, determinism hash, and "avoided structure nodes". Remove ambiguous or derived logs that previously misled triage.
+  - Acceptance:
+    - Log set is small, consistent, and directly derived from persisted ground-truth data.
+
+Notes:
+- R001–R006 must land together behind a feature flag (`worldgen.rewrite.enabled=true`).
+- Only when R006 passes in playtest should R007–R009 be enabled for paths.
+- After migration, mark T021b/T021c as superseded by the rewrite.
 - **Determinism Stabilization (Structure Placement & Path Generation)**
   - [ ] T026d1 [P] [US2] Deterministic RNG seeding audit for placement pipeline
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `StructureServiceImpl.java`

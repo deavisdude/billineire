@@ -45,4 +45,6 @@ Do not leave TODO comments in code snippets. Instead create a complete User Stor
 When running tests and targeting specific behaviors (like village generation), if logs indicate the event happens well before the end of the test (and we are effectively waiting for nothing): run the test with fewer ticks the next time.
 
 1000 ticks is more than enough time for village generation and structure placement tests.
+
+If a task is too big to address in a single pass and or larger architectural changes are needed: update plan.md & tasks.md to systematically address the issue bit by bit.
 <!-- MANUAL ADDITIONS END -->
