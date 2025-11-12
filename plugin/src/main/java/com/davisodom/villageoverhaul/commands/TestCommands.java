@@ -17,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -28,6 +29,7 @@ import java.util.UUID;
  * Commands:
  *   /votest spawn-villager <type> [x] [y] [z] - Spawn a custom villager
  *   /votest trigger-interaction <player> <villager-uuid> - Trigger interaction event
+ *   /votest place-obstacle <water|steep> <x> <z> <radius|width> - Place terrain obstacles for pathfinding tests
  *   /votest metrics - Dump current metrics to logs
  *   /votest performance - Report current performance stats
  */
@@ -50,7 +52,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             @NotNull String label, @NotNull String[] args) {
         
         if (args.length == 0) {
-            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|spawn-villager|trigger-interaction|simulate-interaction|metrics|performance>");
+            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|metrics|performance>");
             return true;
         }
         
@@ -63,6 +65,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             case "generate-structures":
                 return handleGenerateStructures(sender, args);
                 
+            case "generate-paths":
+                return handleGeneratePaths(sender, args);
+                
             case "spawn-villager":
                 return handleSpawnVillager(sender, args);
                 
@@ -71,6 +76,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "simulate-interaction":
                 return handleSimulateInteraction(sender, args);
+                
+            case "place-obstacle":
+                return handlePlaceObstacle(sender, args);
                 
             case "metrics":
                 return handleMetrics(sender);
@@ -176,6 +184,152 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // 4. Persist placed buildings to VillageMetadataStore
         
         plugin.getLogger().info(String.format("[STRUCT] Structure generation complete for village %s (placeholder)", villageId));
+        
+        return true;
+    }
+    
+    /**
+     * Generate path network for a village
+     * Usage: /votest generate-paths <village-id>
+     */
+    private boolean handleGeneratePaths(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /votest generate-paths <village-id>");
+            return true;
+        }
+        
+        String villageIdStr = args[1];
+        UUID villageId;
+        
+        try {
+            villageId = UUID.fromString(villageIdStr);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cInvalid village ID format");
+            return true;
+        }
+        
+        // Get shared metadata store from plugin
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = 
+            plugin.getMetadataStore();
+        
+        // Verify village exists
+        Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt = 
+            metadataStore.getVillage(villageId);
+        
+        if (villageOpt.isEmpty()) {
+            sender.sendMessage("§cVillage not found: " + villageId);
+            return true;
+        }
+        
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata village = 
+            villageOpt.get();
+        
+        // Get buildings for this village
+        List<com.davisodom.villageoverhaul.model.Building> buildings = 
+            metadataStore.getVillageBuildings(villageId);
+        
+        if (buildings.isEmpty()) {
+            sender.sendMessage("§cNo buildings found for village: " + villageId);
+            sender.sendMessage("§7Run /votest generate-structures first");
+            return true;
+        }
+        
+        // Get main building location
+        Optional<UUID> mainBuildingIdOpt = metadataStore.getMainBuilding(villageId);
+        if (mainBuildingIdOpt.isEmpty()) {
+            sender.sendMessage("§cNo main building designated for village: " + villageId);
+            sender.sendMessage("§7Main building should be designated during structure generation");
+            return true;
+        }
+        
+        UUID mainBuildingId = mainBuildingIdOpt.get();
+        com.davisodom.villageoverhaul.model.Building mainBuilding = null;
+        
+        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+            if (building.getBuildingId().equals(mainBuildingId)) {
+                mainBuilding = building;
+                break;
+            }
+        }
+        
+        if (mainBuilding == null) {
+            sender.sendMessage("§cMain building not found in building list: " + mainBuildingId);
+            return true;
+        }
+        
+        // Get world
+        org.bukkit.World world = village.getOrigin().getWorld();
+        if (world == null) {
+            sender.sendMessage("§cWorld not found for village");
+            return true;
+        }
+        
+        // Collect building locations
+        List<Location> buildingLocations = new java.util.ArrayList<>();
+        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+            buildingLocations.add(building.getOrigin());
+        }
+        
+        // Initialize PathService (use plugin's instance if available, or create one)
+        com.davisodom.villageoverhaul.worldgen.PathService pathService = 
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl();
+        
+        // Log path generation start
+        plugin.getLogger().info(String.format(
+            "[STRUCT] Begin path network generation for village %s: buildings=%d, mainBuilding=%s",
+            villageId, buildings.size(), mainBuildingId));
+        
+        sender.sendMessage("§aGenerating path network for village: " + villageId);
+        sender.sendMessage(String.format("§7Buildings: %d, Main building: %s", 
+            buildings.size(), mainBuilding.getStructureId()));
+        
+        // Generate path network
+        boolean success = pathService.generatePathNetwork(
+            world, 
+            villageId, 
+            buildingLocations, 
+            mainBuilding.getOrigin(), 
+            village.getSeed()
+        );
+        
+        if (success) {
+            sender.sendMessage("§aPath network generated successfully!");
+            
+            // Retrieve path segments using the interface method
+            List<List<org.bukkit.block.Block>> pathSegments = 
+                pathService.getVillagePathNetwork(villageId);
+            
+            if (!pathSegments.isEmpty()) {
+                // Emit path blocks using PathEmitter
+                com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
+                    new com.davisodom.villageoverhaul.worldgen.impl.PathEmitter();
+                
+                int totalBlocksPlaced = 0;
+                for (List<org.bukkit.block.Block> pathBlocks : pathSegments) {
+                    int blocksPlaced = pathEmitter.emitPath(
+                        world, 
+                        pathBlocks, 
+                        village.getCultureId()
+                    );
+                    totalBlocksPlaced += blocksPlaced;
+                }
+                
+                sender.sendMessage(String.format("§7Path segments: %d, Blocks placed: %d", 
+                    pathSegments.size(), totalBlocksPlaced));
+                
+                plugin.getLogger().info(String.format(
+                    "[STRUCT] Path network complete for village %s: segments=%d, blocks=%d",
+                    villageId, pathSegments.size(), totalBlocksPlaced));
+            } else {
+                sender.sendMessage("§eWarning: Path network generated but no segments retrievable");
+            }
+        } else {
+            sender.sendMessage("§cPath network generation failed");
+            sender.sendMessage("§7Check logs for [STRUCT] markers with failure details");
+            
+            plugin.getLogger().warning(String.format(
+                "[STRUCT] Path network generation failed for village %s", villageId));
+        }
         
         return true;
     }
@@ -409,6 +563,136 @@ public class TestCommands implements CommandExecutor, TabCompleter {
     }
     
     /**
+     * Place terrain obstacles for controlled pathfinding tests
+     * Usage: /votest place-obstacle <water|steep> <x> <z> <radius|width>
+     */
+    private boolean handlePlaceObstacle(CommandSender sender, String[] args) {
+        if (args.length < 5) {
+            sender.sendMessage("§cUsage: /votest place-obstacle <water|steep> <x> <z> <radius|width>");
+            return true;
+        }
+        
+        String obstacleType = args[1].toLowerCase();
+        
+        try {
+            int x = Integer.parseInt(args[2]);
+            int z = Integer.parseInt(args[3]);
+            int size = Integer.parseInt(args[4]);
+            
+            if (!(sender instanceof Player)) {
+                // For RCON/console, use first loaded world
+                org.bukkit.World world = Bukkit.getWorlds().get(0);
+                
+                switch (obstacleType) {
+                    case "water":
+                        placeWaterPatch(world, x, z, size);
+                        sender.sendMessage(String.format("§aPlaced water patch at (%d, %d) radius=%d", x, z, size));
+                        plugin.getLogger().info(String.format("[TEST] Placed water obstacle at (%d, %d) radius=%d", x, z, size));
+                        break;
+                        
+                    case "steep":
+                        placeSteepTerrain(world, x, z, size);
+                        sender.sendMessage(String.format("§aPlaced steep terrain at (%d, %d) width=%d", x, z, size));
+                        plugin.getLogger().info(String.format("[TEST] Placed steep obstacle at (%d, %d) width=%d", x, z, size));
+                        break;
+                        
+                    default:
+                        sender.sendMessage("§cUnknown obstacle type: " + obstacleType);
+                        sender.sendMessage("§7Valid types: water, steep");
+                        return true;
+                }
+                
+                return true;
+            }
+            
+            Player player = (Player) sender;
+            org.bukkit.World world = player.getWorld();
+            
+            switch (obstacleType) {
+                case "water":
+                    placeWaterPatch(world, x, z, size);
+                    sender.sendMessage(String.format("§aPlaced water patch at (%d, %d) radius=%d", x, z, size));
+                    plugin.getLogger().info(String.format("[TEST] Placed water obstacle at (%d, %d) radius=%d", x, z, size));
+                    break;
+                    
+                case "steep":
+                    placeSteepTerrain(world, x, z, size);
+                    sender.sendMessage(String.format("§aPlaced steep terrain at (%d, %d) width=%d", x, z, size));
+                    plugin.getLogger().info(String.format("[TEST] Placed steep obstacle at (%d, %d) width=%d", x, z, size));
+                    break;
+                    
+                default:
+                    sender.sendMessage("§cUnknown obstacle type: " + obstacleType);
+                    sender.sendMessage("§7Valid types: water, steep");
+                    return true;
+            }
+            
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§cInvalid coordinates or size");
+            return true;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Place a water patch at specified coordinates
+     * Creates a circular water patch with given radius
+     */
+    private void placeWaterPatch(org.bukkit.World world, int centerX, int centerZ, int radius) {
+        org.bukkit.Material waterMaterial = org.bukkit.Material.WATER;
+        
+        // Place water in a circular pattern
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                // Check if within circular radius
+                double distance = Math.sqrt(dx * dx + dz * dz);
+                if (distance <= radius) {
+                    int x = centerX + dx;
+                    int z = centerZ + dz;
+                    
+                    // Find surface Y coordinate
+                    int y = world.getHighestBlockYAt(x, z);
+                    
+                    // Place water at surface level
+                    Location waterLoc = new Location(world, x, y, z);
+                    world.getBlockAt(waterLoc).setType(waterMaterial);
+                    
+                    // Also place one block below to ensure it's a full water source
+                    Location belowLoc = new Location(world, x, y - 1, z);
+                    if (world.getBlockAt(belowLoc).getType() == org.bukkit.Material.AIR) {
+                        world.getBlockAt(belowLoc).setType(waterMaterial);
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Place steep terrain elevation change at specified coordinates
+     * Creates a wall of stone blocks to simulate elevation change
+     */
+    private void placeSteepTerrain(org.bukkit.World world, int centerX, int centerZ, int width) {
+        org.bukkit.Material stoneMaterial = org.bukkit.Material.STONE;
+        int height = 4; // Create 4-block high wall for steep obstacle
+        
+        // Place stone wall perpendicular to Z-axis
+        for (int dx = -width/2; dx <= width/2; dx++) {
+            int x = centerX + dx;
+            int z = centerZ;
+            
+            // Find surface Y coordinate
+            int baseY = world.getHighestBlockYAt(x, z);
+            
+            // Build wall upward
+            for (int dy = 0; dy < height; dy++) {
+                Location blockLoc = new Location(world, x, baseY + dy, z);
+                world.getBlockAt(blockLoc).setType(stoneMaterial);
+            }
+        }
+    }
+    
+    /**
      * Dump current metrics to logs
      */
     private boolean handleMetrics(CommandSender sender) {
@@ -450,10 +734,19 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         if (args.length == 1) {
             // Subcommands
+            completions.add("create-village");
+            completions.add("generate-structures");
+            completions.add("generate-paths");
             completions.add("spawn-villager");
             completions.add("trigger-interaction");
+            completions.add("simulate-interaction");
+            completions.add("place-obstacle");
             completions.add("metrics");
             completions.add("performance");
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("place-obstacle")) {
+            // Obstacle types
+            completions.add("water");
+            completions.add("steep");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("spawn-villager")) {
             // Villager types - would ideally come from configuration
             completions.add("blacksmith");

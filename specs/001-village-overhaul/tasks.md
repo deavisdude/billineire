@@ -86,14 +86,14 @@ CI deterministic sim (replace smoke placeholders):
 - [X] T019p Observability & Security: add NPC metrics in `obs/Metrics.java`; implement interaction rate limits and input validation.
 - [X] T019q Localization: add dialogue/menu keys under `plugin/src/main/resources/lang/`; ensure coverage of FR-015.
 - [X] T019r Compatibility tests: extend `scripts/ci/sim/run-scenario.ps1` to spawn at least one Custom Villager and verify interaction logs for Java-only and Java+Bedrock paths; update `docs/compatibility-matrix.md`.
-  - **VERIFIED**: Test script functional with RCON integration, spawns custom villagers, validates server stability (Java 17+ required)
+  - **VERIFIED**: Test script functional with RCON integration, spawns custom villagers, validates server stability (Java 21+ required)
 - [X] T019s Perf guardrail: add a perf test or metric snapshot in `tests/perf/` asserting npc.tick_time_ms within budget at Medium profile.
   - **VERIFIED**: Test script spawns N villagers via RCON, monitors server stability, validates no crashes under load
 
 **Notes**: T019k–T019s map to FR-016 (Custom Villagers) and reinforce FR-010 (Cross-Edition), FR-012 (Performance), FR-013 (Security), and FR-015 (Localization).
 
 **Infrastructure Notes**:
-- Tests require Java 17+ (Paper 1.20.4 requirement)
+- Tests require Java 21+ (Paper 1.20.4 requirement)
 - RCON-based automation via `/votest` commands
 - Full player interaction validation requires bot player plugin (future enhancement)
 - Metric collection validates server stability; detailed tick metrics pending tick engine integration

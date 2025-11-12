@@ -160,7 +160,8 @@ public class GenerateCommand {
                     UUID villageId = village.getId();
                     
                     // Set up placement service with shared metadata store (T012l)
-                    VillagePlacementService placementService = new VillagePlacementServiceImpl(plugin, metadataStore);
+                    VillagePlacementService placementService = new VillagePlacementServiceImpl(
+                        plugin, metadataStore, plugin.getCultureService());
                     
                     // Log start
                     // Note: Village registration now happens INSIDE placeVillage() after spacing validation

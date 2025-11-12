@@ -1,7 +1,8 @@
 {
   "id": "roman",
   "name": "Roman",
-  "structureSet": ["forum", "bathhouse", "villa_s", "villa_m", "villa_l"],
+  "structureSet": ["building_roman_forum", "building_roman_bathhouse", "house_roman_small", "house_roman_medium", "house_roman_villa", "market_roman_stall", "workshop_roman_forge"],
+  "mainBuildingStructureId": "building_roman_forum",
   "professionSet": ["blacksmith", "farmer", "mason", "trader"],
   "styleRules": {
     "materials": ["stone", "quartz", "terracotta"],
