@@ -179,6 +179,9 @@ public class StructureServiceImpl implements StructureService {
                  ClipboardReader reader = format.getReader(fis)) {
                 Clipboard clipboard = reader.read();
                 
+                // Normalize clipboard origin to minimum corner for predictable paste behavior
+                clipboard = normalizeClipboardOrigin(clipboard);
+                
                 // Create template with actual dimensions from schematic
                 StructureTemplate template = new StructureTemplate();
                 template.id = structureId;
@@ -241,6 +244,94 @@ public class StructureServiceImpl implements StructureService {
                     structureId, seed, MAX_RESEAT_ATTEMPTS));
             return Optional.empty();
         }
+    }
+    
+    /**
+     * Place structure and return a PlacementReceipt with canonical transform and proof.
+     * This is the R001 implementation that replaces ambiguous logs with ground-truth data.
+     * 
+     * @param structureId Structure ID to place
+     * @param world Target world
+     * @param origin Initial placement origin
+     * @param seed Deterministic seed
+     * @param villageId Village ID for receipt
+     * @return Optional PlacementReceipt with exact bounds and corner samples
+     */
+    public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
+            String structureId, World world, Location origin, long seed, UUID villageId) {
+        StructureTemplate template = loadedStructures.get(structureId);
+        
+        if (template == null) {
+            LOGGER.warning(String.format("[STRUCT] Structure '%s' not loaded", structureId));
+            return Optional.empty();
+        }
+        
+        LOGGER.info(String.format("[STRUCT] Begin placement (with receipt): structureId=%s, origin=%s, seed=%d, world=%s",
+                structureId, formatLocation(origin), seed, world.getName()));
+        
+        // Calculate rotation BEFORE placement (deterministic from seed)
+        Random random = new Random(seed);
+        int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+        
+        // Attempt placement with re-seating logic and get actual location
+        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed);
+        
+        if (!actualLocation.isPresent()) {
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
+                    structureId, seed, MAX_RESEAT_ATTEMPTS));
+            return Optional.empty();
+        }
+        
+        Location placedOrigin = actualLocation.get();
+        
+        // Compute exact AABB accounting for rotation and clipboard origin
+        int baseWidth = template.dimensions[0];
+        int baseDepth = template.dimensions[2];
+        int height = template.dimensions[1];
+        
+        int[] bounds = computeAABB(placedOrigin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
+        
+        // Sample foundation corners as proof of paste alignment
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners = 
+            sampleFoundationCorners(world, bounds);
+        
+        // Calculate effective dimensions after rotation
+        int effectiveWidth, effectiveDepth;
+        if (rotationDegrees == 90 || rotationDegrees == 270) {
+            effectiveWidth = baseDepth;
+            effectiveDepth = baseWidth;
+        } else {
+            effectiveWidth = baseWidth;
+            effectiveDepth = baseDepth;
+        }
+        
+        // Build PlacementReceipt
+        com.davisodom.villageoverhaul.model.PlacementReceipt receipt = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+                .structureId(structureId)
+                .villageId(villageId)
+                .world(world)
+                .origin(placedOrigin.getBlockX(), placedOrigin.getBlockY(), placedOrigin.getBlockZ())
+                .rotation(rotationDegrees)
+                .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
+                .dimensions(effectiveWidth, height, effectiveDepth)
+                .foundationCorners(corners)
+                .build();
+        
+        // Emit [STRUCT][RECEIPT] log
+        LOGGER.info(String.format("[STRUCT][RECEIPT] %s", receipt.getReceiptSummary()));
+        
+        // Verify corner samples
+        boolean cornersValid = receipt.verifyFoundationCorners();
+        if (!cornersValid) {
+            LOGGER.warning(String.format("[STRUCT][RECEIPT] WARNING: Some foundation corners are not solid blocks: %s",
+                    java.util.Arrays.toString(corners)));
+        }
+        
+        LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
+                structureId, formatLocation(placedOrigin), rotationDegrees, seed));
+        
+        return Optional.of(receipt);
     }
     
     @Override
@@ -920,6 +1011,189 @@ public class StructureServiceImpl implements StructureService {
             faweAvailable = false;
             LOGGER.info("[STRUCT] FAWE not available, using Paper API fallback");
         }
+    }
+    
+    /**
+     * Normalize clipboard origin to its minimum corner.
+     * This standardizes paste behavior: origin becomes the structure's SW-bottom corner.
+     * After normalization, paste point = world location of minimum corner.
+     * 
+     * @param clipboard Original clipboard with arbitrary origin
+     * @return New clipboard with origin shifted to minimum corner
+     */
+    private Clipboard normalizeClipboardOrigin(Clipboard clipboard) {
+        BlockVector3 currentOrigin = clipboard.getOrigin();
+        BlockVector3 minPoint = clipboard.getRegion().getMinimumPoint();
+        
+        // If already normalized, return as-is
+        if (currentOrigin.equals(minPoint)) {
+            return clipboard;
+        }
+        
+        // Shift origin to minimum corner
+        clipboard.setOrigin(minPoint);
+        LOGGER.fine(String.format("[STRUCT] Normalized clipboard origin from %s to %s", 
+                currentOrigin, minPoint));
+        
+        return clipboard;
+    }
+    
+    /**
+     * Compute exact AABB bounds for a structure placement, accounting for rotation.
+     * Assumes clipboard origin has been normalized to minimum corner.
+     * Returns int array: [minX, maxX, minY, maxY, minZ, maxZ]
+     * 
+     * @param origin Paste origin location (where clipboard origin is placed)
+     * @param clipboard WorldEdit clipboard (may be null for procedural structures)
+     * @param baseWidth Original structure width (X-axis before rotation, fallback if no clipboard)
+     * @param baseDepth Original structure depth (Z-axis before rotation, fallback if no clipboard)
+     * @param height Structure height (Y-axis, fallback if no clipboard)
+     * @param rotation Rotation angle in degrees (0, 90, 180, 270)
+     * @return int[] {minX, maxX, minY, maxY, minZ, maxZ}
+     */
+    private int[] computeAABB(Location origin, Clipboard clipboard, int baseWidth, int baseDepth, int height, int rotation) {
+        int originX = origin.getBlockX();
+        int originY = origin.getBlockY();
+        int originZ = origin.getBlockZ();
+        
+        if (clipboard != null) {
+            // Clipboard origin is normalized to minimum corner, so we can work directly with dimensions
+            BlockVector3 dimensions = clipboard.getDimensions();
+            int sizeX = dimensions.getX();
+            int sizeY = dimensions.getY();
+            int sizeZ = dimensions.getZ();
+            
+            // Calculate the 8 corners of the bounding box in schematic space (origin is at 0,0,0)
+            // Since origin = minPoint after normalization, corners are just (0,0,0) to (sizeX, sizeY, sizeZ)
+            int[][] corners = new int[8][3];
+            int idx = 0;
+            for (int x : new int[]{0, sizeX}) {
+                for (int y : new int[]{0, sizeY}) {
+                    for (int z : new int[]{0, sizeZ}) {
+                        corners[idx][0] = x;
+                        corners[idx][1] = y;
+                        corners[idx][2] = z;
+                        idx++;
+                    }
+                }
+            }
+            
+            // Rotate each corner around origin (0,0,0) using Y-axis rotation matrix
+            int[][] rotatedCorners = new int[8][3];
+            for (int i = 0; i < 8; i++) {
+                int x = corners[i][0];
+                int y = corners[i][1];
+                int z = corners[i][2];
+                
+                // Apply Y-axis rotation (clockwise when viewed from above)
+                switch (rotation) {
+                    case 0:
+                        rotatedCorners[i][0] = x;
+                        rotatedCorners[i][2] = z;
+                        break;
+                    case 90:
+                        rotatedCorners[i][0] = -z;
+                        rotatedCorners[i][2] = x;
+                        break;
+                    case 180:
+                        rotatedCorners[i][0] = -x;
+                        rotatedCorners[i][2] = -z;
+                        break;
+                    case 270:
+                        rotatedCorners[i][0] = z;
+                        rotatedCorners[i][2] = -x;
+                        break;
+                }
+                rotatedCorners[i][1] = y; // Y unchanged
+            }
+            
+            // Find min/max of rotated corners
+            int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
+            int minRotY = Integer.MAX_VALUE, maxRotY = Integer.MIN_VALUE;
+            int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
+            
+            for (int i = 0; i < 8; i++) {
+                minRotX = Math.min(minRotX, rotatedCorners[i][0]);
+                maxRotX = Math.max(maxRotX, rotatedCorners[i][0]);
+                minRotY = Math.min(minRotY, rotatedCorners[i][1]);
+                maxRotY = Math.max(maxRotY, rotatedCorners[i][1]);
+                minRotZ = Math.min(minRotZ, rotatedCorners[i][2]);
+                maxRotZ = Math.max(maxRotZ, rotatedCorners[i][2]);
+            }
+            
+            // Translate to world coordinates (paste origin + rotated offsets)
+            // Note: rotated corners are already inclusive bounds (0 to size), so no adjustment needed
+            int minX = originX + minRotX;
+            int maxX = originX + maxRotX - 1; // -1 because size is exclusive (0 to N = N blocks = indices 0..N-1)
+            int minY = originY + minRotY;
+            int maxY = originY + maxRotY - 1;
+            int minZ = originZ + minRotZ;
+            int maxZ = originZ + maxRotZ - 1;
+            
+            return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+        }
+        
+        // Fallback for procedural structures (no clipboard)
+        int effectiveWidth, effectiveDepth;
+        if (rotation == 90 || rotation == 270) {
+            effectiveWidth = baseDepth;
+            effectiveDepth = baseWidth;
+        } else {
+            effectiveWidth = baseWidth;
+            effectiveDepth = baseDepth;
+        }
+        
+        // Simple bounds assuming origin is minimum corner
+        int minX = originX;
+        int maxX = originX + effectiveWidth - 1;
+        int minY = originY;
+        int maxY = originY + height - 1;
+        int minZ = originZ;
+        int maxZ = originZ + effectiveDepth - 1;
+        
+        return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+    }
+    
+    /**
+     * Sample the four foundation corners of a placed structure.
+     * Samples at y=minY (foundation level).
+     * Order: NW, NE, SE, SW (clockwise from top-left when viewed from above, Z+ is south)
+     * 
+     * @param world World containing the structure
+     * @param bounds AABB bounds [minX, maxX, minY, maxY, minZ, maxZ]
+     * @return Array of 4 CornerSamples
+     */
+    private com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] sampleFoundationCorners(
+            World world, int[] bounds) {
+        int minX = bounds[0];
+        int maxX = bounds[1];
+        int minY = bounds[2];
+        int minZ = bounds[4];
+        int maxZ = bounds[5];
+        
+        // Sample at foundation level (minY)
+        int y = minY;
+        
+        // Corner order: NW (minX, minZ), NE (maxX, minZ), SE (maxX, maxZ), SW (minX, maxZ)
+        // In Minecraft coords: Z+ is south, X+ is east
+        // So NW = min X, min Z (north-west corner)
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample nw = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                minX, y, minZ, world.getBlockAt(minX, y, minZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample ne = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                maxX, y, minZ, world.getBlockAt(maxX, y, minZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample se = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                maxX, y, maxZ, world.getBlockAt(maxX, y, maxZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample sw = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                minX, y, maxZ, world.getBlockAt(minX, y, maxZ).getType());
+        
+        return new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[]{nw, ne, se, sw};
     }
     
     /**

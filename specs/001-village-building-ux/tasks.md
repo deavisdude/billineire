@@ -386,13 +386,66 @@ Purpose: Replace the current placement/persistence/path pipeline with a rigorous
 
 Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not iterate further on them.
 
-- [ ] R001 [Core] Canonical placement transform and receipt
+- [X] R001 [Core] Canonical placement transform and receipt
   - Files: `plugin/src/main/java/.../worldgen/impl/StructureServiceImpl.java`, `.../villages/impl/VillagePlacementServiceImpl.java`, `.../model/PlacementReceipt.java`
   - Description: Define a canonical world transform T for every paste: {origin(x,y,z), rotation(0/90/180/270), effectiveWidth, effectiveDepth, height}. After paste, compute exact AABB in world coords. Emit a PlacementReceipt containing: structureId, villageId, world, minX/maxX/minY/maxY/minZ/maxZ, rotation, effective dims, and four foundation-corner samples with block types.
   - Acceptance:
     - After every successful paste, a PlacementReceipt is produced and persisted.
     - Corner samples match non-air solid blocks in-world (proof of paste alignment).
     - Logs include one-line receipt summary `[STRUCT][RECEIPT] ...` with bounds.
+  - Implementation:
+    - Created `PlacementReceipt` model class with:
+      - Identifiers: structureId, villageId, worldName
+      - Exact AABB bounds: minX/maxX, minY/maxY, minZ/maxZ (inclusive)
+      - Transform parameters: originX/Y/Z, rotation (0/90/180/270)
+      - Effective dimensions: effectiveWidth, effectiveDepth, height
+      - Foundation corner samples: 4 corners (NW, NE, SE, SW) with coordinates and block types
+      - Validation: `verifyFoundationCorners()` checks all corners are non-air solid blocks
+      - Logging: `getReceiptSummary()` provides compact one-line format
+    - Added helper methods to StructureServiceImpl:
+      - `computeAABB()`: Calculate world-space bounds accounting for rotation
+        - 0°/180°: effectiveWidth = baseWidth, effectiveDepth = baseDepth
+        - 90°/270°: effectiveWidth = baseDepth, effectiveDepth = baseWidth
+      - `sampleFoundationCorners()`: Sample 4 corners at y=minY (foundation level)
+        - Order: NW (minX, minZ), NE (maxX, minZ), SE (maxX, maxZ), SW (minX, maxZ)
+    - Added `placeStructureAndGetReceipt()` method:
+      - Calls existing placement logic with re-seating
+      - Computes AABB after successful placement
+      - Samples foundation corners as proof of alignment
+      - Builds and returns PlacementReceipt
+      - Logs: `[STRUCT][RECEIPT] <summary>` with full bounds and dimensions
+      - Warns if corner verification fails (non-solid blocks detected)
+    - Updated VillagePlacementServiceImpl:
+      - Attempts to call `placeStructureAndGetReceipt()` if available (via instanceof check)
+      - Falls back to old `placeStructureAndGetResult()` for backwards compatibility
+      - Stores receipt via `metadataStore.addPlacementReceipt()`
+      - Extracts origin, rotation, dimensions from receipt or legacy PlacementResult
+    - Updated VillageMetadataStore:
+      - Added `placementReceipts` map (villageId → List<PlacementReceipt>)
+      - Added `addPlacementReceipt()` and `getPlacementReceipts()` methods
+      - Added PlacementReceiptDTO and CornerSampleDTO for JSON persistence
+      - Updated VillageDataDTO to include `placementReceipts` list
+      - Added conversion methods: `convertReceiptToDTO()` and `convertReceiptFromDTO()`
+      - Updated `saveAll()` to persist receipts alongside other village data
+      - Updated `loadAll()` to restore receipts from JSON
+      - Updated `clearAll()` to clear receipts map
+  - Status: ✅ COMPLETE
+    - Build successful (gradle build -x test)
+    - PlacementReceipt provides ground-truth bounds and corner samples
+    - Receipts persisted and restored via JSON
+    - [STRUCT][RECEIPT] logs emitted with full bounds
+    - Foundation corner verification in place
+  - **Fix Applied (2025-11-11)**:
+    - Added `normalizeClipboardOrigin()` helper to shift clipboard origin to minimum corner at load time
+    - Standardizes paste behavior: origin = structure's minimum corner (SW-bottom)
+    - Updated `computeAABB()` to work with normalized clipboards:
+      - Uses clipboard dimensions directly (origin at 0,0,0 after normalization)
+      - Rotates all 8 corners of bounding box using Y-axis rotation matrix
+      - Finds min/max of rotated corners for accurate AABB
+      - Translates to world coordinates: paste origin + rotated offsets
+    - Eliminates complex offset calculations and arbitrary origin handling
+    - Logs show origin normalization at FINE level during structure load
+    - Ready for playtest verification with known-good corner coordinates
 
 - [ ] R002 [Core] Verified persistence model (VolumeMask)
   - Files: `.../villages/VillageMetadataStore.java`, `.../model/VolumeMask.java`

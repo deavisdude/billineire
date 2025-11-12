@@ -35,6 +35,9 @@ public class VillageMetadataStore {
     private final Map<UUID, UUID> mainBuildings = new ConcurrentHashMap<>(); // villageId -> mainBuildingId
     private final Map<UUID, PathNetwork> pathNetworks = new ConcurrentHashMap<>();
     
+    // R001: PlacementReceipt storage (villageId -> list of receipts)
+    private final Map<UUID, List<com.davisodom.villageoverhaul.model.PlacementReceipt>> placementReceipts = new ConcurrentHashMap<>();
+    
     public VillageMetadataStore(Plugin plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
@@ -112,6 +115,22 @@ public class VillageMetadataStore {
     }
     
     /**
+     * R001: Add a placement receipt for a building in a village.
+     */
+    public void addPlacementReceipt(UUID villageId, com.davisodom.villageoverhaul.model.PlacementReceipt receipt) {
+        placementReceipts.computeIfAbsent(villageId, k -> new ArrayList<>()).add(receipt);
+        logger.fine(String.format("[STRUCT][RECEIPT] Stored receipt for structure %s in village %s", 
+            receipt.getStructureId(), villageId));
+    }
+    
+    /**
+     * R001: Get all placement receipts for a village.
+     */
+    public List<com.davisodom.villageoverhaul.model.PlacementReceipt> getPlacementReceipts(UUID villageId) {
+        return new ArrayList<>(placementReceipts.getOrDefault(villageId, Collections.emptyList()));
+    }
+    
+    /**
      * Get village metadata.
      */
     public Optional<VillageMetadata> getVillage(UUID villageId) {
@@ -178,6 +197,15 @@ public class VillageMetadataStore {
                 border.getMinZ(), border.getMaxZ()
             );
             dto.lastBorderUpdateTick = metadata.getLastBorderUpdateTick();
+            
+            // R001: Persist placement receipts
+            if (placementReceipts.containsKey(villageId)) {
+                List<com.davisodom.villageoverhaul.model.PlacementReceipt> receipts = placementReceipts.get(villageId);
+                dto.placementReceipts = new ArrayList<>();
+                for (com.davisodom.villageoverhaul.model.PlacementReceipt receipt : receipts) {
+                    dto.placementReceipts.add(convertReceiptToDTO(receipt));
+                }
+            }
             
             // Save to individual village file
             String filename = "village_" + villageId + ".json";
@@ -250,6 +278,17 @@ public class VillageMetadataStore {
                         villageId, network.getSegments().size()));
                 }
                 
+                // R001: Restore placement receipts
+                if (dto.placementReceipts != null && !dto.placementReceipts.isEmpty()) {
+                    List<com.davisodom.villageoverhaul.model.PlacementReceipt> receipts = new ArrayList<>();
+                    for (PlacementReceiptDTO receiptDTO : dto.placementReceipts) {
+                        receipts.add(convertReceiptFromDTO(receiptDTO));
+                    }
+                    placementReceipts.put(villageId, receipts);
+                    logger.fine(String.format("[STRUCT][RECEIPT] Restored %d placement receipts for village %s",
+                        receipts.size(), villageId));
+                }
+                
                 loadedCount++;
                 
             } catch (Exception e) {
@@ -269,6 +308,7 @@ public class VillageMetadataStore {
         villageBuildings.clear();
         mainBuildings.clear();
         pathNetworks.clear();
+        placementReceipts.clear(); // R001
         logger.info("[STRUCT] Cleared all village metadata");
     }
     
@@ -436,7 +476,6 @@ public class VillageMetadataStore {
             segmentDTO.endZ = segment.getEnd().getBlockZ();
             segmentDTO.blockCount = segment.getBlocks().size();
             
-            // Store block locations (for reconstruction)
             segmentDTO.blocks = new ArrayList<>();
             for (Block block : segment.getBlocks()) {
                 BlockLocationDTO blockDTO = new BlockLocationDTO();
@@ -450,6 +489,69 @@ public class VillageMetadataStore {
         }
         
         return dto;
+    }
+    
+    /**
+     * R001: Convert PlacementReceipt to DTO for JSON persistence.
+     */
+    private PlacementReceiptDTO convertReceiptToDTO(com.davisodom.villageoverhaul.model.PlacementReceipt receipt) {
+        PlacementReceiptDTO dto = new PlacementReceiptDTO();
+        dto.structureId = receipt.getStructureId();
+        dto.villageId = receipt.getVillageId().toString();
+        dto.worldName = receipt.getWorldName();
+        dto.minX = receipt.getMinX();
+        dto.maxX = receipt.getMaxX();
+        dto.minY = receipt.getMinY();
+        dto.maxY = receipt.getMaxY();
+        dto.minZ = receipt.getMinZ();
+        dto.maxZ = receipt.getMaxZ();
+        dto.originX = receipt.getOriginX();
+        dto.originY = receipt.getOriginY();
+        dto.originZ = receipt.getOriginZ();
+        dto.rotation = receipt.getRotation();
+        dto.effectiveWidth = receipt.getEffectiveWidth();
+        dto.effectiveDepth = receipt.getEffectiveDepth();
+        dto.height = receipt.getHeight();
+        dto.timestamp = receipt.getTimestamp();
+        
+        dto.foundationCorners = new ArrayList<>();
+        for (com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample corner : receipt.getFoundationCorners()) {
+            CornerSampleDTO cornerDTO = new CornerSampleDTO();
+            cornerDTO.x = corner.getX();
+            cornerDTO.y = corner.getY();
+            cornerDTO.z = corner.getZ();
+            cornerDTO.blockType = corner.getBlockType().name();
+            dto.foundationCorners.add(cornerDTO);
+        }
+        
+        return dto;
+    }
+    
+    /**
+     * R001: Convert DTO back to PlacementReceipt.
+     */
+    private com.davisodom.villageoverhaul.model.PlacementReceipt convertReceiptFromDTO(PlacementReceiptDTO dto) {
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[4];
+        
+        for (int i = 0; i < 4 && i < dto.foundationCorners.size(); i++) {
+            CornerSampleDTO cornerDTO = dto.foundationCorners.get(i);
+            org.bukkit.Material material = org.bukkit.Material.valueOf(cornerDTO.blockType);
+            corners[i] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                cornerDTO.x, cornerDTO.y, cornerDTO.z, material);
+        }
+        
+        return new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+            .structureId(dto.structureId)
+            .villageId(UUID.fromString(dto.villageId))
+            .worldName(dto.worldName)
+            .origin(dto.originX, dto.originY, dto.originZ)
+            .rotation(dto.rotation)
+            .bounds(dto.minX, dto.maxX, dto.minY, dto.maxY, dto.minZ, dto.maxZ)
+            .dimensions(dto.effectiveWidth, dto.height, dto.effectiveDepth)
+            .foundationCorners(corners)
+            .timestamp(dto.timestamp)
+            .build();
     }
     
     private PathNetwork convertPathNetworkFromDTO(PathNetworkDTO dto, UUID villageId, World world) {
@@ -489,6 +591,7 @@ public class VillageMetadataStore {
         public PathNetworkDTO pathNetwork; // nullable
         public BorderDTO border;
         public long lastBorderUpdateTick;
+        public List<PlacementReceiptDTO> placementReceipts; // R001: Nullable, added for ground-truth persistence
         
         public VillageDataDTO() {} // For Jackson
     }
@@ -544,5 +647,39 @@ public class VillageMetadataStore {
             this.maxZ = maxZ;
         }
     }
+    
+    /**
+     * R001: DTO for PlacementReceipt persistence.
+     */
+    public static class PlacementReceiptDTO {
+        public String structureId;
+        public String villageId;
+        public String worldName;
+        public int minX;
+        public int maxX;
+        public int minY;
+        public int maxY;
+        public int minZ;
+        public int maxZ;
+        public int originX;
+        public int originY;
+        public int originZ;
+        public int rotation;
+        public int effectiveWidth;
+        public int effectiveDepth;
+        public int height;
+        public List<CornerSampleDTO> foundationCorners;
+        public long timestamp;
+        
+        public PlacementReceiptDTO() {} // For Jackson
+    }
+    
+    public static class CornerSampleDTO {
+        public int x;
+        public int y;
+        public int z;
+        public String blockType;
+        
+        public CornerSampleDTO() {} // For Jackson
+    }
 }
-

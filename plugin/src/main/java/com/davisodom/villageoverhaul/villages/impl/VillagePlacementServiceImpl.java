@@ -211,18 +211,47 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     placementResult.position.z
             );
             
-            // T021b FIX: Place structure and get ACTUAL rotation used during placement
-            Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> actualPlacement = 
-                    structureService.placeStructureAndGetResult(structureId, world, buildingLocation, buildingSeed);
+            // R001: Place structure and get PlacementReceipt with ground-truth bounds and corner samples
+            Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receiptOpt = null;
+            if (structureService instanceof StructureServiceImpl) {
+                StructureServiceImpl structureServiceImpl = (StructureServiceImpl) structureService;
+                receiptOpt = structureServiceImpl.placeStructureAndGetReceipt(
+                        structureId, world, buildingLocation, buildingSeed, villageId);
+            }
             
-            if (actualPlacement.isPresent()) {
-                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = actualPlacement.get();
-                Location actualOrigin = placement.getActualLocation();
-                int actualRotation = placement.getRotationDegrees();
+            // Fallback to old method if receipt method not available
+            Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> actualPlacement = null;
+            if (receiptOpt == null || !receiptOpt.isPresent()) {
+                actualPlacement = structureService.placeStructureAndGetResult(
+                        structureId, world, buildingLocation, buildingSeed);
+            }
+            
+            if ((receiptOpt != null && receiptOpt.isPresent()) || 
+                (actualPlacement != null && actualPlacement.isPresent())) {
                 
-                // Calculate ACTUAL effective dimensions using ACTUAL rotation
-                int actualEffectiveWidth = placement.getEffectiveWidth(width, depth);
-                int actualEffectiveDepth = placement.getEffectiveDepth(width, depth);
+                Location actualOrigin;
+                int actualRotation;
+                int actualEffectiveWidth;
+                int actualEffectiveDepth;
+                
+                // R001: Use receipt data if available, otherwise fall back to old placement result
+                if (receiptOpt != null && receiptOpt.isPresent()) {
+                    com.davisodom.villageoverhaul.model.PlacementReceipt receipt = receiptOpt.get();
+                    actualOrigin = new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ());
+                    actualRotation = receipt.getRotation();
+                    actualEffectiveWidth = receipt.getEffectiveWidth();
+                    actualEffectiveDepth = receipt.getEffectiveDepth();
+                    
+                    // Store receipt for persistence
+                    metadataStore.addPlacementReceipt(villageId, receipt);
+                    
+                } else {
+                    com.davisodom.villageoverhaul.worldgen.PlacementResult placement = actualPlacement.get();
+                    actualOrigin = placement.getActualLocation();
+                    actualRotation = placement.getRotationDegrees();
+                    actualEffectiveWidth = placement.getEffectiveWidth(width, depth);
+                    actualEffectiveDepth = placement.getEffectiveDepth(width, depth);
+                }
                 
                 // Create building metadata with actual placement info
                 Building building = new Building.Builder()
@@ -234,8 +263,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 
                 placedBuildings.add(building);
                 
-                // Store placement result for later footprint registration
-                buildingPlacements.put(building.getBuildingId(), placement);
+                // Store placement result for later footprint registration (if using old method)
+                if (actualPlacement != null && actualPlacement.isPresent()) {
+                    buildingPlacements.put(building.getBuildingId(), actualPlacement.get());
+                } else if (receiptOpt != null && receiptOpt.isPresent()) {
+                    // Create a PlacementResult from receipt for backwards compatibility
+                    com.davisodom.villageoverhaul.model.PlacementReceipt receipt = receiptOpt.get();
+                    com.davisodom.villageoverhaul.worldgen.PlacementResult placementFromReceipt = 
+                        new com.davisodom.villageoverhaul.worldgen.PlacementResult(actualOrigin, actualRotation);
+                    buildingPlacements.put(building.getBuildingId(), placementFromReceipt);
+                }
                 
                 // Track footprint for collision detection with ACTUAL dimensions
                 Footprint footprint = new Footprint(
