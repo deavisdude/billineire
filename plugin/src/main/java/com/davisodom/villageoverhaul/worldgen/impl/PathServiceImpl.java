@@ -6,6 +6,7 @@ import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
 import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
+import java.util.OptionalInt;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -43,10 +44,10 @@ public class PathServiceImpl implements PathService {
     
     // Terrain cost multipliers
     private static final double FLAT_COST = 1.0;
-    private static final double SLOPE_COST_MULTIPLIER = 2.0; // Per block of elevation change
-    private static final double WATER_COST = 10.0;
-    private static final double OBSTACLE_COST = 20.0;
-    private static final double MAX_ACCEPTABLE_SLOPE = 3.0; // blocks per horizontal distance
+    private static final double SLOPE_COST = 1.5;
+    private static final double WATER_COST = Double.POSITIVE_INFINITY;
+    private static final double OBSTACLE_COST = Double.POSITIVE_INFINITY;
+    private static final double MAX_ACCEPTABLE_SLOPE = 1.0; // blocks per horizontal distance
     
     // Path network cache (villageId -> PathNetwork)
     private final Map<UUID, PathNetwork> pathNetworks = new HashMap<>();
@@ -159,8 +160,31 @@ public class PathServiceImpl implements PathService {
             return Optional.empty();
         }
         
+        // R007: Snap start/end to walkable surface if village context exists
+        Location snappedStart = start;
+        Location snappedEnd = end;
+        
+        WalkableGraph graph = null;
+        if (currentVillageContext != null && metadataStore != null) {
+            List<VolumeMask> masks = metadataStore.getVolumeMasks(currentVillageContext);
+            SurfaceSolver solver = new SurfaceSolver(world, masks);
+            graph = new WalkableGraph(solver, masks, 2); // Buffer=2
+            
+            // Snap start
+            OptionalInt startY = solver.nearestWalkable(start.getBlockX(), start.getBlockZ(), start.getBlockY());
+            if (startY.isPresent()) {
+                snappedStart = new Location(world, start.getBlockX(), startY.getAsInt(), start.getBlockZ());
+            }
+            
+            // Snap end
+            OptionalInt endY = solver.nearestWalkable(end.getBlockX(), end.getBlockZ(), end.getBlockY());
+            if (endY.isPresent()) {
+                snappedEnd = new Location(world, end.getBlockX(), endY.getAsInt(), end.getBlockZ());
+            }
+        }
+        
         // Run A* pathfinding on 2D heightmap
-        List<PathNode> path = findPathAStar(world, start, end);
+        List<PathNode> path = findPathAStar(world, snappedStart, snappedEnd, graph);
         
         if (path == null || path.isEmpty()) {
             LOGGER.fine(String.format("[STRUCT] No path found from (%d,%d,%d) to (%d,%d,%d)",
@@ -192,20 +216,17 @@ public class PathServiceImpl implements PathService {
      * A* pathfinding on 2D heightmap with optional village context for building avoidance.
      * Returns list of path nodes from start to end, or null if no path found.
      */
-    private List<PathNode> findPathAStar(World world, Location start, Location end, UUID villageId) {
+    private List<PathNode> findPathAStar(World world, Location start, Location end, WalkableGraph graph) {
         PriorityQueue<PathNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fScore));
         Set<String> closedSet = new HashSet<>();
         Map<String, PathNode> allNodes = new HashMap<>();
         
         int startX = start.getBlockX();
+        int startY = start.getBlockY();
         int startZ = start.getBlockZ();
-        // Use provided start Y as hint (building entrance level) instead of scanning from world highest block
-        int startY = findGroundLevel(world, startX, startZ, start.getBlockY());
         
         int endX = end.getBlockX();
         int endZ = end.getBlockZ();
-        // endY stored for potential future use in 3D pathfinding
-        // int endY = findGroundLevel(world, endX, endZ, end.getBlockY());
         
         LOGGER.info(String.format("[PATH] A* search start: from (%d,%d,%d) to (%d,%d), distance=%.1f",
                 startX, startY, startZ, endX, endZ, 
@@ -236,84 +257,61 @@ public class PathServiceImpl implements PathService {
             
             closedSet.add(current.key());
             
-            // T021c: Explore neighbors in 3D (8 horizontal directions × 3 vertical levels = 24 neighbors)
-            // Allow Y±1 per step to follow natural terrain slopes
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (dx == 0 && dz == 0) continue;
+            // Get neighbors
+            List<int[]> neighbors;
+            if (graph != null) {
+                neighbors = graph.getNeighbors(current.x, current.y, current.z);
+            } else {
+                // Fallback to legacy logic if no graph available
+                neighbors = getLegacyNeighbors(world, current);
+            }
+            
+            for (int[] n : neighbors) {
+                int neighborX = n[0];
+                int neighborY = n[1];
+                int neighborZ = n[2];
+                
+                String neighborKey = neighborX + "," + neighborY + "," + neighborZ;
+                if (closedSet.contains(neighborKey)) {
+                    continue;
+                }
+                
+                // If using graph, obstacles are already filtered by getNeighbors
+                // If using legacy, we need to check footprints
+                if (graph == null && isInsideBuildingFootprint(neighborX, neighborY, neighborZ)) {
+                    buildingTilesAvoided++;
+                    continue;
+                }
+                
+                // Calculate movement cost
+                Location fromLoc = new Location(world, current.x, current.y, current.z);
+                Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
+                double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
+                
+                maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
+                
+                // Skip if terrain is impassable
+                if (movementCost >= OBSTACLE_COST) {
+                    obstaclesEncountered++;
+                    continue;
+                }
+                
+                double tentativeGScore = current.gScore + movementCost;
+                
+                PathNode neighbor = allNodes.get(neighborKey);
+                if (neighbor == null) {
+                    neighbor = new PathNode(neighborX, neighborY, neighborZ);
+                    neighbor.gScore = Double.POSITIVE_INFINITY;
+                    allNodes.put(neighborKey, neighbor);
+                }
+                
+                if (tentativeGScore < neighbor.gScore) {
+                    neighbor.parent = current;
+                    neighbor.gScore = tentativeGScore;
+                    neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
                     
-                    int neighborX = current.x + dx;
-                    int neighborZ = current.z + dz;
-                    
-                    // T021c: Try multiple Y levels (same level, +1, -1)
-                    // This allows paths to follow gentle slopes naturally
-                    for (int dy = -1; dy <= 1; dy++) {
-                        int neighborY = current.y + dy;
-                        
-                        // Validate Y coordinate is within world bounds
-                        if (neighborY < world.getMinHeight() || neighborY > world.getMaxHeight()) {
-                            continue;
-                        }
-                        
-                        // Create unique 3D key (include Y for closed set check)
-                        String neighborKey = neighborX + "," + neighborY + "," + neighborZ;
-                        if (closedSet.contains(neighborKey)) {
-                            continue;
-                        }
-                        
-                        // T021b: Check if neighbor position is inside any building footprint FIRST
-                        // This prevents paths from entering or crossing building volumes
-                        if (isInsideBuildingFootprint(neighborX, neighborY, neighborZ)) {
-                            buildingTilesAvoided++;
-                            continue; // Skip this neighbor (treat as obstacle)
-                        }
-                        
-                        // T021c: Check if the block BELOW neighbor is inside a building footprint
-                        // This prevents paths from walking on top of building roofs/floors
-                        Block blockBelow = world.getBlockAt(neighborX, neighborY - 1, neighborZ);
-                        if (isInsideBuildingFootprint(neighborX, neighborY - 1, neighborZ)) {
-                            buildingTilesAvoided++;
-                            continue; // Skip - would be walking on building structure
-                        }
-                        
-                        // T021c: Only allow stepping onto natural ground materials
-                        // This prevents paths from climbing onto roofs or man-made structures
-                        if (!isNaturalGroundMaterial(blockBelow.getType())) {
-                            // Cannot step onto this block - it's not natural ground
-                            continue;
-                        }
-                        
-                        // Calculate movement cost
-                        Location fromLoc = new Location(world, current.x, current.y, current.z);
-                        Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
-                        double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
-                        
-                        maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
-                        
-                        // Skip if terrain is impassable
-                        if (movementCost >= OBSTACLE_COST) {
-                            obstaclesEncountered++;
-                            continue;
-                        }
-                        
-                        double tentativeGScore = current.gScore + movementCost;
-                        
-                        PathNode neighbor = allNodes.get(neighborKey);
-                        if (neighbor == null) {
-                            neighbor = new PathNode(neighborX, neighborY, neighborZ);
-                            neighbor.gScore = Double.POSITIVE_INFINITY;
-                            allNodes.put(neighborKey, neighbor);
-                        }
-                        
-                        if (tentativeGScore < neighbor.gScore) {
-                            neighbor.parent = current;
-                            neighbor.gScore = tentativeGScore;
-                            neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
-                            
-                            openSet.remove(neighbor); // Re-add with updated priority
-                            openSet.add(neighbor);
-                        }
-                    }
+                    openSet.remove(neighbor); // Re-add with updated priority
+                    openSet.add(neighbor);
                 }
             }
         }
@@ -322,6 +320,37 @@ public class PathServiceImpl implements PathService {
         LOGGER.warning(String.format("[PATH] A* FAILED: %s (explored=%d/%d, obstacles=%d, maxCost=%.1f)",
                 reason, nodesExplored, MAX_NODES_EXPLORED, obstaclesEncountered, maxTerrainCostSeen));
         return null; // No path found
+    }
+    
+    /**
+     * Legacy neighbor generation for fallback when no village context exists.
+     */
+    private List<int[]> getLegacyNeighbors(World world, PathNode current) {
+        List<int[]> neighbors = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                
+                int neighborX = current.x + dx;
+                int neighborZ = current.z + dz;
+                
+                for (int dy = -1; dy <= 1; dy++) {
+                    int neighborY = current.y + dy;
+                    if (neighborY < world.getMinHeight() || neighborY > world.getMaxHeight()) {
+                        continue;
+                    }
+                    
+                    // Check block below for support
+                    Block blockBelow = world.getBlockAt(neighborX, neighborY - 1, neighborZ);
+                    if (!isNaturalGroundMaterial(blockBelow.getType())) {
+                        continue;
+                    }
+                    
+                    neighbors.add(new int[]{neighborX, neighborY, neighborZ});
+                }
+            }
+        }
+        return neighbors;
     }
     
     /**
@@ -404,21 +433,6 @@ public class PathServiceImpl implements PathService {
     @Override
     public double calculateTerrainCost(World world, Location from, Location to) {
         int yDiff = Math.abs(to.getBlockY() - from.getBlockY());
-        double horizontalDist = Math.sqrt(
-                Math.pow(to.getX() - from.getX(), 2) + 
-                Math.pow(to.getZ() - from.getZ(), 2));
-        
-        // Base cost
-        double cost = FLAT_COST;
-        
-        // Add slope cost
-        if (yDiff > 0) {
-            double slope = yDiff / horizontalDist;
-            if (slope > MAX_ACCEPTABLE_SLOPE) {
-                return OBSTACLE_COST; // Too steep
-            }
-            cost += yDiff * SLOPE_COST_MULTIPLIER;
-        }
         
         // Check for water or lava at destination (path walks on top of blocks, so check the block itself)
         Block blockAt = world.getBlockAt(to);
@@ -431,38 +445,17 @@ public class PathServiceImpl implements PathService {
         boolean hasWater = (typeAt == Material.WATER || typeAt == Material.LAVA || 
                            typeBelow == Material.WATER || typeBelow == Material.LAVA);
         if (hasWater) {
-            cost += WATER_COST;
+            return WATER_COST;
         }
         
-        // Use typeAt for passability checks (the block at the path level)
-        Material type = typeAt;
-        
-        // Allow paths through most natural materials
-        // Only veto truly impassable blocks (structures, ores, bedrock)
-        if (type.isSolid()) {
-            // Allow: grass, dirt, stone, sand, gravel, vegetation
-            if (type == Material.GRASS_BLOCK || type == Material.DIRT || 
-                type == Material.STONE || type == Material.SAND || 
-                type == Material.GRAVEL || type == Material.COARSE_DIRT ||
-                type == Material.PODZOL || type == Material.CLAY ||
-                type.name().contains("LOG") || type.name().contains("LEAVES")) {
-                return cost; // Passable natural terrain
-            }
-            
-            // Veto artificial/rare blocks (ores, structures, bedrock)
-            if (type == Material.BEDROCK || 
-                type.name().contains("ORE") ||
-                type.name().contains("PLANKS") ||
-                type.name().contains("BRICKS") ||
-                type.name().contains("COBBLESTONE")) {
-                return OBSTACLE_COST;
-            }
-            
-            // Default: slightly increased cost for other solid blocks
-            cost += 2.0;
+        // Base cost
+        if (yDiff == 0) {
+            return FLAT_COST;
+        } else if (yDiff == 1) {
+            return SLOPE_COST;
+        } else {
+            return OBSTACLE_COST; // Too steep
         }
-        
-        return cost;
     }
     
     /**

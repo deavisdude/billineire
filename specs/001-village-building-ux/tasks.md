@@ -515,7 +515,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Command prints PASS only if all checks succeed; failures include exact coordinates.
     - Screenshot checklist provided in tests guide (see R011).
 
-- [ ] R007 [Core] A* over walkable graph (3D, slope-aware)
+- [X] R007 [Core] A* over walkable graph (3D, slope-aware)
   - Files: `.../worldgen/impl/PathServiceImpl.java`
   - Description: Implement A* that expands neighbors strictly within the walkable graph. Costs: flat=1, slope=1.5, water=+∞ (blocked). Start/end are the verified entrances, snapped with `nearestWalkable`.
   - Acceptance:
