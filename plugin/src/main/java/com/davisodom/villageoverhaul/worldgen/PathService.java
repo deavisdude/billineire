@@ -110,7 +110,9 @@ public interface PathService {
      * @param maxY Maximum Y coordinate (inclusive)
      * @param minZ Minimum Z coordinate (inclusive)
      * @param maxZ Maximum Z coordinate (inclusive)
+     * @deprecated R009: Use WalkableGraph and VolumeMasks instead. This method is now a no-op.
      */
+    @Deprecated
     void registerBuildingFootprint(UUID villageId, int minX, int maxX, int minY, int maxY, int minZ, int maxZ);
 }
 

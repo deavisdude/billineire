@@ -262,17 +262,7 @@ public class StructureServiceImpl implements StructureService {
         }
     }
     
-    /**
-     * Place structure and return a PlacementReceipt with canonical transform and proof.
-     * This is the R001 implementation that replaces ambiguous logs with ground-truth data.
-     * 
-     * @param structureId Structure ID to place
-     * @param world Target world
-     * @param origin Initial placement origin
-     * @param seed Deterministic seed
-     * @param villageId Village ID for receipt
-     * @return Optional PlacementReceipt with exact bounds and corner samples
-     */
+    @Override
     public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId) {
         StructureTemplate template = loadedStructures.get(structureId);
@@ -312,8 +302,9 @@ public class StructureServiceImpl implements StructureService {
             sampleFoundationCorners(world, bounds);
             
         // Calculate entrance location
-        // Transform anchor via T and snap to adjacent walkable ground outside AABB+buffer
-        Location entranceLoc = calculateEntranceLocation(world, placedOrigin, template, rotationDegrees);
+        // R003: Transform anchor via T and snap to adjacent walkable ground outside AABB+buffer
+        // Pass bounds so calculateEntranceLocation can use SurfaceSolver to find natural ground
+        Location entranceLoc = calculateEntranceLocation(world, placedOrigin, template, rotationDegrees, bounds, villageId);
         
         // Calculate effective dimensions after rotation
         int effectiveWidth, effectiveDepth;
@@ -1364,7 +1355,7 @@ public class StructureServiceImpl implements StructureService {
      * Calculate the world location for the structure entrance.
      * Transforms the relative anchor and snaps to ground outside the structure.
      */
-    private Location calculateEntranceLocation(World world, Location origin, StructureTemplate template, int rotation) {
+    private Location calculateEntranceLocation(World world, Location origin, StructureTemplate template, int rotation, int[] bounds, UUID villageId) {
         BlockVector3 offset = template.entranceOffset;
         BlockVector3 facing = template.entranceFacing;
         
@@ -1411,8 +1402,23 @@ public class StructureServiceImpl implements StructureService {
         int targetX = doorX + (rotFaceX * 3);
         int targetZ = doorZ + (rotFaceZ * 3);
         
-        // Find ground level at target
-        int targetY = findGroundLevelAtPoint(world, targetX, targetZ);
+        // R003: Use SurfaceSolver to find ground level OUTSIDE the structure
+        // Create temporary VolumeMask for this structure
+        com.davisodom.villageoverhaul.model.VolumeMask tempMask = 
+            new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+                .structureId(template.id)
+                .villageId(villageId)
+                .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
+                .build();
+        
+        // Create SurfaceSolver with this mask (so it ignores structure blocks)
+        java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> masks = 
+            java.util.Collections.singletonList(tempMask);
+        com.davisodom.villageoverhaul.worldgen.SurfaceSolver solver = 
+            new com.davisodom.villageoverhaul.worldgen.SurfaceSolver(world, masks);
+        
+        // Find walkable ground at target (ignoring structure blocks)
+        int targetY = solver.getSurfaceHeight(targetX, targetZ) + 1; // +1 for walking surface
         
         Location entranceLoc = new Location(world, targetX, targetY, targetZ);
         LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",

@@ -2,11 +2,13 @@ package com.davisodom.villageoverhaul.villages.impl;
 
 import com.davisodom.villageoverhaul.cultures.CultureService;
 import com.davisodom.villageoverhaul.model.Building;
+import com.davisodom.villageoverhaul.model.PlacementReceipt;
+import com.davisodom.villageoverhaul.model.VolumeMask;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
-import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
+import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.impl.PathEmitter;
 import com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl;
@@ -158,14 +160,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         List<Building> placedBuildings = new ArrayList<>();
         
-        // Track occupied footprints to prevent overlaps DURING placement
-        List<Footprint> occupiedFootprints = new ArrayList<>();
-        
-        // T021b: Track placement results with rotation info for correct path avoidance
-        Map<UUID, com.davisodom.villageoverhaul.worldgen.PlacementResult> buildingPlacements = new HashMap<>();
-        
-        // Track rejection reasons for all placement attempts (Constitution v1.4.0, Principle XII)
-        PlacementRejectionTracker villageRejectionTracker = new PlacementRejectionTracker();
+        // R009: Use VolumeMasks for overlap detection instead of legacy Footprints
+        // Initialize SurfaceSolver for ground finding
+        List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
+        SurfaceSolver surfaceSolver = new SurfaceSolver(world, existingMasks);
         
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
@@ -186,112 +184,51 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // Derive building-specific seed
             long buildingSeed = seed + i;
             
-            // T021b FIX: We can't predict rotation before placement because re-seating might change it!
-            // Instead, we need to estimate max footprint for collision detection, then get ACTUAL rotation after placement
-            // Use max dimension for conservative collision detection during position finding
-            int maxDimension = Math.max(width, depth);
-            int effectiveWidth = maxDimension;
-            int effectiveDepth = maxDimension;
-            
             // Find suitable position with integrated terrain/spacing/overlap checks
-            PlacementResult placementResult = findSuitablePlacementPosition(
-                    world, origin, effectiveWidth, effectiveDepth, 
-                    occupiedFootprints, villageRejectionTracker);
+            // R009: Use SurfaceSolver and VolumeMasks
+            Optional<Location> placementLocation = findSuitablePlacementPosition(
+                    world, origin, width, depth, 
+                    metadataStore.getVolumeMasks(villageId), surfaceSolver);
             
-            if (placementResult == null) {
-                LOGGER.warning(String.format("[STRUCT] Could not find suitable position for '%s' after %d attempts", 
-                        structureId, villageRejectionTracker.totalAttempts));
+            if (!placementLocation.isPresent()) {
+                LOGGER.warning(String.format("[STRUCT] Could not find suitable position for '%s'", structureId));
                 continue;
             }
             
-            Location buildingLocation = new Location(
-                    world,
-                    placementResult.position.x,
-                    world.getHighestBlockYAt(placementResult.position.x, placementResult.position.z),
-                    placementResult.position.z
-            );
+            Location buildingLocation = placementLocation.get();
             
             // R001: Place structure and get PlacementReceipt with ground-truth bounds and corner samples
-            Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receiptOpt = null;
-            if (structureService instanceof StructureServiceImpl) {
-                StructureServiceImpl structureServiceImpl = (StructureServiceImpl) structureService;
-                receiptOpt = structureServiceImpl.placeStructureAndGetReceipt(
-                        structureId, world, buildingLocation, buildingSeed, villageId);
-            }
+            Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
+                    structureId, world, buildingLocation, buildingSeed, villageId);
             
-            // Fallback to old method if receipt method not available
-            Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> actualPlacement = null;
-            if (receiptOpt == null || !receiptOpt.isPresent()) {
-                actualPlacement = structureService.placeStructureAndGetResult(
-                        structureId, world, buildingLocation, buildingSeed);
-            }
-            
-            if ((receiptOpt != null && receiptOpt.isPresent()) || 
-                (actualPlacement != null && actualPlacement.isPresent())) {
+            if (receiptOpt.isPresent()) {
+                PlacementReceipt receipt = receiptOpt.get();
                 
-                Location actualOrigin;
-                int actualRotation;
-                int actualEffectiveWidth;
-                int actualEffectiveDepth;
+                // Store receipt for persistence
+                metadataStore.addPlacementReceipt(villageId, receipt);
                 
-                // R001: Use receipt data if available, otherwise fall back to old placement result
-                if (receiptOpt != null && receiptOpt.isPresent()) {
-                    com.davisodom.villageoverhaul.model.PlacementReceipt receipt = receiptOpt.get();
-                    actualOrigin = new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ());
-                    actualRotation = receipt.getRotation();
-                    actualEffectiveWidth = receipt.getEffectiveWidth();
-                    actualEffectiveDepth = receipt.getEffectiveDepth();
-                    
-                    // Store receipt for persistence
-                    metadataStore.addPlacementReceipt(villageId, receipt);
-                    
-                    // R002: Create and store VolumeMask from receipt
-                    com.davisodom.villageoverhaul.model.VolumeMask volumeMask = 
-                        com.davisodom.villageoverhaul.model.VolumeMask.fromReceipt(receipt);
-                    metadataStore.addVolumeMask(villageId, volumeMask);
-                    
-                } else {
-                    com.davisodom.villageoverhaul.worldgen.PlacementResult placement = actualPlacement.get();
-                    actualOrigin = placement.getActualLocation();
-                    actualRotation = placement.getRotationDegrees();
-                    actualEffectiveWidth = placement.getEffectiveWidth(width, depth);
-                    actualEffectiveDepth = placement.getEffectiveDepth(width, depth);
-                }
+                // R002: Create and store VolumeMask from receipt
+                VolumeMask volumeMask = VolumeMask.fromReceipt(receipt);
+                metadataStore.addVolumeMask(villageId, volumeMask);
                 
-                // Create building metadata with actual placement info
+                // Update SurfaceSolver with new mask for subsequent placements
+                // (Re-creating solver is cheap enough for per-building frequency)
+                surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
+                
+                // Create building metadata
                 Building building = new Building.Builder()
                         .villageId(villageId)
                         .structureId(structureId)
-                        .origin(actualOrigin)
-                        .dimensions(dims[0], dims[1], dims[2])
+                        .origin(new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ()))
+                        .dimensions(receipt.getEffectiveWidth(), receipt.getHeight(), receipt.getEffectiveDepth())
                         .build();
                 
                 placedBuildings.add(building);
                 
-                // Store placement result for later footprint registration (if using old method)
-                if (actualPlacement != null && actualPlacement.isPresent()) {
-                    buildingPlacements.put(building.getBuildingId(), actualPlacement.get());
-                } else if (receiptOpt != null && receiptOpt.isPresent()) {
-                    // Create a PlacementResult from receipt for backwards compatibility
-                    com.davisodom.villageoverhaul.model.PlacementReceipt receipt = receiptOpt.get();
-                    com.davisodom.villageoverhaul.worldgen.PlacementResult placementFromReceipt = 
-                        new com.davisodom.villageoverhaul.worldgen.PlacementResult(actualOrigin, actualRotation);
-                    buildingPlacements.put(building.getBuildingId(), placementFromReceipt);
-                }
-                
-                // Track footprint for collision detection with ACTUAL dimensions
-                Footprint footprint = new Footprint(
-                        actualOrigin.getBlockX(), 
-                        actualOrigin.getBlockZ(), 
-                        actualEffectiveWidth, 
-                        actualEffectiveDepth);
-                occupiedFootprints.add(footprint);
-                
-                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d) rotation=%d°, tracking footprint: x=%d, z=%d, w=%d, d=%d", 
+                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d) rotation=%d°", 
                         structureId, 
-                        actualOrigin.getBlockX(), actualOrigin.getBlockY(), actualOrigin.getBlockZ(),
-                        actualRotation,
-                        footprint.x, footprint.z, footprint.width, footprint.depth));
+                        receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ(),
+                        receipt.getRotation()));
             } else {
                 LOGGER.warning(String.format("[STRUCT] Failed to place building %s", structureId));
             }
@@ -301,10 +238,6 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.warning(String.format("[STRUCT] Abort: No buildings placed for village at %s", origin));
             return Optional.empty();
         }
-        
-        // Log placement metrics (Constitution v1.4.0, Principle XII)
-        LOGGER.info(String.format("[STRUCT] Placement metrics for village %s: %s, avgRejected=%.2f",
-                villageId, villageRejectionTracker, villageRejectionTracker.getAverageRejectedAttempts()));
         
         // Store village buildings
         for (Building building : placedBuildings) {
@@ -327,138 +260,48 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.info(String.format("[STRUCT] Generating path network for village %s", villageId));
             
             // T021c: Calculate entrance points for all buildings
-            // Use entrance locations (outside footprints) instead of raw building origins
+            // R009: Use entrance locations from PlacementReceipts
             List<Location> buildingEntrances = new ArrayList<>();
             Location mainBuildingEntrance = null;
             
+            List<PlacementReceipt> receipts = metadataStore.getPlacementReceipts(villageId);
+            Map<String, PlacementReceipt> receiptMap = new HashMap<>();
+            for (PlacementReceipt r : receipts) {
+                // Map by structure ID is risky if duplicates allowed, but here we assume 1:1 for now
+                // Better to map by building ID if available, but receipt doesn't have it yet
+                // We can match by location
+                receiptMap.put(r.getStructureId() + "@" + r.getOriginX() + "," + r.getOriginZ(), r);
+            }
+            
             for (Building building : placedBuildings) {
-                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = 
-                        buildingPlacements.get(building.getBuildingId());
+                // Find matching receipt
+                String key = building.getStructureId() + "@" + building.getOrigin().getBlockX() + "," + building.getOrigin().getBlockZ();
+                PlacementReceipt receipt = receiptMap.get(key);
                 
-                if (placement == null) {
-                    LOGGER.warning(String.format("[STRUCT] Missing placement result for building %s, using origin as entrance",
+                if (receipt != null) {
+                    Location entrance = new Location(world, receipt.getEntranceX(), receipt.getEntranceY(), receipt.getEntranceZ());
+                    buildingEntrances.add(entrance);
+                    
+                    if (mainBuildingId.isPresent() && building.getBuildingId().equals(mainBuildingId.get())) {
+                        mainBuildingEntrance = entrance;
+                    }
+                } else {
+                    LOGGER.warning(String.format("[STRUCT] Missing receipt for building %s, skipping path connection",
                             building.getBuildingId()));
-                    buildingEntrances.add(building.getOrigin());
-                    continue;
-                }
-                
-                Location entrance = calculateEntrancePoint(building, placement, world);
-                buildingEntrances.add(entrance);
-                
-                // Track main building entrance separately
-                if (mainBuildingId.isPresent() && building.getBuildingId().equals(mainBuildingId.get())) {
-                    mainBuildingEntrance = entrance;
                 }
             }
             
             // Fallback: if no main building was designated, use first building's entrance
             if (mainBuildingEntrance == null && !buildingEntrances.isEmpty()) {
                 mainBuildingEntrance = buildingEntrances.get(0);
-                LOGGER.warning(String.format("[STRUCT] No main building designated for village %s, using first building entrance",
-                        villageId));
-            }
-            
-            // T021b: Register building footprints for pathfinding obstacle avoidance
-            // CRITICAL: Use ACTUAL rotation from placement to calculate correct effective dimensions
-            // CRITICAL: Account for WorldEdit rotation behavior - origin point shifts based on rotation
-            // At 0°: origin is northwest corner (minX, minZ)
-            // At 90°: origin is northeast corner (minX, maxZ)
-            // At 180°: origin is southeast corner (maxX, maxZ)
-            // At 270°: origin is southwest corner (maxX, minZ)
-            final int FOOTPRINT_BUFFER = 3; // Blocks to expand footprint on all sides
-            
-            for (Building building : placedBuildings) {
-                // Get the PlacementResult which contains the actual rotation used
-                com.davisodom.villageoverhaul.worldgen.PlacementResult placement = 
-                        buildingPlacements.get(building.getBuildingId());
-                
-                if (placement == null) {
-                    LOGGER.warning(String.format("[STRUCT] Missing placement result for building %s, skipping footprint registration",
-                            building.getBuildingId()));
-                    continue;
-                }
-                
-                Location buildingOrigin = building.getOrigin();
-                int[] dims = building.getDimensions();
-                int width = dims[0];
-                int height = dims[1];
-                int depth = dims[2];
-                int rotationDegrees = placement.getRotationDegrees();
-                
-                // Calculate ACTUAL effective dimensions using rotation from placement
-                int effectiveWidth = placement.getEffectiveWidth(width, depth);
-                int effectiveDepth = placement.getEffectiveDepth(width, depth);
-                
-                // Calculate actual structure bounds based on WorldEdit rotation behavior
-                // WorldEdit rotates around origin point, changing which corner the origin represents
-                int structureMinX, structureMaxX, structureMinZ, structureMaxZ;
-                
-                int originX = buildingOrigin.getBlockX();
-                int originZ = buildingOrigin.getBlockZ();
-                
-                switch (rotationDegrees) {
-                    case 0: // Origin is northwest corner (minX, minZ)
-                        structureMinX = originX;
-                        structureMaxX = originX + effectiveWidth - 1;
-                        structureMinZ = originZ;
-                        structureMaxZ = originZ + effectiveDepth - 1;
-                        break;
-                    case 90: // Origin is northeast corner (minX, maxZ) - structure extends -Z
-                        structureMinX = originX;
-                        structureMaxX = originX + effectiveWidth - 1;
-                        structureMinZ = originZ - effectiveDepth + 1;
-                        structureMaxZ = originZ;
-                        break;
-                    case 180: // Origin is southeast corner (maxX, maxZ) - structure extends -X, -Z
-                        structureMinX = originX - effectiveWidth + 1;
-                        structureMaxX = originX;
-                        structureMinZ = originZ - effectiveDepth + 1;
-                        structureMaxZ = originZ;
-                        break;
-                    case 270: // Origin is southwest corner (maxX, minZ) - structure extends -X
-                        structureMinX = originX - effectiveWidth + 1;
-                        structureMaxX = originX;
-                        structureMinZ = originZ;
-                        structureMaxZ = originZ + effectiveDepth - 1;
-                        break;
-                    default:
-                        LOGGER.warning(String.format("[STRUCT] Unexpected rotation %d° for building %s, using 0° logic",
-                                rotationDegrees, building.getBuildingId()));
-                        structureMinX = originX;
-                        structureMaxX = originX + effectiveWidth - 1;
-                        structureMinZ = originZ;
-                        structureMaxZ = originZ + effectiveDepth - 1;
-                }
-                
-                // Apply buffer zone AFTER calculating structure bounds
-                int minX = structureMinX - FOOTPRINT_BUFFER;
-                int maxX = structureMaxX + FOOTPRINT_BUFFER;
-                int minY = buildingOrigin.getBlockY();
-                int maxY = minY + height - 1;
-                int minZ = structureMinZ - FOOTPRINT_BUFFER;
-                int maxZ = structureMaxZ + FOOTPRINT_BUFFER;
-                
-                pathService.registerBuildingFootprint(villageId, minX, maxX, minY, maxY, minZ, maxZ);
-                
-                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: building=%s, structureId=%s", 
-                        building.getBuildingId(), building.getStructureId()));
-                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: origin=(%d,%d,%d), rotation=%d°",
-                        buildingOrigin.getBlockX(), buildingOrigin.getBlockY(), buildingOrigin.getBlockZ(),
-                        placement.getRotationDegrees()));
-                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: schematic dims: width=%d, height=%d, depth=%d",
-                        width, height, depth));
-                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: effective dims: width=%d, depth=%d (after rotation)",
-                        effectiveWidth, effectiveDepth));
-                LOGGER.info(String.format("[STRUCT] FOOTPRINT DIAGNOSTIC: bounds: minX=%d, maxX=%d, minY=%d, maxY=%d, minZ=%d, maxZ=%d",
-                        minX, maxX, minY, maxY, minZ, maxZ));
             }
             
             // Generate path network (A* pathfinding) using entrance points
             boolean pathSuccess = pathService.generatePathNetwork(
                     world, 
                     villageId, 
-                    buildingEntrances,  // T021c: Use entrance points instead of origins
-                    mainBuildingEntrance,  // T021c: Use main building entrance
+                    buildingEntrances,
+                    mainBuildingEntrance,
                     seed
             );
             
@@ -468,7 +311,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 int totalPathBlocks = 0;
                 
                 // R008: Get volume masks for path placement checks
-                List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+                List<VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
                 
                 for (List<Block> pathSegment : pathNetwork) {
                     int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId, masks);
@@ -667,258 +510,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     /**
-     * Calculate grid positions for buildings with fixed spacing.
-     * Places buildings in a spiral pattern outward from center, ensuring
-     * minimum spacing between all structures.
-     * 
-     * @param world Target world
-     * @param origin Village center location
-     * @param structureIds List of structures to place
-     * @param seed Deterministic seed for placement order
-     * @return List of grid positions for each building
-     */
-    private List<GridPosition> calculateGridPositions(World world, Location origin, List<String> structureIds, long seed) {
-        List<GridPosition> positions = new ArrayList<>();
-        
-        // Track occupied grid cells with structure footprints
-        List<Footprint> occupiedFootprints = new ArrayList<>();
-        
-        int originX = origin.getBlockX();
-        int originZ = origin.getBlockZ();
-        
-        for (int i = 0; i < structureIds.size(); i++) {
-            String structureId = structureIds.get(i);
-            
-            // Get structure dimensions
-            Optional<int[]> dimensions = structureService.getStructureDimensions(structureId);
-            if (!dimensions.isPresent()) {
-                LOGGER.warning(String.format("[STRUCT] Structure '%s' dimensions not found, skipping grid calculation", structureId));
-                continue;
-            }
-            
-            int[] dims = dimensions.get();
-            int width = dims[0];
-            int depth = dims[2]; // Z dimension
-            
-            // Determine rotation for this building (same logic as placement uses)
-            long buildingSeed = seed + i;
-            Random rotationRandom = new Random(buildingSeed);
-            int rotationDegrees = rotationRandom.nextInt(4) * 90; // 0, 90, 180, or 270
-            
-            // Calculate ACTUAL footprint after rotation
-            int effectiveWidth, effectiveDepth;
-            if (rotationDegrees == 90 || rotationDegrees == 270) {
-                // 90° or 270° rotation swaps width and depth
-                effectiveWidth = depth;
-                effectiveDepth = width;
-            } else {
-                // 0° or 180° rotation keeps original dimensions
-                effectiveWidth = width;
-                effectiveDepth = depth;
-            }
-            
-            // Find closest position to center that doesn't overlap
-            GridPosition bestPosition = findNonOverlappingPosition(
-                    originX, originZ, effectiveWidth, effectiveDepth, occupiedFootprints);
-            
-            if (bestPosition != null) {
-                positions.add(bestPosition);
-                
-                // Mark this footprint as occupied (including spacing buffer)
-                // Spacing buffer extends OUTWARD from structure on all sides
-                occupiedFootprints.add(new Footprint(
-                        bestPosition.x - DEFAULT_BUILDING_SPACING,  // Start spacing blocks BEFORE structure
-                        bestPosition.z - DEFAULT_BUILDING_SPACING,
-                        effectiveWidth + DEFAULT_BUILDING_SPACING * 2,  // Structure width + spacing on both sides
-                        effectiveDepth + DEFAULT_BUILDING_SPACING * 2   // Structure depth + spacing on both sides
-                ));
-                
-                LOGGER.info(String.format("[STRUCT] Grid position for '%s': origin=(%d, %d), footprint=(%d, %d) size=%dx%d (rotated %d° from %dx%d)+%d buffer",
-                        structureId, bestPosition.x, bestPosition.z, 
-                        bestPosition.x - DEFAULT_BUILDING_SPACING, bestPosition.z - DEFAULT_BUILDING_SPACING,
-                        effectiveWidth, effectiveDepth, rotationDegrees, width, depth, DEFAULT_BUILDING_SPACING));
-            } else {
-                LOGGER.warning(String.format("[STRUCT] Could not find grid position for '%s'", structureId));
-            }
-        }
-        
-        return positions;
-    }
-    
-    /**
-     * Find non-overlapping position closest to village center.
-     * Uses spiral search pattern outward from center.
-     */
-    private GridPosition findNonOverlappingPosition(int centerX, int centerZ, int width, int depth, 
-                                                     List<Footprint> occupied) {
-        // Start at center
-        if (occupied.isEmpty()) {
-            return new GridPosition(centerX - width / 2, centerZ - depth / 2);
-        }
-        
-        // Spiral search outward from center
-        int maxRadius = 150; // Increased search radius for more placement attempts
-        
-        for (int radius = 5; radius < maxRadius; radius += 5) {
-            // Try positions in a circle around the center
-            int numPositions = Math.max(8, radius / 2); // More positions as radius increases
-            
-            for (int i = 0; i < numPositions; i++) {
-                double angle = (2.0 * Math.PI * i) / numPositions;
-                int testX = centerX + (int)(radius * Math.cos(angle)) - width / 2;
-                int testZ = centerZ + (int)(radius * Math.sin(angle)) - depth / 2;
-                
-                // Check if this position overlaps with any occupied footprint
-                boolean overlaps = false;
-                for (Footprint footprint : occupied) {
-                    if (footprintsOverlap(testX, testZ, width, depth, footprint)) {
-                        overlaps = true;
-                        break;
-                    }
-                }
-                
-                if (!overlaps) {
-                    return new GridPosition(testX, testZ);
-                }
-            }
-        }
-        
-        return null; // Could not find valid position
-    }
-    
-    /**
-     * Check if two footprints overlap.
-     * The new structure (x1, z1, w1, d1) needs spacing buffer added.
-     * The occupied footprint (f2) already has spacing buffer included.
-     */
-    private boolean footprintsOverlap(int x1, int z1, int w1, int d1, Footprint f2) {
-        // Add spacing buffer to new structure being checked
-        int bufferedX1 = x1 - minBuildingSpacing;
-        int bufferedZ1 = z1 - minBuildingSpacing;
-        int bufferedW1 = w1 + minBuildingSpacing * 2;
-        int bufferedD1 = d1 + minBuildingSpacing * 2;
-        
-        int x2 = f2.x;
-        int z2 = f2.z;
-        int w2 = f2.width;
-        int d2 = f2.depth;
-        
-        // Check AABB overlap with buffered dimensions
-        return !(bufferedX1 + bufferedW1 <= x2 || bufferedX1 >= x2 + w2 || 
-                 bufferedZ1 + bufferedD1 <= z2 || bufferedZ1 >= z2 + d2);
-    }
-    
-    /**
-     * Check if two footprints overlap (without spacing buffer).
-     * Used for direct AABB collision detection after spacing already verified.
-     */
-    private boolean footprintsOverlap(Footprint f1, Footprint f2) {
-        // Simple AABB overlap check
-        return !(f1.x + f1.width <= f2.x || f1.x >= f2.x + f2.width || 
-                 f1.z + f1.depth <= f2.z || f1.z >= f2.z + f2.depth);
-    }
-    
-    /**
-     * Find the actual ground level at a position, searching down from the highest block to find solid ground.
-     * This ignores vegetation (leaves, grass, flowers) and finds the actual solid foundation beneath.
-     * 
-     * @param world World to search
-     * @param x X coordinate
-     * @param z Z coordinate
-     * @return Ground level Y coordinate
-     */
-    private int findGroundLevel(World world, int x, int z) {
-        int startY = world.getHighestBlockYAt(x, z);
-        
-        // Search downward up to 20 blocks to find solid ground beneath vegetation
-        for (int y = startY; y > startY - 20 && y > world.getMinHeight(); y--) {
-            Block block = world.getBlockAt(x, y, z);
-            Block below = world.getBlockAt(x, y - 1, z);
-            
-            // Found ground: current block is air/vegetation AND block below is solid (not air/vegetation)
-            TerrainClassifier.Classification currentClass = TerrainClassifier.classify(block);
-            TerrainClassifier.Classification belowClass = TerrainClassifier.classify(below);
-            
-            boolean currentIsEmpty = (currentClass == TerrainClassifier.Classification.BLOCKED || 
-                                     currentClass == TerrainClassifier.Classification.VEGETATION);
-            boolean belowIsSolid = (belowClass == TerrainClassifier.Classification.ACCEPTABLE);
-            
-            if (currentIsEmpty && belowIsSolid) {
-                return y; // Foundation will be placed at Y-1 (on the solid block)
-            }
-        }
-        
-        // Fallback: use highest block if no solid ground found (shouldn't happen in normal terrain)
-        return startY;
-    }
-    
-    /**
-     * Check terrain suitability for a building footprint.
-     * Samples foundation area and classifies terrain to detect water, steep slopes, etc.
-     * 
-     * RELAXED TOLERANCE: Allows up to 20% of samples to be non-ACCEPTABLE (e.g., minor slopes, 
-     * sparse vegetation). Only rejects if >20% bad OR ANY fluid detected (hard veto on water).
-     * 
-     * @param world World to check
-     * @param origin Proposed building origin (southwest corner)
-     * @param width Building width (X axis)
-     * @param depth Building depth (Z axis)
-     * @return Classification result with counts
-     */
-    private TerrainClassifier.ClassificationResult checkTerrainSuitability(
-            World world, Location origin, int width, int depth) {
-        TerrainClassifier.ClassificationResult result = new TerrainClassifier.ClassificationResult();
-        
-        // Sample foundation blocks (every 4 blocks - reduced density for performance)
-        int sampleStep = 4;
-        for (int x = 0; x < width; x += sampleStep) {
-            for (int z = 0; z < depth; z += sampleStep) {
-                int worldX = origin.getBlockX() + x;
-                int worldY = origin.getBlockY();
-                int worldZ = origin.getBlockZ() + z;
-                
-                TerrainClassifier.Classification classification = 
-                        TerrainClassifier.classify(world, worldX, worldY, worldZ);
-                result.increment(classification);
-            }
-        }
-        
-        return result;
-    }
-    
-    /**
-     * Simple grid position holder.
-     */
-    /**
-     * Result of placement position search with integrated terrain/spacing/overlap checks.
-     */
-    private static class PlacementResult {
-        final GridPosition position;
-        final int attempts;
-        
-        PlacementResult(GridPosition position, int attempts) {
-            this.position = position;
-            this.attempts = attempts;
-        }
-    }
-    
-    /**
      * Find suitable placement position with integrated terrain, spacing, and overlap checks.
-     * Uses spiral search pattern from origin, checking terrain FIRST (cheapest), then spacing, then overlap.
-     * Records all rejection reasons in tracker for observability (Constitution v1.4.0, Principle XII).
-     * 
-     * @param world World to search
-     * @param origin Village origin (center point)
-     * @param width Building width (after rotation)
-     * @param depth Building depth (after rotation)
-     * @param occupiedFootprints Already placed buildings
-     * @param tracker Rejection reason tracker
-     * @return PlacementResult with position and attempt count, or null if no suitable position found
+     * Uses spiral search pattern from origin.
+     * R009: Uses SurfaceSolver for ground finding and VolumeMasks for overlap checks.
      */
-    private PlacementResult findSuitablePlacementPosition(
+    private Optional<Location> findSuitablePlacementPosition(
             World world, Location origin, int width, int depth,
-            List<Footprint> occupiedFootprints, 
-            PlacementRejectionTracker tracker) {
+            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver) {
         
         final int maxRadius = 100;
         final int gridSize = 8;
@@ -933,97 +531,52 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         continue;
                     }
                     
-                    tracker.recordAttempt();
-                    
                     int candidateX = origin.getBlockX() + dx;
                     int candidateZ = origin.getBlockZ() + dz;
                     
-                    // Find actual ground level (beneath vegetation)
-                    int candidateY = findGroundLevel(world, candidateX, candidateZ);
+                    // R009: Use SurfaceSolver to find ground level
+                    // This finds the highest solid block NOT inside any existing mask
+                    int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
                     
-                    Location candidateLocation = new Location(world, candidateX, candidateY, candidateZ);
+                    // Check overlap with existing masks (including spacing buffer)
+                    // Since we don't know final rotation yet, use conservative bounds:
+                    // candidate could extend maxDim in any direction from its origin
+                    int maxDim = Math.max(width, depth);
+                    int buffer = minBuildingSpacing;
                     
-                    // CHECK 1: Terrain classification (cheapest, fails fast)
-                    TerrainClassifier.ClassificationResult terrainResult = 
-                            checkTerrainSuitability(world, candidateLocation, width, depth);
+                    // Conservative candidate footprint: origin could place structure extending maxDim in all directions
+                    // (rotation determines actual extent, so we check worst case)
+                    int candidateRadius = maxDim + buffer;
                     
-                    // Use relaxed tolerance check: hard veto on water, 20% tolerance for steep/blocked
-                    if (!terrainResult.isAcceptableWithTolerance()) {
-                        tracker.recordTerrainRejection(terrainResult);
-                        LOGGER.finest(String.format("[STRUCT] Terrain rejection at (%d,%d): %s", 
-                                candidateX, candidateZ, terrainResult));
-                        continue;
-                    }
-                    
-                    // CHECK 2: Spacing check (create temporary footprint)
-                    Footprint candidateFootprint = new Footprint(candidateX, candidateZ, width, depth);
-                    
-                    // Check minimum spacing to all occupied footprints
-                    boolean hasSpacingViolation = false;
-                    for (Footprint occupied : occupiedFootprints) {
-                        if (!hasMinimumSpacing(candidateFootprint, occupied, minBuildingSpacing)) {
-                            hasSpacingViolation = true;
+                    boolean overlaps = false;
+                    for (VolumeMask mask : existingMasks) {
+                        // Expand mask by candidate radius for overlap check
+                        // If candidate origin is within (mask + candidateRadius), structures could overlap
+                        int maskMinX = mask.getMinX() - candidateRadius;
+                        int maskMaxX = mask.getMaxX() + candidateRadius;
+                        int maskMinZ = mask.getMinZ() - candidateRadius;
+                        int maskMaxZ = mask.getMaxZ() + candidateRadius;
+                        
+                        // Check if candidate origin is within expanded mask zone
+                        if (candidateX >= maskMinX && candidateX <= maskMaxX &&
+                            candidateZ >= maskMinZ && candidateZ <= maskMaxZ) {
+                            overlaps = true;
                             break;
                         }
                     }
+
                     
-                    if (hasSpacingViolation) {
-                        tracker.recordSpacingRejection();
-                        LOGGER.finest(String.format("[STRUCT] Spacing rejection at (%d,%d)", 
-                                candidateX, candidateZ));
+                    if (overlaps) {
                         continue;
                     }
                     
-                    // CHECK 3: Overlap check (most expensive, done last)
-                    boolean hasOverlap = false;
-                    for (Footprint occupied : occupiedFootprints) {
-                        if (footprintsOverlap(candidateFootprint, occupied)) {
-                            hasOverlap = true;
-                            break;
-                        }
-                    }
-                    
-                    if (hasOverlap) {
-                        tracker.recordOverlapRejection();
-                        LOGGER.finest(String.format("[STRUCT] Overlap rejection at (%d,%d)", 
-                                candidateX, candidateZ));
-                        continue;
-                    }
-                    
-                    // SUCCESS: All checks passed
-                    LOGGER.fine(String.format("[STRUCT] Found suitable position at (%d,%d) after %d attempts", 
-                            candidateX, candidateZ, tracker.totalAttempts));
-                    return new PlacementResult(new GridPosition(candidateX, candidateZ), tracker.totalAttempts);
+                    // Found valid spot
+                    return Optional.of(new Location(world, candidateX, candidateY, candidateZ));
                 }
             }
         }
         
-        // No suitable position found
-        LOGGER.warning(String.format("[STRUCT] No suitable position found after %d attempts (maxRadius=%d)", 
-                tracker.totalAttempts, maxRadius));
-        return null;
-    }
-    
-    /**
-     * Check if two footprints have minimum spacing between them.
-     * Spacing is measured as the minimum distance between any edges of the AABBs.
-     * 
-     * CRITICAL FIX: Both axes must maintain minimum spacing to prevent corner-to-corner overlap.
-     * Previous logic using Math.min() allowed buildings to touch at corners when one axis = 0.
-     * 
-     * @param a First footprint
-     * @param b Second footprint
-     * @param minSpacing Minimum required spacing
-     * @return true if spacing >= minSpacing, false otherwise
-     */
-    private boolean hasMinimumSpacing(Footprint a, Footprint b, int minSpacing) {
-        // Calculate horizontal and vertical distances between AABBs (edge-to-edge)
-        int horizontalDist = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)));
-        int verticalDist = Math.max(0, Math.max(a.z - (b.z + b.depth), b.z - (a.z + a.depth)));
-        
-        // BOTH axes must maintain minimum spacing (prevents corner-to-corner overlap)
-        // Buildings can only be adjacent if separated by minSpacing on BOTH X and Z axes
-        return horizontalDist >= minSpacing && verticalDist >= minSpacing;
+        return Optional.empty();
     }
     
     /**
@@ -1500,4 +1053,3 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
     }
 }
-

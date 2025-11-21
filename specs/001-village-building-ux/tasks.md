@@ -350,7 +350,7 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
   - Description: Validate path generation determinism by computing MD5 hash of ordered path node coordinates. Log hash after each successful A* path. Automated test script runs scenario 3 times (seed A twice, seed B once) and compares hash sequences.
   - Acceptance:
     - ✅ PathServiceImpl logs `[PATH] Determinism hash: <32-hex> (nodes=N)` after every successful path
-    - ✅ Hash computed using MD5 of ordered "x,y,z;" coordinate string
+    - ✅ Hash computed using MD5 of ordered "x1,y1,z1;x2,y2,z2;..." coordinate string
     - ✅ Harness parses hash logs and reports unique hash count
     - ✅ Automated test script (`test-path-determinism.ps1`) validates determinism and variance
     - ✅ Variance confirmed: Different seeds produce different hashes
@@ -528,11 +528,22 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
   - Acceptance:
     - Zero floating slabs in smoke test; zero placements inside VolumeMask.
 
-- [ ] R009 [Migration] Replace old persistence and path calls
+- [X] R009 [Migration] Replace old persistence and path calls
   - Files: `VillagePlacementServiceImpl`, `PathServiceImpl`, `StructureServiceImpl`
   - Description: Remove legacy footprint code, `findGroundLevel` heuristics, and any path code that probes world state without the SurfaceSolver. Wire the new pipeline end-to-end.
   - Acceptance:
     - Build passes; legacy methods no longer referenced; logs updated.
+  - Status: ✅ COMPLETE
+    - Build successful (all 41 tests passing)
+    - VillagePlacementServiceImpl migrated to use VolumeMasks and SurfaceSolver
+    - PathServiceImpl requires WalkableGraph (legacy fallback removed)
+    - StructureServiceImpl uses PlacementReceipt API
+    - Legacy footprint registration is now a no-op with deprecation warning
+  - **Tuning Applied (2025-11-21)**: Increased path generation resilience
+    - MAX_NODES_EXPLORED: 5000 → 10000 (doubled exploration limit)
+    - Connectivity threshold: 90% → 75% (more forgiving for complex terrain)
+    - Enhanced failure logging with coordinates and distances
+    - Addresses pathfinding failures around dense structure clusters
 
 - [ ] R010 [Harness] Headless proof-of-reality tests
   - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
@@ -788,6 +799,49 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 ## Phase 4.7: Bugfix Sprint — Terrain & Path Consistency (Priority: P1)
 
 Purpose: Resolve high-impact playtest defects: unused terraforming pads, treetop path placement, fluid veto inconsistencies, summary count mismatch, inflated rotated footprints, excessive reseat attempts, and classification performance gaps. Ordered by player visibility and world integrity impact.
+
+# Path reliability additions — move here from dedicated sprint (diagnostics-first, P1)
+- [ ] T050 [P1] Path Diagnostics & Zero-Placement Root Cause Lines
+  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java, scripts/ci/sim/run-scenario.ps1
+  - Description: Emit single, parseable INFO lines on path failure and zero-placement (root-cause counters). Add `[PATH][DIAG]` and `ZERO-PLACEMENT` formats consumable by harness. Capture attempted vs. spawned path counts per village.
+  - Acceptance:
+    - Harness can parse `ZERO-PLACEMENT rootCause=... attempts=N` and `[PATH][DIAG] village=<uuid> attempted=<M> spawned=<S> failures=<F>`.
+
+- [ ] T051 [P1] SurfaceSolver / Entrance Validation Hardening
+  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java
+  - Description: Ensure SurfaceSolver.nearestWalkable never returns a y inside any VolumeMask; add entrance validation that rejects entrances that cannot snap to a solid natural ground outside expanded VolumeMask. Log rejection reason.
+  - Acceptance:
+    - Entrances verified and persisted; rejected entrances counted and appear in diagnostics.
+
+- [ ] T052 [P1] PathEmitter Support & Vegetation Exclusion
+  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java
+  - Description: Enforce surface whitelist (grass/dirt/stone/sand/gravel/snow); refuse slab/stair emission when support missing; skip/reroute nodes on vegetation. Track `skippedVegetationNodes` and `unsupportedSurfaceNodes`.
+  - Acceptance:
+    - Zero floating slabs in smoke tests; logs include skipped/reroute counts.
+
+- [ ] T053 [P1] Planner Resilience: Node Cap, Concurrency & Backoff
+  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServicePlanner.java (or equivalent)
+  - Description: Increase/confirm MAX_NODES_EXPLORED and add capped planner concurrency (configurable, default=3). On node-cap hit, emit clear failure log and enqueue a deterministic retry with backoff up to N times.
+  - Acceptance:
+    - Node cap not silently aborting; failure reason present in diagnostics; retry attempts logged; overall path spawn coverage improves.
+
+- [ ] T054 [P1] Deterministic Seed Propagation & Fixed-Layout Mode
+  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java, scripts/ci/sim/run-scenario.ps1
+  - Description: Ensure path seeding derives deterministically from village seed chain; add `-FixedLayout` harness flag that bypasses search and uses deterministic coordinates for structure footprints to isolate path determinism.
+  - Acceptance:
+    - `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>` is logged; fixed-layout runs reproduce placements and path hashes consistently.
+
+- [ ] T055 [P1] Harness Assertion: 50% Path Coverage Threshold & Reporting
+  - Files: scripts/ci/sim/run-scenario.ps1, scripts/ci/sim/test-path-coverage.ps1, tests/HEADLESS-TESTING.md
+  - Description: Add a harness check that for every generated village, spawned path blocks >= 50% of attempted building-to-building path pairs (or configurable threshold). Produce per-village report and exit non-zero when threshold unmet (CI-mode).
+  - Acceptance:
+    - CI script emits per-village coverage line: `PATH-COVERAGE village=<uuid> attempted=<M> spawnedPairs=<S> coverage=<percent>%` and fails when coverage <50% in CI runs.
+
+- [ ] T056 [P2] Fast Playtest Guide & Verify Steps
+  - Files: tests/HEADLESS-TESTING.md, specs/001-village-building-ux/tasks.md
+  - Description: Add short playtest steps for the sprint: run fixed-layout with known seed, run 3 headless repeats, collect `PATH-COVERAGE` lines, and inspect `[PATH][DIAG]` counters.
+  - Acceptance:
+    - Playtest steps reproduce failing/successful cases quickly and enable rapid iteration.
 
 - [ ] T015c [P1] [US1] Deferred terraform commit / rollback
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
@@ -1075,5 +1129,7 @@ Prioritization: P1 (T015c, T021d, T020b, T014c) → P2 (T018c, T017c, T022b, T01
 
 ### Incremental Delivery
 1. US1 → US2 (paths/main) → US4 (onboarding)
-2. US3 (projects upgrades) after US1
+2. US3 (projects) depends on US1 (structures present); implement after US1
 3. Remaining systems US5–US8 as capacity allows
+
+---

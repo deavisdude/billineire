@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.worldgen;
 
+import com.davisodom.villageoverhaul.model.PlacementReceipt;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -7,6 +8,7 @@ import org.bukkit.block.Block;
 import java.io.File;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Service for loading and placing structure templates.
@@ -32,7 +34,9 @@ public interface StructureService {
      * @param origin Placement origin (southwest corner, ground level)
      * @param seed Deterministic seed for randomized blocks (e.g., vegetation variants)
      * @return true if placement successful
+     * @deprecated Use placeStructureAndGetReceipt() for ground-truth placement data
      */
+    @Deprecated
     boolean placeStructure(String structureId, World world, Location origin, long seed);
     
     /**
@@ -44,7 +48,7 @@ public interface StructureService {
      * @param origin Requested placement origin (may be adjusted during re-seating)
      * @param seed Deterministic seed for randomized blocks
      * @return Optional containing the actual placed location, empty if placement failed
-     * @deprecated Use placeStructureAndGetResult() instead to get rotation information
+     * @deprecated Use placeStructureAndGetReceipt() instead
      */
     @Deprecated
     Optional<Location> placeStructureAndGetLocation(String structureId, World world, Location origin, long seed);
@@ -59,8 +63,24 @@ public interface StructureService {
      * @param origin Requested placement origin (may be adjusted during re-seating)
      * @param seed Deterministic seed for randomized blocks and rotation
      * @return Optional containing PlacementResult with actual location and rotation, empty if placement failed
+     * @deprecated Use placeStructureAndGetReceipt() instead
      */
+    @Deprecated
     Optional<PlacementResult> placeStructureAndGetResult(String structureId, World world, Location origin, long seed);
+
+    /**
+     * Place structure and return a PlacementReceipt with canonical transform and proof.
+     * This is the R001 implementation that replaces ambiguous logs with ground-truth data.
+     * 
+     * @param structureId Structure ID to place
+     * @param world Target world
+     * @param origin Initial placement origin
+     * @param seed Deterministic seed
+     * @param villageId Village ID for receipt
+     * @return Optional PlacementReceipt with exact bounds and corner samples
+     */
+    Optional<PlacementReceipt> placeStructureAndGetReceipt(
+            String structureId, World world, Location origin, long seed, UUID villageId);
     
     /**
      * Get the dimensions of a loaded structure.
