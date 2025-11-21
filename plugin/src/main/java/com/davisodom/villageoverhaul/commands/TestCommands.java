@@ -18,6 +18,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.UUID;
 
 /**
@@ -52,7 +53,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             @NotNull String label, @NotNull String[] args) {
         
         if (args.length == 0) {
-            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|metrics|performance>");
+            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
             return true;
         }
         
@@ -79,6 +80,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "place-obstacle":
                 return handlePlaceObstacle(sender, args);
+                
+            case "verify-persistence":
+                return handleVerifyPersistence(sender, args);
                 
             case "metrics":
                 return handleMetrics(sender);
@@ -726,6 +730,131 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         return true;
     }
     
+    /**
+     * Verify persistence data against in-game reality
+     * Usage: /votest verify-persistence <village-id>
+     */
+    private boolean handleVerifyPersistence(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /votest verify-persistence <village-id>");
+            return true;
+        }
+        
+        String villageIdStr = args[1];
+        UUID villageId;
+        try {
+            villageId = UUID.fromString(villageIdStr);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage("§cInvalid village ID format");
+            return true;
+        }
+        
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+        List<com.davisodom.villageoverhaul.model.PlacementReceipt> receipts = metadataStore.getPlacementReceipts(villageId);
+        
+        if (masks.isEmpty() && receipts.isEmpty()) {
+            sender.sendMessage("§cNo persistence data found for village " + villageId);
+            return true;
+        }
+        
+        sender.sendMessage("§aVerifying persistence for village " + villageId);
+        sender.sendMessage(String.format("§7Found %d masks and %d receipts", masks.size(), receipts.size()));
+        
+        boolean allPass = true;
+        int totalChecks = 0;
+        int failedChecks = 0;
+        
+        // Visuals: Particles at corners and entrances
+        for (com.davisodom.villageoverhaul.model.PlacementReceipt receipt : receipts) {
+            org.bukkit.World world = Bukkit.getWorld(receipt.getWorldName());
+            if (world == null) continue;
+            
+            // Draw corners
+            spawnParticle(world, receipt.getMinX(), receipt.getMinY(), receipt.getMinZ());
+            spawnParticle(world, receipt.getMaxX(), receipt.getMinY(), receipt.getMinZ());
+            spawnParticle(world, receipt.getMaxX(), receipt.getMinY(), receipt.getMaxZ());
+            spawnParticle(world, receipt.getMinX(), receipt.getMinY(), receipt.getMaxZ());
+            spawnParticle(world, receipt.getMinX(), receipt.getMaxY(), receipt.getMinZ());
+            spawnParticle(world, receipt.getMaxX(), receipt.getMaxY(), receipt.getMinZ());
+            spawnParticle(world, receipt.getMaxX(), receipt.getMaxY(), receipt.getMaxZ());
+            spawnParticle(world, receipt.getMinX(), receipt.getMaxY(), receipt.getMaxZ());
+            
+            // Draw entrance (different color/particle if possible, or just same)
+            world.spawnParticle(org.bukkit.Particle.VILLAGER_HAPPY, 
+                receipt.getEntranceX() + 0.5, receipt.getEntranceY() + 0.5, receipt.getEntranceZ() + 0.5, 10);
+        }
+        
+        // Logic checks: VolumeMasks
+        Random random = new Random();
+        for (com.davisodom.villageoverhaul.model.VolumeMask mask : masks) {
+            // Need world to check blocks. Mask doesn't store world name, but Receipt does.
+            // Assuming all in same world or we can find it.
+            Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt = 
+                metadataStore.getVillage(villageId);
+            if (villageOpt.isEmpty()) continue;
+            org.bukkit.World world = villageOpt.get().getOrigin().getWorld();
+            if (world == null) continue;
+            
+            // 1. Sample 32 points INSIDE
+            for (int i = 0; i < 32; i++) {
+                int x = mask.getMinX() + random.nextInt(mask.getWidth());
+                int y = mask.getMinY() + random.nextInt(mask.getHeight());
+                int z = mask.getMinZ() + random.nextInt(mask.getDepth());
+                
+                if (mask.contains(x, y, z)) {
+                    totalChecks++;
+                    if (world.getBlockAt(x, y, z).getType().isAir()) {
+                        // Note: This might fail for hollow structures until occupancy bitmaps are implemented
+                        // For now, we log it but maybe we should be lenient if it's just interior air?
+                        // The requirement says "asserts blocks are non-air", so we report failure.
+                        failedChecks++;
+                        sender.sendMessage(String.format("§cFAIL: Block at %d,%d,%d is AIR (inside mask)", x, y, z));
+                        allPass = false;
+                    }
+                }
+            }
+            
+            // 2. Sample 32 points JUST OUTSIDE
+            for (int i = 0; i < 32; i++) {
+                // Pick a face, then a point on that face + 1
+                int face = random.nextInt(6);
+                int x = 0, y = 0, z = 0;
+                switch (face) {
+                    case 0: x = mask.getMinX() - 1; y = randomRange(random, mask.getMinY(), mask.getMaxY()); z = randomRange(random, mask.getMinZ(), mask.getMaxZ()); break; // -X
+                    case 1: x = mask.getMaxX() + 1; y = randomRange(random, mask.getMinY(), mask.getMaxY()); z = randomRange(random, mask.getMinZ(), mask.getMaxZ()); break; // +X
+                    case 2: x = randomRange(random, mask.getMinX(), mask.getMaxX()); y = mask.getMinY() - 1; z = randomRange(random, mask.getMinZ(), mask.getMaxZ()); break; // -Y
+                    case 3: x = randomRange(random, mask.getMinX(), mask.getMaxX()); y = mask.getMaxY() + 1; z = randomRange(random, mask.getMinZ(), mask.getMaxZ()); break; // +Y
+                    case 4: x = randomRange(random, mask.getMinX(), mask.getMaxX()); y = randomRange(random, mask.getMinY(), mask.getMaxY()); z = mask.getMinZ() - 1; break; // -Z
+                    case 5: x = randomRange(random, mask.getMinX(), mask.getMaxX()); y = randomRange(random, mask.getMinY(), mask.getMaxY()); z = mask.getMaxZ() + 1; break; // +Z
+                }
+                
+                totalChecks++;
+                if (mask.contains(x, y, z)) {
+                    failedChecks++;
+                    sender.sendMessage(String.format("§cFAIL: Point %d,%d,%d is INSIDE mask (should be outside)", x, y, z));
+                    allPass = false;
+                }
+            }
+        }
+        
+        if (allPass) {
+            sender.sendMessage("§aPASS: All persistence checks passed (" + totalChecks + " checks)");
+        } else {
+            sender.sendMessage("§cFAIL: " + failedChecks + "/" + totalChecks + " checks failed");
+        }
+        
+        return true;
+    }
+    
+    private int randomRange(Random random, int min, int max) {
+        return min + random.nextInt(max - min + 1);
+    }
+    
+    private void spawnParticle(org.bukkit.World world, int x, int y, int z) {
+        world.spawnParticle(org.bukkit.Particle.FLAME, x + 0.5, y + 0.5, z + 0.5, 1, 0, 0, 0, 0);
+    }
+
     @Nullable
     @Override
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, 
@@ -741,6 +870,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             completions.add("trigger-interaction");
             completions.add("simulate-interaction");
             completions.add("place-obstacle");
+            completions.add("verify-persistence");
             completions.add("metrics");
             completions.add("performance");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("place-obstacle")) {

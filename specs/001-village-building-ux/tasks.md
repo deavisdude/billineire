@@ -508,7 +508,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Constructed graph contains 0 nodes whose coordinates intersect any VolumeMask.
     - Node degree <= 8, with vertical delta |dy| ≤ 1 between neighbors.
 
-- [ ] R006 [QA] Manual validation utility (in-game proof)
+- [X] R006 [QA] Manual validation utility (in-game proof)
   - Files: `.../commands/TestCommands.java`
   - Description: Add `/votest verify-persistence <villageId>` that: (1) draws particles at persisted AABB corners and entrance; (2) samples 32 random points inside VolumeMask and asserts blocks are non-air; (3) samples 32 just-outside points and asserts not-in-mask. Output a PASS/FAIL summary.
   - Acceptance:
