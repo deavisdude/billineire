@@ -494,7 +494,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Each placed building has exactly one entrance world coordinate persisted.
     - The entrance lies strictly outside `VolumeMask.expand(buffer=2)` and is on solid natural ground.
 
-- [ ] R004 [Core] Ground-truth surface solver
+- [X] R004 [Core] Ground-truth surface solver
   - Files: `.../worldgen/SurfaceSolver.java`
   - Description: Build a deterministic surface function G(x,z) by scanning down from world max height, ignoring any blocks whose (x,y,z) fall inside any VolumeMask. Expose `nearestWalkable(x,z,yHint)` which returns y within {G(x,z)-1..G(x,z)+1}.
   - Acceptance:
