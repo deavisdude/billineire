@@ -38,6 +38,12 @@ public class PlacementReceipt {
     private final int effectiveDepth;  // Z-axis extent
     private final int height;          // Y-axis extent
     
+    // Entrance location (world coordinates)
+    // Guaranteed to be outside VolumeMask.expand(2) and on solid ground
+    private final int entranceX;
+    private final int entranceY;
+    private final int entranceZ;
+    
     // Foundation corner samples (proof of paste alignment)
     // Order: NW, NE, SE, SW (clockwise from top-left when viewed from above)
     private final CornerSample[] foundationCorners;
@@ -100,6 +106,10 @@ public class PlacementReceipt {
         this.effectiveDepth = builder.effectiveDepth;
         this.height = builder.height;
         
+        this.entranceX = builder.entranceX;
+        this.entranceY = builder.entranceY;
+        this.entranceZ = builder.entranceZ;
+        
         this.foundationCorners = Objects.requireNonNull(builder.foundationCorners, "foundationCorners cannot be null");
         if (foundationCorners.length != 4) {
             throw new IllegalArgumentException("Must provide exactly 4 foundation corner samples");
@@ -136,6 +146,10 @@ public class PlacementReceipt {
     public int getOriginZ() { return originZ; }
     public int getRotation() { return rotation; }
     
+    public int getEntranceX() { return entranceX; }
+    public int getEntranceY() { return entranceY; }
+    public int getEntranceZ() { return entranceZ; }
+    
     public int getEffectiveWidth() { return effectiveWidth; }
     public int getEffectiveDepth() { return effectiveDepth; }
     public int getHeight() { return height; }
@@ -158,13 +172,14 @@ public class PlacementReceipt {
     
     /**
      * Get a compact summary line for logging.
-     * Format: [structureId @ (x,y,z) rot=NNN° bounds=(minX..maxX, minY..maxY, minZ..maxZ) dims=WxHxD]
+     * Format: [structureId @ (x,y,z) rot=NNN° bounds=(minX..maxX, minY..maxY, minZ..maxZ) dims=WxHxD entrance=(ex,ey,ez)]
      */
     public String getReceiptSummary() {
-        return String.format("%s @ (%d,%d,%d) rot=%d° bounds=(%d..%d, %d..%d, %d..%d) dims=%dx%dx%d",
+        return String.format("%s @ (%d,%d,%d) rot=%d° bounds=(%d..%d, %d..%d, %d..%d) dims=%dx%dx%d entrance=(%d,%d,%d)",
                 structureId, originX, originY, originZ, rotation,
                 minX, maxX, minY, maxY, minZ, maxZ,
-                effectiveWidth, height, effectiveDepth);
+                effectiveWidth, height, effectiveDepth,
+                entranceX, entranceY, entranceZ);
     }
     
     @Override
@@ -197,6 +212,10 @@ public class PlacementReceipt {
         private int effectiveWidth;
         private int effectiveDepth;
         private int height;
+        
+        private int entranceX;
+        private int entranceY;
+        private int entranceZ;
         
         private CornerSample[] foundationCorners;
         private long timestamp = System.currentTimeMillis();
@@ -247,6 +266,13 @@ public class PlacementReceipt {
             this.effectiveWidth = width;
             this.height = height;
             this.effectiveDepth = depth;
+            return this;
+        }
+        
+        public Builder entrance(int x, int y, int z) {
+            this.entranceX = x;
+            this.entranceY = y;
+            this.entranceZ = z;
             return this;
         }
         

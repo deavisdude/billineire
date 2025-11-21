@@ -124,34 +124,46 @@ public class StructureServiceImpl implements StructureService {
         StructureTemplate smallHouse = new StructureTemplate();
         smallHouse.id = "house_roman_small";
         smallHouse.dimensions = new int[]{9, 7, 9}; // 9x7x9 Roman insula (small apartment)
+        smallHouse.entranceOffset = BlockVector3.at(4, 1, 0);
+        smallHouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_small", smallHouse);
         loadedStructures.put("house_small", smallHouse); // Fallback alias
         
         StructureTemplate mediumHouse = new StructureTemplate();
         mediumHouse.id = "house_roman_medium";
         mediumHouse.dimensions = new int[]{13, 8, 13}; // 13x8x13 Roman domus (townhouse)
+        mediumHouse.entranceOffset = BlockVector3.at(6, 1, 0);
+        mediumHouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_medium", mediumHouse);
         loadedStructures.put("house_medium", mediumHouse); // Fallback alias
         
         StructureTemplate villa = new StructureTemplate();
         villa.id = "house_roman_villa";
         villa.dimensions = new int[]{17, 9, 17}; // 17x9x17 Roman villa
+        villa.entranceOffset = BlockVector3.at(8, 1, 0);
+        villa.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_villa", villa);
         
         StructureTemplate workshop = new StructureTemplate();
         workshop.id = "workshop_roman_forge";
         workshop.dimensions = new int[]{11, 8, 11}; // 11x8x11 Blacksmith forge
+        workshop.entranceOffset = BlockVector3.at(5, 1, 0);
+        workshop.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("workshop_roman_forge", workshop);
         loadedStructures.put("workshop", workshop); // Fallback alias
         
         StructureTemplate market = new StructureTemplate();
         market.id = "market_roman_stall";
         market.dimensions = new int[]{7, 6, 7}; // 7x6x7 Market stall
+        market.entranceOffset = BlockVector3.at(3, 1, 0);
+        market.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("market_roman_stall", market);
         
         StructureTemplate bathhouse = new StructureTemplate();
         bathhouse.id = "building_roman_bathhouse";
         bathhouse.dimensions = new int[]{15, 7, 15}; // 15x7x15 Public bathhouse
+        bathhouse.entranceOffset = BlockVector3.at(7, 1, 0);
+        bathhouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("building_roman_bathhouse", bathhouse);
         
         LOGGER.info(String.format("[STRUCT] Loaded %d Roman structure templates", loadedStructures.size()));
@@ -189,6 +201,10 @@ public class StructureServiceImpl implements StructureService {
                 
                 BlockVector3 dimensions = clipboard.getDimensions();
                 template.dimensions = new int[]{dimensions.getX(), dimensions.getY(), dimensions.getZ()};
+                
+                // Default entrance: center of Z-min face
+                template.entranceOffset = BlockVector3.at(dimensions.getX() / 2, 1, 0);
+                template.entranceFacing = BlockVector3.at(0, 0, -1);
                 
                 loadedStructures.put(structureId, template);
                 
@@ -294,6 +310,10 @@ public class StructureServiceImpl implements StructureService {
         // Sample foundation corners as proof of paste alignment
         com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners = 
             sampleFoundationCorners(world, bounds);
+            
+        // Calculate entrance location
+        // Transform anchor via T and snap to adjacent walkable ground outside AABB+buffer
+        Location entranceLoc = calculateEntranceLocation(world, placedOrigin, template, rotationDegrees);
         
         // Calculate effective dimensions after rotation
         int effectiveWidth, effectiveDepth;
@@ -311,6 +331,7 @@ public class StructureServiceImpl implements StructureService {
                 .structureId(structureId)
                 .villageId(villageId)
                 .world(world)
+                .entrance(entranceLoc.getBlockX(), entranceLoc.getBlockY(), entranceLoc.getBlockZ())
                 .origin(placedOrigin.getBlockX(), placedOrigin.getBlockY(), placedOrigin.getBlockZ())
                 .rotation(rotationDegrees)
                 .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
@@ -1333,5 +1354,70 @@ public class StructureServiceImpl implements StructureService {
         String id;
         int[] dimensions; // [width, height, depth]
         Clipboard clipboard; // WorldEdit clipboard (null for placeholder structures)
+        // Entrance anchor relative to origin (0,0,0)
+        BlockVector3 entranceOffset; 
+        // Vector pointing OUT of the entrance
+        BlockVector3 entranceFacing;
+    }
+    
+    /**
+     * Calculate the world location for the structure entrance.
+     * Transforms the relative anchor and snaps to ground outside the structure.
+     */
+    private Location calculateEntranceLocation(World world, Location origin, StructureTemplate template, int rotation) {
+        BlockVector3 offset = template.entranceOffset;
+        BlockVector3 facing = template.entranceFacing;
+        
+        // Rotate offset and facing
+        int offX = offset.getX();
+        int offY = offset.getY();
+        int offZ = offset.getZ();
+        
+        int faceX = facing.getX();
+        int faceY = facing.getY();
+        int faceZ = facing.getZ();
+        
+        int rotOffX = offX, rotOffZ = offZ;
+        int rotFaceX = faceX, rotFaceZ = faceZ;
+        
+        switch (rotation) {
+            case 90:
+                rotOffX = -offZ;
+                rotOffZ = offX;
+                rotFaceX = -faceZ;
+                rotFaceZ = faceX;
+                break;
+            case 180:
+                rotOffX = -offX;
+                rotOffZ = -offZ;
+                rotFaceX = -faceX;
+                rotFaceZ = -faceZ;
+                break;
+            case 270:
+                rotOffX = offZ;
+                rotOffZ = -offX;
+                rotFaceX = faceZ;
+                rotFaceZ = -faceX;
+                break;
+        }
+        
+        // Calculate door position in world
+        int doorX = origin.getBlockX() + rotOffX;
+        int doorY = origin.getBlockY() + offY; // Y offset usually doesn't rotate
+        int doorZ = origin.getBlockZ() + rotOffZ;
+        
+        // Project outwards to be safe from buffer
+        // Buffer is 2, so we need to be at least 3 blocks away from the face
+        int targetX = doorX + (rotFaceX * 3);
+        int targetZ = doorZ + (rotFaceZ * 3);
+        
+        // Find ground level at target
+        int targetY = findGroundLevelAtPoint(world, targetX, targetZ);
+        
+        Location entranceLoc = new Location(world, targetX, targetY, targetZ);
+        LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",
+                template.id, formatLocation(entranceLoc), rotation, offset, facing));
+        
+        return entranceLoc;
     }
 }

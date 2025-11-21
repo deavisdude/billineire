@@ -487,7 +487,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Spatial queries ready for pathfinding integration
     - Persisted and restored via JSON alongside receipts
 
-- [ ] R003 [Core] Entrance anchors from data or palette
+- [X] R003 [Core] Entrance anchors from data or palette
   - Files: `.../worldgen/StructureService.java`, structure JSON in `plugins/VillageOverhaul/structures/*.json`
   - Description: Add entrance anchors per structure (relative to schematic) or auto-detect doors during paste. Transform anchor via T and then snap to adjacent walkable ground outside the AABB+buffer.
   - Acceptance:

@@ -553,6 +553,9 @@ public class VillageMetadataStore {
         dto.effectiveWidth = receipt.getEffectiveWidth();
         dto.effectiveDepth = receipt.getEffectiveDepth();
         dto.height = receipt.getHeight();
+        dto.entranceX = receipt.getEntranceX();
+        dto.entranceY = receipt.getEntranceY();
+        dto.entranceZ = receipt.getEntranceZ();
         dto.timestamp = receipt.getTimestamp();
         
         dto.foundationCorners = new ArrayList<>();
@@ -590,6 +593,7 @@ public class VillageMetadataStore {
             .rotation(dto.rotation)
             .bounds(dto.minX, dto.maxX, dto.minY, dto.maxY, dto.minZ, dto.maxZ)
             .dimensions(dto.effectiveWidth, dto.height, dto.effectiveDepth)
+            .entrance(dto.entranceX, dto.entranceY, dto.entranceZ)
             .foundationCorners(corners)
             .timestamp(dto.timestamp)
             .build();
@@ -745,6 +749,9 @@ public class VillageMetadataStore {
         public int rotation;
         public int effectiveWidth;
         public int effectiveDepth;
+        public int entranceX;
+        public int entranceY;
+        public int entranceZ;
         public int height;
         public List<CornerSampleDTO> foundationCorners;
         public long timestamp;
