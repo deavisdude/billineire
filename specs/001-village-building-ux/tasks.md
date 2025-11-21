@@ -501,7 +501,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - For 100 random samples around a village, `nearestWalkable` never returns a y that is inside any VolumeMask.
     - Performance: <2ms per 64×64 query window (cache accepted).
 
-- [ ] R005 [Core] Walkable graph and obstacle field
+- [X] R005 [Core] Walkable graph and obstacle field
   - Files: `.../worldgen/impl/PathServiceImpl.java`
   - Description: Generate a walkable node graph over a window that includes all entrances. Nodes exist only at y = G(x,z) ± 1. Obstacles are `VolumeMask.expand(buffer=2)` and fluids. No node may enter an obstacle at any y.
   - Acceptance:

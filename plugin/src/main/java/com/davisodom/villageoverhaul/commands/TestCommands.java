@@ -272,7 +272,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         // Initialize PathService (use plugin's instance if available, or create one)
         com.davisodom.villageoverhaul.worldgen.PathService pathService = 
-            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl();
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl(metadataStore);
         
         // Log path generation start
         plugin.getLogger().info(String.format(

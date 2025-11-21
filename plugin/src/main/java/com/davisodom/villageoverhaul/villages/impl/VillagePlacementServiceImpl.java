@@ -65,7 +65,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = new StructureServiceImpl();
-        this.pathService = new PathServiceImpl();
+        this.pathService = new PathServiceImpl(metadataStore);
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.cultureService = cultureService;
@@ -83,7 +83,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(Plugin plugin, VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = new StructureServiceImpl(plugin.getDataFolder());
-        this.pathService = new PathServiceImpl();
+        this.pathService = new PathServiceImpl(metadataStore);
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.cultureService = cultureService;
@@ -98,7 +98,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(StructureService structureService, VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = structureService;
-        this.pathService = new PathServiceImpl();
+        this.pathService = new PathServiceImpl(metadataStore);
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.cultureService = cultureService;

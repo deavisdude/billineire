@@ -1,7 +1,11 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.model.PathNetwork;
+import com.davisodom.villageoverhaul.model.VolumeMask;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
+import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
+import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -50,8 +54,15 @@ public class PathServiceImpl implements PathService {
     // Building footprints per village (villageId -> List of BuildingBounds)
     private final Map<UUID, List<BuildingBounds>> buildingFootprints = new HashMap<>();
     
+    // R005: VillageMetadataStore for accessing VolumeMasks
+    private final VillageMetadataStore metadataStore;
+    
     // Current village context for pathfinding (to avoid building footprints)
     private UUID currentVillageContext = null;
+
+    public PathServiceImpl(VillageMetadataStore metadataStore) {
+        this.metadataStore = metadataStore;
+    }
     
     @Override
     public boolean generatePathNetwork(World world, UUID villageId, List<Location> buildingLocations,
@@ -117,6 +128,22 @@ public class PathServiceImpl implements PathService {
         return connectivity >= 0.9; // Success criterion: ≥90% connectivity
     }
     
+    /**
+     * R005: Create a WalkableGraph for the current village context.
+     * Uses SurfaceSolver and VolumeMasks to define valid nodes and obstacles.
+     */
+    private WalkableGraph createWalkableGraph(World world, UUID villageId) {
+        if (metadataStore == null) {
+            return null; // Should not happen if properly initialized
+        }
+        
+        List<VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+        SurfaceSolver solver = new SurfaceSolver(world, masks);
+        
+        // Buffer = 2 blocks around structures
+        return new WalkableGraph(solver, masks, 2);
+    }
+
     @Override
     public Optional<List<Block>> generatePath(World world, Location start, Location end, long seed) {
         // Validate distance
