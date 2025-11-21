@@ -38,6 +38,9 @@ public class VillageMetadataStore {
     // R001: PlacementReceipt storage (villageId -> list of receipts)
     private final Map<UUID, List<com.davisodom.villageoverhaul.model.PlacementReceipt>> placementReceipts = new ConcurrentHashMap<>();
     
+    // R002: VolumeMask storage (villageId -> list of volume masks)
+    private final Map<UUID, List<com.davisodom.villageoverhaul.model.VolumeMask>> volumeMasks = new ConcurrentHashMap<>();
+    
     public VillageMetadataStore(Plugin plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
@@ -131,6 +134,23 @@ public class VillageMetadataStore {
     }
     
     /**
+     * R002: Add a volume mask for a structure in a village.
+     */
+    public void addVolumeMask(UUID villageId, com.davisodom.villageoverhaul.model.VolumeMask mask) {
+        volumeMasks.computeIfAbsent(villageId, k -> new ArrayList<>()).add(mask);
+        // Use INFO level since Paper's console doesn't reliably show FINE when launched via double-click
+        logger.info(String.format("[STRUCT][VOLUME] Stored volume mask for structure %s in village %s: %s", 
+            mask.getStructureId(), villageId, mask.getSummary()));
+    }
+    
+    /**
+     * R002: Get all volume masks for a village.
+     */
+    public List<com.davisodom.villageoverhaul.model.VolumeMask> getVolumeMasks(UUID villageId) {
+        return new ArrayList<>(volumeMasks.getOrDefault(villageId, Collections.emptyList()));
+    }
+    
+    /**
      * Get village metadata.
      */
     public Optional<VillageMetadata> getVillage(UUID villageId) {
@@ -204,6 +224,15 @@ public class VillageMetadataStore {
                 dto.placementReceipts = new ArrayList<>();
                 for (com.davisodom.villageoverhaul.model.PlacementReceipt receipt : receipts) {
                     dto.placementReceipts.add(convertReceiptToDTO(receipt));
+                }
+            }
+            
+            // R002: Persist volume masks
+            if (volumeMasks.containsKey(villageId)) {
+                List<com.davisodom.villageoverhaul.model.VolumeMask> masks = volumeMasks.get(villageId);
+                dto.volumeMasks = new ArrayList<>();
+                for (com.davisodom.villageoverhaul.model.VolumeMask mask : masks) {
+                    dto.volumeMasks.add(convertVolumeMaskToDTO(mask));
                 }
             }
             
@@ -289,6 +318,17 @@ public class VillageMetadataStore {
                         receipts.size(), villageId));
                 }
                 
+                // R002: Restore volume masks
+                if (dto.volumeMasks != null && !dto.volumeMasks.isEmpty()) {
+                    List<com.davisodom.villageoverhaul.model.VolumeMask> masks = new ArrayList<>();
+                    for (VolumeMaskDTO maskDTO : dto.volumeMasks) {
+                        masks.add(convertVolumeMaskFromDTO(maskDTO));
+                    }
+                    volumeMasks.put(villageId, masks);
+                    logger.fine(String.format("[STRUCT][VOLUME] Restored %d volume masks for village %s",
+                        masks.size(), villageId));
+                }
+                
                 loadedCount++;
                 
             } catch (Exception e) {
@@ -309,6 +349,7 @@ public class VillageMetadataStore {
         mainBuildings.clear();
         pathNetworks.clear();
         placementReceipts.clear(); // R001
+        volumeMasks.clear(); // R002
         logger.info("[STRUCT] Cleared all village metadata");
     }
     
@@ -554,6 +595,42 @@ public class VillageMetadataStore {
             .build();
     }
     
+    /**
+     * R002: Convert VolumeMask to DTO for JSON persistence.
+     */
+    private VolumeMaskDTO convertVolumeMaskToDTO(com.davisodom.villageoverhaul.model.VolumeMask mask) {
+        VolumeMaskDTO dto = new VolumeMaskDTO();
+        dto.structureId = mask.getStructureId(); // Already a string
+        dto.villageId = mask.getVillageId().toString();
+        dto.minX = mask.getMinX();
+        dto.maxX = mask.getMaxX();
+        dto.minY = mask.getMinY();
+        dto.maxY = mask.getMaxY();
+        dto.minZ = mask.getMinZ();
+        dto.maxZ = mask.getMaxZ();
+        dto.timestamp = mask.getTimestamp();
+        
+        // Note: Occupancy bitmap serialization deferred for initial implementation
+        // Current implementation assumes full occupancy (bitmap = null)
+        dto.occupancyBitmap = null;
+        
+        return dto;
+    }
+    
+    /**
+     * R002: Convert DTO back to VolumeMask.
+     */
+    private com.davisodom.villageoverhaul.model.VolumeMask convertVolumeMaskFromDTO(VolumeMaskDTO dto) {
+        return new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+            .structureId(dto.structureId) // Already a string
+            .villageId(UUID.fromString(dto.villageId))
+            .bounds(dto.minX, dto.maxX, dto.minY, dto.maxY, dto.minZ, dto.maxZ)
+            .timestamp(dto.timestamp)
+            // Note: Occupancy bitmap deserialization deferred for initial implementation
+            // Current implementation assumes full occupancy (bitmap = null)
+            .build();
+    }
+    
     private PathNetwork convertPathNetworkFromDTO(PathNetworkDTO dto, UUID villageId, World world) {
         PathNetwork.Builder builder = new PathNetwork.Builder()
             .villageId(villageId)
@@ -592,6 +669,7 @@ public class VillageMetadataStore {
         public BorderDTO border;
         public long lastBorderUpdateTick;
         public List<PlacementReceiptDTO> placementReceipts; // R001: Nullable, added for ground-truth persistence
+        public List<VolumeMaskDTO> volumeMasks; // R002: Nullable, added for verified 3D volume persistence
         
         public VillageDataDTO() {} // For Jackson
     }
@@ -681,5 +759,23 @@ public class VillageMetadataStore {
         public String blockType;
         
         public CornerSampleDTO() {} // For Jackson
+    }
+    
+    /**
+     * R002: DTO for VolumeMask persistence.
+     */
+    public static class VolumeMaskDTO {
+        public String structureId;
+        public String villageId;
+        public int minX;
+        public int maxX;
+        public int minY;
+        public int maxY;
+        public int minZ;
+        public int maxZ;
+        public String occupancyBitmap; // Base64-encoded BitSet, null for full occupancy
+        public long timestamp;
+        
+        public VolumeMaskDTO() {} // For Jackson
     }
 }

@@ -245,6 +245,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     // Store receipt for persistence
                     metadataStore.addPlacementReceipt(villageId, receipt);
                     
+                    // R002: Create and store VolumeMask from receipt
+                    com.davisodom.villageoverhaul.model.VolumeMask volumeMask = 
+                        com.davisodom.villageoverhaul.model.VolumeMask.fromReceipt(receipt);
+                    metadataStore.addVolumeMask(villageId, volumeMask);
+                    
                 } else {
                     com.davisodom.villageoverhaul.worldgen.PlacementResult placement = actualPlacement.get();
                     actualOrigin = placement.getActualLocation();
