@@ -467,8 +467,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 List<List<Block>> pathNetwork = pathService.getVillagePathNetwork(villageId);
                 int totalPathBlocks = 0;
                 
+                // R008: Get volume masks for path placement checks
+                List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+                
                 for (List<Block> pathSegment : pathNetwork) {
-                    int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId);
+                    int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId, masks);
                     totalPathBlocks += placed;
                 }
                 

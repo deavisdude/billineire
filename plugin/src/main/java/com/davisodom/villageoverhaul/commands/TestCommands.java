@@ -308,12 +308,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
                     new com.davisodom.villageoverhaul.worldgen.impl.PathEmitter();
                 
+                // R008: Get volume masks for path placement checks
+                List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+                
                 int totalBlocksPlaced = 0;
                 for (List<org.bukkit.block.Block> pathBlocks : pathSegments) {
                     int blocksPlaced = pathEmitter.emitPath(
                         world, 
                         pathBlocks, 
-                        village.getCultureId()
+                        village.getCultureId(),
+                        masks
                     );
                     totalBlocksPlaced += blocksPlaced;
                 }

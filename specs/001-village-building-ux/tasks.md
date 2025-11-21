@@ -522,7 +522,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Paths never include nodes inside any VolumeMask (by construction).
     - Report `[PATH] avoided N structure nodes` and determinism hash for each path.
 
-- [ ] R008 [Emitter] Support-checked path emission
+- [X] R008 [Emitter] Support-checked path emission
   - Files: `.../worldgen/impl/PathEmitter.java`
   - Description: Place path blocks only when the block below is solid natural ground and the target is not inside any VolumeMask. Apply simple widening after emission; never place slabs/stairs when support is missing.
   - Acceptance:
