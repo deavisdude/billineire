@@ -111,57 +111,25 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     @Override
     public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed) {
-        LOGGER.info(String.format("[STRUCT] Begin village placement: culture=%s, origin=%s, seed=%d, minBuildingSpacing=%d, minVillageSpacing=%d",
-                cultureId, origin, seed, minBuildingSpacing, minVillageSpacing));
-        
-        // Check if this is the first village (Constitution v1.5.0, Principle XII - Spawn Proximity)
         boolean isFirst = isFirstVillage(world);
         
         if (isFirst) {
-            // First village: verify spawn proximity (not exact spawn, within configured radius)
-            Location spawn = world.getSpawnLocation();
-            int spawnDistance = Math.abs(origin.getBlockX() - spawn.getBlockX()) + 
-                               Math.abs(origin.getBlockZ() - spawn.getBlockZ());
-            
-            LOGGER.info(String.format("[STRUCT] First village: spawn distance=%d blocks (spawn at %s)",
-                    spawnDistance, formatLocation(spawn)));
-            
-            // Note: Spawn proximity enforcement happens in terrain search (GenerateCommand/VillageWorldgenAdapter)
-            // This is just logging for observability
+            // First village spawn proximity verified by terrain search
         } else {
-            // Subsequent villages: log nearest-neighbor distance
-            int distanceToNearest = getDistanceToNearestVillage(origin);
-            LOGGER.info(String.format("[STRUCT] Subsequent village: nearest existing village distance=%d blocks",
-                    distanceToNearest));
+            // Subsequent village spacing verified below
         }
         
-        // Check inter-village spacing (Constitution v1.5.0, Principle XII)
-        // Reject sites within minVillageSpacing of any existing village border
         InterVillageSpacingResult spacingResult = checkInterVillageSpacingDetailed(origin, minVillageSpacing);
         if (!spacingResult.acceptable) {
-            LOGGER.warning(String.format("[STRUCT] Village placement rejected: site at %s violates minVillageSpacing=%d " +
-                    "(rejectedVillageSites.minDistance=%d, existingVillage=%s)",
-                    formatLocation(origin), minVillageSpacing, spacingResult.actualDistance, spacingResult.violatingVillageId));
             return Optional.empty();
         }
         
-        // NOTE: Site validation already performed by VillageWorldgenAdapter terrain search
-        // Skip redundant validation here to avoid false negatives
-        
         UUID villageId = UUID.randomUUID();
-        
-        // Register village in metadata store AFTER spacing validation passes
-        // This prevents the village from rejecting itself during spacing checks
         metadataStore.registerVillage(villageId, cultureId, origin, seed);
         
-        // TODO: Load culture definition and structure set
-        // For now, use culture-appropriate structures based on loaded schematics
         List<String> structureIds = getCultureStructures(cultureId);
-        
         List<Building> placedBuildings = new ArrayList<>();
         
-        // R009: Use VolumeMasks for overlap detection instead of legacy Footprints
-        // Initialize SurfaceSolver for ground finding
         List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
         SurfaceSolver surfaceSolver = new SurfaceSolver(world, existingMasks);
         
@@ -170,10 +138,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         for (int i = 0; i < structureIds.size(); i++) {
             String structureId = structureIds.get(i);
             
-            // Get structure dimensions
             Optional<int[]> dimensions = structureService.getStructureDimensions(structureId);
             if (!dimensions.isPresent()) {
-                LOGGER.warning(String.format("[STRUCT] Structure '%s' dimensions not found, skipping", structureId));
                 continue;
             }
             
@@ -182,43 +148,29 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int depth = dims[2];
             int height = dims[1];
             
-            // Derive building-specific seed
             long buildingSeed = seed + i;
             
-            // Find suitable position with integrated terrain/spacing/overlap checks
-            // R009: Use SurfaceSolver and VolumeMasks
-            // R011b: Pass height and buildingSeed for rotation-aware collision detection
             Optional<Location> placementLocation = findSuitablePlacementPosition(
                     world, origin, width, depth, height, buildingSeed,
                     metadataStore.getVolumeMasks(villageId), surfaceSolver);
             
             if (!placementLocation.isPresent()) {
-                LOGGER.warning(String.format("[STRUCT] Could not find suitable position for '%s'", structureId));
                 continue;
             }
             
             Location buildingLocation = placementLocation.get();
             
-            // R001/R011b: Place structure and get PlacementReceipt with ground-truth bounds
-            // R011b: Pass existing masks for pre-placement collision detection
             Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
                     structureId, world, buildingLocation, buildingSeed, villageId, existingMasks);
             
             if (receiptOpt.isPresent()) {
                 PlacementReceipt receipt = receiptOpt.get();
-                
-                // Store receipt for persistence
                 metadataStore.addPlacementReceipt(villageId, receipt);
                 
-                // R002: Create and store VolumeMask from receipt
                 VolumeMask placedMask = VolumeMask.fromReceipt(receipt);
                 metadataStore.addVolumeMask(villageId, placedMask);
-                
-                // Update SurfaceSolver with new mask for subsequent placements
-                // (Re-creating solver is cheap enough for per-building frequency)
                 surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
                 
-                // Create building metadata
                 Building building = new Building.Builder()
                         .villageId(villageId)
                         .structureId(structureId)
@@ -228,56 +180,39 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 
                 placedBuildings.add(building);
                 
-                LOGGER.info(String.format("[STRUCT] Placed %s at (%d,%d,%d) rotation=%d°", 
-                        structureId, 
-                        receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ(),
+                LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d°", 
+                        structureId,
+                        receipt.getMinX(), receipt.getMaxX(),
+                        receipt.getMinY(), receipt.getMaxY(),
+                        receipt.getMinZ(), receipt.getMaxZ(),
                         receipt.getRotation()));
-            } else {
-                LOGGER.warning(String.format("[STRUCT] Failed to place building %s", structureId));
             }
         }
         
         if (placedBuildings.isEmpty()) {
-            LOGGER.warning(String.format("[STRUCT] Abort: No buildings placed for village at %s", origin));
             return Optional.empty();
         }
         
-        // Store village buildings
         for (Building building : placedBuildings) {
             metadataStore.addBuilding(villageId, building);
         }
         
-        // Designate main building using culture-specific structure (T023)
         Optional<UUID> mainBuildingId = mainBuildingSelector.selectMainBuilding(cultureId, placedBuildings);
         if (mainBuildingId.isPresent()) {
             metadataStore.setMainBuilding(villageId, mainBuildingId.get());
-            LOGGER.info(String.format("[STRUCT] Main building designated for village %s: %s", 
-                villageId, mainBuildingId.get()));
-        } else {
-            LOGGER.warning(String.format("[STRUCT] Could not designate main building for village %s (culture: %s)", 
-                villageId, cultureId));
         }
         
-        // Generate path network connecting buildings to the main building
         if (placedBuildings.size() > 1) {
-            LOGGER.info(String.format("[STRUCT] Generating path network for village %s", villageId));
-            
-            // T021c: Calculate entrance points for all buildings
-            // R009: Use entrance locations from PlacementReceipts
             List<Location> buildingEntrances = new ArrayList<>();
             Location mainBuildingEntrance = null;
             
             List<PlacementReceipt> receipts = metadataStore.getPlacementReceipts(villageId);
             Map<String, PlacementReceipt> receiptMap = new HashMap<>();
             for (PlacementReceipt r : receipts) {
-                // Map by structure ID is risky if duplicates allowed, but here we assume 1:1 for now
-                // Better to map by building ID if available, but receipt doesn't have it yet
-                // We can match by location
                 receiptMap.put(r.getStructureId() + "@" + r.getOriginX() + "," + r.getOriginZ(), r);
             }
             
             for (Building building : placedBuildings) {
-                // Find matching receipt
                 String key = building.getStructureId() + "@" + building.getOrigin().getBlockX() + "," + building.getOrigin().getBlockZ();
                 PlacementReceipt receipt = receiptMap.get(key);
                 
@@ -288,18 +223,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     if (mainBuildingId.isPresent() && building.getBuildingId().equals(mainBuildingId.get())) {
                         mainBuildingEntrance = entrance;
                     }
-                } else {
-                    LOGGER.warning(String.format("[STRUCT] Missing receipt for building %s, skipping path connection",
-                            building.getBuildingId()));
                 }
             }
             
-            // Fallback: if no main building was designated, use first building's entrance
             if (mainBuildingEntrance == null && !buildingEntrances.isEmpty()) {
                 mainBuildingEntrance = buildingEntrances.get(0);
             }
             
-            // Generate path network (A* pathfinding) using entrance points
             boolean pathSuccess = pathService.generatePathNetwork(
                     world, 
                     villageId, 
@@ -309,28 +239,18 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             );
             
             if (pathSuccess) {
-                // Place path blocks in the world
                 List<List<Block>> pathNetwork = pathService.getVillagePathNetwork(villageId);
                 int totalPathBlocks = 0;
-                
-                // R008: Get volume masks for path placement checks
                 List<VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
                 
                 for (List<Block> pathSegment : pathNetwork) {
                     int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId, masks);
                     totalPathBlocks += placed;
                 }
-                
-                LOGGER.info(String.format("[STRUCT] Path network complete: village=%s, paths=%d, blocks=%d",
-                        villageId, pathNetwork.size(), totalPathBlocks));
-            } else {
-                LOGGER.warning(String.format("[STRUCT] Path network generation failed for village %s", villageId));
             }
-        } else {
-            LOGGER.fine("[STRUCT] Only one building, skipping path generation");
         }
         
-        LOGGER.info(String.format("[STRUCT] Village placement complete: villageId=%s, buildings=%d",
+        LOGGER.info(String.format("[STRUCT] village: id=%s buildings=%d",
                 villageId, placedBuildings.size()));
         
         return Optional.of(villageId);
@@ -338,9 +258,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     @Override
     public boolean validateSite(World world, Location origin, int radius) {
-        // Check for existing structures in the area
         if (hasCollision(world, origin, radius)) {
-            LOGGER.fine(String.format("[STRUCT] Site validation failed: collision detected at %s", origin));
             return false;
         }
         
@@ -357,50 +275,31 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         int yVariation = maxY - minY;
-        boolean flatEnough = yVariation <= 20; // Allow up to 20 blocks variation for village area
-        
-        if (!flatEnough) {
-            LOGGER.fine(String.format("[STRUCT] Site validation failed: too much Y variation (%d blocks)", yVariation));
-        }
-        
-        return flatEnough;
+        return yVariation <= 20;
     }
     
     @Override
     public Optional<Building> placeBuilding(World world, Location location, String structureId, UUID villageId, long seed) {
-        LOGGER.fine(String.format("[STRUCT] Begin building placement: structure=%s, location=%s, seed=%d",
-                structureId, location, seed));
-        
-        // Get structure dimensions
         Optional<int[]> dimensions = structureService.getStructureDimensions(structureId);
         
         if (!dimensions.isPresent()) {
-            LOGGER.warning(String.format("[STRUCT] Structure '%s' not found", structureId));
             return Optional.empty();
         }
         
-        // T021b: Use new method that returns BOTH the final re-seated location AND rotation
-        // This is critical for calculating correct building footprints - rotation swaps width/depth
         Optional<com.davisodom.villageoverhaul.worldgen.PlacementResult> placementResult = 
                 structureService.placeStructureAndGetResult(structureId, world, location, seed);
         
         if (!placementResult.isPresent()) {
-            LOGGER.warning(String.format("[STRUCT] Failed to place structure '%s' at %s", structureId, location));
             return Optional.empty();
         }
         
-        // Create building metadata using the ACTUAL placed location (not the requested location)
         int[] dims = dimensions.get();
         Building building = new Building.Builder()
                 .villageId(villageId)
                 .structureId(structureId)
-                .origin(placementResult.get().getActualLocation()) // Use actual final location, not requested location
+                .origin(placementResult.get().getActualLocation())
                 .dimensions(dims[0], dims[1], dims[2])
                 .build();
-        
-        LOGGER.fine(String.format("[STRUCT] Building placed successfully: buildingId=%s at actual location=%s, rotation=%d°", 
-                building.getBuildingId(), placementResult.get().getActualLocation(), 
-                placementResult.get().getRotationDegrees()));
         
         return Optional.of(building);
     }
@@ -449,30 +348,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         List<Building> buildings = villageBuildings.remove(villageId);
         
         if (buildings == null) {
-            LOGGER.warning(String.format("[STRUCT] Village not found: %s", villageId));
             return false;
         }
         
-        // Remove from metadata store
         metadataStore.removeVillage(villageId);
-        
-        LOGGER.info(String.format("[STRUCT] Removed village %s (%d buildings)", villageId, buildings.size()));
         return true;
     }
     
-    /**
-     * Get structure IDs for a given culture.
-     * 
-     * CRITICAL: The main building MUST always be placed first to ensure every village has it.
-     * Other buildings are randomly selected from the culture's structure set.
-     * 
-     * @param cultureId Culture ID to get structures for
-     * @return List of structure IDs with main building first, followed by randomly selected others
-     */
     private List<String> getCultureStructures(String cultureId) {
         Optional<CultureService.Culture> cultureOpt = cultureService.get(cultureId);
         if (!cultureOpt.isPresent()) {
-            LOGGER.warning(String.format("[STRUCT] Culture '%s' not found, using empty structure list", cultureId));
             return Collections.emptyList();
         }
         
@@ -480,21 +365,17 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         List<String> structureSet = culture.getStructureSet();
         
         if (structureSet == null || structureSet.isEmpty()) {
-            LOGGER.warning(String.format("[STRUCT] Culture '%s' has no structures defined", cultureId));
             return Collections.emptyList();
         }
         
-        // Get main building structure ID (or default to first if not specified)
         String mainBuildingStructureId = culture.getMainBuildingStructureId();
         if (mainBuildingStructureId == null || mainBuildingStructureId.isEmpty()) {
             mainBuildingStructureId = structureSet.get(0);
         }
         
-        // Build result list: main building FIRST, then other structures
         List<String> result = new ArrayList<>();
         result.add(mainBuildingStructureId);
         
-        // Add remaining structures (excluding the main building)
         List<String> otherStructures = new ArrayList<>();
         for (String structureId : structureSet) {
             if (!structureId.equals(mainBuildingStructureId)) {
@@ -502,12 +383,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
         }
         
-        // Shuffle other structures for variety (but keep main building first!)
         Collections.shuffle(otherStructures, new Random());
         result.addAll(otherStructures);
-        
-        LOGGER.info(String.format("[STRUCT] Structure placement order for culture '%s': main building '%s' + %d others", 
-            cultureId, mainBuildingStructureId, otherStructures.size()));
         
         return result;
     }
@@ -744,11 +621,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             VillageMetadataStore.VillageBorder existingBorder = existingVillage.getBorder();
             
-            // Check if borders are within minimum distance
             if (proposedBorder.isWithinDistance(existingBorder, minDistance)) {
                 int actualDistance = proposedBorder.getDistanceTo(existingBorder);
-                LOGGER.fine(String.format("[STRUCT] Inter-village spacing violation: proposed=%s, existing=%s (village=%s), distance=%d, required=%d",
-                        formatLocation(proposedOrigin), existingBorder, existingVillage.getVillageId(), actualDistance, minDistance));
                 return new InterVillageSpacingResult(false, actualDistance, existingVillage.getVillageId());
             }
         }
@@ -936,11 +810,6 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         Location entranceLocation = new Location(world, entranceX, groundY, entranceZ);
-        
-        LOGGER.info(String.format("[PATH] Building entrance: %s at (%d,%d,%d) facing %s (rotation=%d°) [buildingMinY=%d] [structure bounds: X[%d-%d] Z[%d-%d]]",
-                building.getBuildingId(), entranceX, groundY, entranceZ, 
-                getDirectionName(rotationDegrees), rotationDegrees, buildingMinY,
-                structureMinX, structureMaxX, structureMinZ, structureMaxZ));
         
         return entranceLocation;
     }

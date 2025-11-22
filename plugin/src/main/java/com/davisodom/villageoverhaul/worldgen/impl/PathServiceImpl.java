@@ -64,11 +64,7 @@ public class PathServiceImpl implements PathService {
     @Override
     public boolean generatePathNetwork(World world, UUID villageId, List<Location> buildingLocations,
                                        Location mainBuildingLocation, long seed) {
-        LOGGER.info(String.format("[STRUCT] Begin path network generation: village=%s, buildings=%d, seed=%d",
-                villageId, buildingLocations.size(), seed));
-        
         if (buildingLocations.isEmpty()) {
-            LOGGER.warning("[STRUCT] No buildings to connect");
             return false;
         }
         
@@ -98,14 +94,6 @@ public class PathServiceImpl implements PathService {
                         mainBuildingLocation, building, pathBlocks.get());
                 networkBuilder.addSegment(segment);
                 successfulPaths++;
-                
-                LOGGER.fine(String.format("[STRUCT] Path generated: from main to building %d, blocks=%d",
-                        i, pathBlocks.get().size()));
-            } else {
-                LOGGER.warning(String.format("[STRUCT] Failed to generate path from main (%d,%d,%d) to building %d at (%d,%d,%d) - distance=%.1f blocks",
-                        mainBuildingLocation.getBlockX(), mainBuildingLocation.getBlockY(), mainBuildingLocation.getBlockZ(),
-                        i, building.getBlockX(), building.getBlockY(), building.getBlockZ(),
-                        mainBuildingLocation.distance(building)));
             }
         }
         
@@ -113,19 +101,17 @@ public class PathServiceImpl implements PathService {
         currentVillageContext = null;
         
         if (successfulPaths == 0) {
-            LOGGER.warning(String.format("[STRUCT] Path network generation failed: no paths created for village %s", villageId));
             return false;
         }
         
-        // Cache the network
         PathNetwork network = networkBuilder.build();
         pathNetworks.put(villageId, network);
         
         double connectivity = network.calculateConnectivity(buildingLocations, mainBuildingLocation);
-        LOGGER.info(String.format("[STRUCT] Path network complete: village=%s, paths=%d/%d, blocks=%d, connectivity=%.1f%%",
+        LOGGER.info(String.format("[PATH] network: village=%s paths=%d/%d blocks=%d connectivity=%.0f%%",
                 villageId, successfulPaths, buildingLocations.size() - 1, network.getTotalBlocksPlaced(), connectivity * 100));
         
-        return connectivity >= 0.75; // Success criterion: ≥75% connectivity (relaxed from 90%)
+        return connectivity >= 0.75;
     }
     
     /**
@@ -146,16 +132,8 @@ public class PathServiceImpl implements PathService {
 
     @Override
     public Optional<List<Block>> generatePath(World world, Location start, Location end, long seed) {
-        // Validate distance
         double distance = start.distance(end);
-        if (distance > MAX_SEARCH_DISTANCE) {
-            LOGGER.warning(String.format("[STRUCT] Path distance too far: %.1f blocks (max %d)",
-                    distance, MAX_SEARCH_DISTANCE));
-            return Optional.empty();
-        }
-        
-        if (distance < 3) {
-            LOGGER.fine("[STRUCT] Path too short, skipping");
+        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
             return Optional.empty();
         }
         
@@ -182,23 +160,16 @@ public class PathServiceImpl implements PathService {
             }
         }
         
-        // Run A* pathfinding on 2D heightmap
         List<PathNode> path = findPathAStar(world, snappedStart, snappedEnd, graph);
         
         if (path == null || path.isEmpty()) {
-            LOGGER.fine(String.format("[STRUCT] No path found from (%d,%d,%d) to (%d,%d,%d)",
-                    start.getBlockX(), start.getBlockY(), start.getBlockZ(),
-                    end.getBlockX(), end.getBlockY(), end.getBlockZ()));
             return Optional.empty();
         }
         
-        // Convert path nodes to blocks
         List<Block> pathBlocks = new ArrayList<>();
         for (PathNode node : path) {
             pathBlocks.add(world.getBlockAt(node.x, node.y, node.z));
         }
-        
-        LOGGER.fine(String.format("[STRUCT] Path found: distance=%.1f, blocks=%d", distance, pathBlocks.size()));
         
         return Optional.of(pathBlocks);
     }
@@ -228,10 +199,6 @@ public class PathServiceImpl implements PathService {
         int endY = end.getBlockY();
         int endZ = end.getBlockZ();
         
-        LOGGER.info(String.format("[PATH] A* search start: from (%d,%d,%d) to (%d,%d,%d), distance=%.1f",
-                startX, startY, startZ, endX, endY, endZ, 
-                Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endZ - startZ, 2))));
-        
         PathNode startNode = new PathNode(startX, startY, startZ);
         startNode.gScore = 0;
         startNode.fScore = heuristic(startX, startZ, endX, endZ);
@@ -248,10 +215,11 @@ public class PathServiceImpl implements PathService {
             PathNode current = openSet.poll();
             nodesExplored++;
             
-            // Check if we reached the goal
             if (Math.abs(current.x - endX) <= 2 && Math.abs(current.z - endZ) <= 2) {
                 List<PathNode> path = reconstructPath(current);
-                logPathTerrainCosts(world, path, nodesExplored, buildingTilesAvoided);
+                String pathHash = computePathHash(path);
+                LOGGER.info(String.format("[PATH] A* success: nodes=%d avoided=%d hash=%s",
+                        nodesExplored, buildingTilesAvoided, pathHash));
                 return path;
             }
             
@@ -310,10 +278,9 @@ public class PathServiceImpl implements PathService {
             }
         }
         
-        String reason = nodesExplored >= MAX_NODES_EXPLORED ? "node limit reached" : "no path exists";
-        LOGGER.warning(String.format("[PATH] A* FAILED: %s (explored=%d/%d, obstacles=%d, maxCost=%.1f)",
-                reason, nodesExplored, MAX_NODES_EXPLORED, obstaclesEncountered, maxTerrainCostSeen));
-        return null; // No path found
+        LOGGER.warning(String.format("[PATH] A* failed: explored=%d/%d",
+                nodesExplored, MAX_NODES_EXPLORED));
+        return null;
     }
     
     /**
@@ -367,77 +334,7 @@ public class PathServiceImpl implements PathService {
         }
     }
     
-    /**
-     * Log terrain cost breakdown for a successful path.
-     * Analyzes the final path to report flat, slope, water, and steep tile counts.
-     * T021b: Also logs building tiles avoided during pathfinding.
-     */
-    private void logPathTerrainCosts(World world, List<PathNode> path, int nodesExplored, int buildingTilesAvoided) {
-        if (path.isEmpty()) {
-            LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes (empty path)", nodesExplored));
-            return;
-        }
-        
-        int flatTiles = 0;
-        int slopeTiles = 0;
-        int waterTiles = 0;
-        int steepTiles = 0;
-        double totalCost = 0.0;
-        
-        for (int i = 0; i < path.size() - 1; i++) {
-            PathNode from = path.get(i);
-            PathNode to = path.get(i + 1);
-            
-            Location fromLoc = new Location(world, from.x, from.y, from.z);
-            Location toLoc = new Location(world, to.x, to.y, to.z);
-            
-            int yDiff = Math.abs(to.y - from.y);
-            
-            // Check block at path level and block below for water detection
-            Block blockAt = world.getBlockAt(toLoc);
-            Block blockBelow = world.getBlockAt(to.x, to.y - 1, to.z);
-            Material typeAt = blockAt.getType();
-            Material typeBelow = blockBelow.getType();
-            
-            double segmentCost = calculateTerrainCost(world, fromLoc, toLoc);
-            totalCost += segmentCost;
-            
-            // Categorize tile by dominant cost factor
-            // Water check needs to look at both the path level AND the block below
-            boolean isWater = (typeAt == Material.WATER || typeAt == Material.LAVA ||
-                              typeBelow == Material.WATER || typeBelow == Material.LAVA);
-            boolean isSteep = (yDiff >= 2); // 2+ blocks elevation change
-            boolean isSlope = (yDiff == 1);
-            
-            if (isWater) {
-                waterTiles++;
-            } else if (isSteep) {
-                steepTiles++;
-            } else if (isSlope) {
-                slopeTiles++;
-            } else {
-                flatTiles++;
-            }
-        }
-        
-        // Build log message with terrain breakdown and building avoidance stats (T021b)
-        String logMessage = String.format(
-            "[PATH] A* SUCCESS: Goal reached after exploring %d nodes (path=%d tiles, cost=%.1f, flat=%d, slope=%d, water=%d, steep=%d",
-            nodesExplored, path.size(), totalCost, flatTiles, slopeTiles, waterTiles, steepTiles
-        );
-        
-        // Append building avoidance info if applicable
-        if (buildingTilesAvoided > 0) {
-            logMessage += String.format(", avoided %d building tiles", buildingTilesAvoided);
-        }
-        logMessage += ")";
-        
-        LOGGER.info(logMessage);
-        
-        // Log path hash for determinism testing (T026d)
-        String pathHash = computePathHash(path);
-        LOGGER.info(String.format("[PATH] Determinism hash: %s (nodes=%d)", pathHash, path.size()));
-    }
+
     
     @Override
     public int placePath(World world, List<Block> pathBlocks, String cultureId) {
@@ -450,24 +347,16 @@ public class PathServiceImpl implements PathService {
         
         int blocksPlaced = 0;
         for (Block block : pathBlocks) {
-            // Place path on top of ground
             Block ground = block.getRelative(BlockFace.DOWN);
-            
-            // Set path block
             block.setType(pathMaterial);
             blocksPlaced++;
             
-            // Ensure solid foundation
             if (!ground.getType().isSolid()) {
                 ground.setType(Material.DIRT);
             }
         }
         
-        // Smooth path after placement
         blocksPlaced += smoothPath(world, pathBlocks);
-        
-        LOGGER.fine(String.format("[STRUCT] Path placed: culture=%s, blocks=%d, material=%s",
-                cultureId, blocksPlaced, pathMaterial));
         
         return blocksPlaced;
     }
@@ -627,9 +516,7 @@ public class PathServiceImpl implements PathService {
     
     @Override
     public void registerBuildingFootprint(UUID villageId, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
-        // R009: Legacy footprint registration removed.
-        // VolumeMasks are now used via VillageMetadataStore.
-        LOGGER.fine(String.format("[PATH] Ignored legacy footprint registration for village %s", villageId));
+        // R009: Legacy footprint registration removed. VolumeMasks are now used.
     }
     
     /**
