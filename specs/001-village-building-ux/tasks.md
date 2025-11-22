@@ -692,7 +692,7 @@ Notes:
 - Only when R006 passes in playtest should R007–R009 be enabled for paths.
 - After migration, mark T021b/T021c as superseded by the rewrite.
 - **Determinism Stabilization (Structure Placement & Path Generation)**
-  - [ ] T026d1 [P] [US2] Deterministic RNG seeding audit for placement pipeline
+  - [X] T026d1 [P] [US2] Deterministic RNG seeding audit for placement pipeline
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `StructureServiceImpl.java`
     - Description: Ensure all random operations (ordering, offsets, rotation choices) derive from a single seed chain (world seed + village seed). Replace any `new Random()` calls without explicit seed.
     - Acceptance: Log a single `[STRUCT] seed-chain: <villageSeed> -> <placementSeed>` line; repeated runs with same seed produce identical ordering lists.

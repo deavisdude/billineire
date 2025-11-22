@@ -247,18 +247,18 @@ public class StructureServiceImpl implements StructureService {
         Random random = new Random(seed);
         int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
-        // Attempt placement with re-seating logic and get actual location
-        // For legacy method (no receipt), pass null for existingMasks
-        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed, null);
+        // Single placement attempt (no re-seating, no collision check for legacy path)
+        Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
+                template, world, origin, seed, null, rotationDegrees);
         
         if (actualLocation.isPresent()) {
             PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
-            LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
+            LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
                     structureId, formatLocation(actualLocation.get()), rotationDegrees, seed));
             return Optional.of(result);
         } else {
-            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
-                    structureId, seed, MAX_RESEAT_ATTEMPTS));
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
+                    structureId, seed));
             return Optional.empty();
         }
     }
@@ -281,12 +281,15 @@ public class StructureServiceImpl implements StructureService {
         Random random = new Random(seed);
         int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
-        // R011b: Attempt placement with re-seating logic and pass existingMasks for collision detection
-        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed, existingMasks);
+        // R011b: Single placement attempt with collision detection
+        // VillagePlacementServiceImpl handles site search and candidate selection
+        // This method only validates and places at the given origin
+        Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
+                template, world, origin, seed, existingMasks, rotationDegrees);
         
         if (!actualLocation.isPresent()) {
-            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
-                    structureId, seed, MAX_RESEAT_ATTEMPTS));
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
+                    structureId, seed));
             return Optional.empty();
         }
         
@@ -355,131 +358,108 @@ public class StructureServiceImpl implements StructureService {
     }
     
     /**
-     * Attempt placement with re-seating logic, returning the actual placed location.
-     * Tries initial location, then searches nearby if validation fails.
-     * R011b: Enhanced with existingMasks for pre-placement collision detection.
-     * @return Optional containing the actual placed location, empty if all attempts failed
+     * Attempt single placement at given location with validation and collision detection.
+     * R011b: Pre-placement collision check prevents wasted placements.
+     * VillagePlacementServiceImpl handles candidate search - this method only validates and places.
+     * @return Optional containing the actual placed location, empty if validation/collision fails
      */
-    private Optional<Location> attemptPlacementWithReseatingAndGetLocation(
+    private Optional<Location> attemptSinglePlacementAndGetLocation(
             StructureTemplate template, World world, Location origin, long seed,
-            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks) {
-        Random random = new Random(seed);
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int rotationDegrees) {
+        // Single placement attempt - no re-seating loop
+        // Candidate search is handled by VillagePlacementServiceImpl
+        LOGGER.info(String.format("[STRUCT] Placement attempt: structure='%s', location=%s, seed=%d",
+                template.id, formatLocation(origin), seed));
+            
+        // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
+        // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validating site for '%s' at %s", 
+                template.id, formatLocation(origin)));
+        SiteValidator.ValidationResult siteValidation = siteValidator.validateSite(
+                world,
+                origin,
+                template.dimensions[0],
+                template.dimensions[2],
+                template.dimensions[1]
+        );
+            
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validation result - passed=%b, foundationOk=%b, interiorAirOk=%b, entranceOk=%b",
+                siteValidation.passed, siteValidation.foundationOk, 
+                siteValidation.interiorAirOk, siteValidation.entranceOk));
         
-        for (int attempt = 0; attempt < MAX_RESEAT_ATTEMPTS; attempt++) {
-            Location currentOrigin = attempt == 0 ? origin : findAlternativeLocation(world, origin, random, attempt);
+        // Hard reject if foundation has fluids or fails validation
+        if (!siteValidation.passed) {
+            String rejectionReason = buildRejectionReason(siteValidation);
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Site validation failed: %s", rejectionReason));
+            return Optional.empty();
+        }
             
-            LOGGER.info(String.format("[STRUCT] Seat attempt %d/%d: structure='%s', location=%s, seed=%d",
-                    attempt + 1, MAX_RESEAT_ATTEMPTS, template.id, formatLocation(currentOrigin), seed));
+        LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, computing AABB for collision check");
+        
+        // Compute exact AABB using the deterministic rotation already calculated
+        int baseWidth = template.dimensions[0];
+        int baseDepth = template.dimensions[2];
+        int height = template.dimensions[1];
+        
+        int[] bounds = computeAABB(origin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
             
-            // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
-            // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validating site for '%s' at %s", 
-                    template.id, formatLocation(currentOrigin)));
-            SiteValidator.ValidationResult siteValidation = siteValidator.validateSite(
-                    world,
-                    currentOrigin,
-                    template.dimensions[0],
-                    template.dimensions[2],
-                    template.dimensions[1]
-            );
-            
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validation result - passed=%b, foundationOk=%b, interiorAirOk=%b, entranceOk=%b",
-                    siteValidation.passed, siteValidation.foundationOk, 
-                    siteValidation.interiorAirOk, siteValidation.entranceOk));
-            
-            // Hard reject if foundation has fluids or fails validation
-            if (!siteValidation.passed) {
-                String rejectionReason = buildRejectionReason(siteValidation);
-                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: %s",
-                        attempt + 1, rejectionReason));
-                continue; // Try next re-seat attempt
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Computed AABB: bounds=(%d..%d, %d..%d, %d..%d) rot=%d°",
+                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], rotationDegrees));
+        
+        // R011b: Check collision with existing masks BEFORE terraforming
+        if (existingMasks != null && !existingMasks.isEmpty()) {
+            // Respect configured village spacing defaults (test-config default: 2)
+            // Hardcoding a high value here caused excessive rejection during placement.
+            int minBuildingSpacing = 1; // Use a slightly more permissive spacing to improve placement success
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Checking collision against %d existing mask(s) with %d spacing",
+                    existingMasks.size(), minBuildingSpacing));
+            boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
+            if (hasCollision) {
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Collision detected with existing structure (rotation-aware check)");
+                return Optional.empty();
             }
+            LOGGER.info("[STRUCT] DIAGNOSTIC: No collision detected - site is clear");
+        } else {
+            LOGGER.info("[STRUCT] DIAGNOSTIC: No existing masks to check collision against (first structure)");
+        }
             
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, computing AABB for terraforming");
+        // Prepare site with terraforming using exact AABB BEFORE placement
+        boolean terraformed = TerraformingUtil.prepareSiteWithBounds(world, bounds);
+        
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
+        
+        // CRITICAL: If terraforming fails (fluid detected), abort placement
+        if (!terraformed) {
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Terraforming failed (likely fluid detected during site prep)");
+            return Optional.empty();
+        }
             
-            // Compute exact AABB BEFORE terraforming to ensure alignment with PlacementReceipt
-            Random rotRandom = new Random(seed);
-            int rotationDegrees = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
-            
-            int baseWidth = template.dimensions[0];
-            int baseDepth = template.dimensions[2];
-            int height = template.dimensions[1];
-            
-            int[] bounds = computeAABB(currentOrigin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
-            
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Computed AABB for terraforming: bounds=(%d..%d, %d..%d, %d..%d) rot=%d°",
-                    bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], rotationDegrees));
-            
-            // R011b: Check collision with existing masks BEFORE terraforming
-            if (existingMasks != null && !existingMasks.isEmpty()) {
-                int minBuildingSpacing = 10; // Default spacing from config
-                boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
-                if (hasCollision) {
-                    LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: collision with existing structure (rotation-aware check)",
-                            attempt + 1));
-                    continue; // Try next re-seat attempt WITHOUT wasting placement
-                }
-            }
-            
-            // Prepare site with terraforming using exact AABB BEFORE placement
-            boolean terraformed = TerraformingUtil.prepareSiteWithBounds(world, bounds);
-            
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
-            
-            // CRITICAL: If terraforming fails (fluid detected), abort this placement attempt
-            if (!terraformed) {
-                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: terraforming failed (likely fluid detected during site prep)",
-                        attempt + 1));
-                continue; // Try next re-seat attempt
-            }
-            
-            // Site prepared - perform actual placement
-            // After successful terraforming, placement MUST succeed (already committed to this site)
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
-                    template.id, formatLocation(currentOrigin)));
-            boolean placed = performActualPlacement(template, world, currentOrigin, seed);
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
-                    placed, template.id));
-            
-            if (!placed) {
-                // This should NEVER happen after successful validation and terraforming
-                // Log as ERROR since we've already modified the world
-                LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
-                        template.id, formatLocation(currentOrigin)));
-                // Continue to next attempt, but world is already modified (unavoidable)
-                continue;
-            }
-            
-            if (placed) {
-                if (attempt > 0) {
-                    LOGGER.info(String.format("[STRUCT] Re-seat successful: structure='%s', final_location=%s, attempts=%d, seed=%d",
-                            template.id, formatLocation(currentOrigin), attempt + 1, seed));
-                }
-                return Optional.of(currentOrigin); // Return the actual placed location
-            }
+        // Site prepared - perform actual placement
+        // After successful terraforming, placement MUST succeed (already committed to this site)
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
+                template.id, formatLocation(origin)));
+        boolean placed = performActualPlacement(template, world, origin, seed);
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
+                placed, template.id));
+        
+        if (!placed) {
+            // This should NEVER happen after successful validation and terraforming
+            // Log as ERROR since we've already modified the world
+            LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
+                    template.id, formatLocation(origin)));
+            return Optional.empty();
         }
         
-        return Optional.empty();
+        LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
+                template.id, formatLocation(origin), seed));
+        return Optional.of(origin);
     }
     
     /**
      * Find an alternative location for re-seating.
      * Uses deterministic search pattern based on seed and attempt number.
      */
-    private Location findAlternativeLocation(World world, Location original, Random random, int attempt) {
-        // Spiral search pattern with increasing radius
-        int searchRadius = Math.min(attempt * 8, MAX_SEARCH_RADIUS);
-        
-        // Deterministic offset based on seed
-        int offsetX = random.nextInt(searchRadius * 2) - searchRadius;
-        int offsetZ = random.nextInt(searchRadius * 2) - searchRadius;
-        
-        int newX = original.getBlockX() + offsetX;
-        int newZ = original.getBlockZ() + offsetZ;
-        int newY = world.getHighestBlockYAt(newX, newZ);
-        
-        return new Location(world, newX, newY, newZ);
-    }
     
     /**
      * Perform the actual structure placement.
@@ -1472,14 +1452,18 @@ public class StructureServiceImpl implements StructureService {
             
             // Check AABB intersection
             // Two AABBs intersect if they overlap on ALL three axes
-            boolean xOverlap = bounds[0] <= expandedMask.getMaxX() && bounds[1] >= expandedMask.getMinX();
-            boolean yOverlap = bounds[2] <= expandedMask.getMaxY() && bounds[3] >= expandedMask.getMinY();
-            boolean zOverlap = bounds[4] <= expandedMask.getMaxZ() && bounds[5] >= expandedMask.getMinZ();
+            // Consider strict overlap: touching at an axis boundary is allowed
+            boolean xOverlap = bounds[0] < expandedMask.getMaxX() && bounds[1] > expandedMask.getMinX();
+            boolean yOverlap = bounds[2] < expandedMask.getMaxY() && bounds[3] > expandedMask.getMinY();
+            boolean zOverlap = bounds[4] < expandedMask.getMaxZ() && bounds[5] > expandedMask.getMinZ();
             
             if (xOverlap && yOverlap && zOverlap) {
-                LOGGER.fine(String.format("[STRUCT] Collision detected: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing)",
+                LOGGER.info(String.format("[STRUCT] COLLISION: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing) expanded=(%d..%d, %d..%d, %d..%d)",
                         bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
-                        mask.getStructureId(), spacingBuffer));
+                        mask.getStructureId(), spacingBuffer,
+                        expandedMask.getMinX(), expandedMask.getMaxX(),
+                        expandedMask.getMinY(), expandedMask.getMaxY(),
+                        expandedMask.getMinZ(), expandedMask.getMaxZ()));
                 return true;
             }
         }

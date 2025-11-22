@@ -47,4 +47,6 @@ When running tests and targeting specific behaviors (like village generation), i
 1000 ticks is more than enough time for village generation and structure placement tests.
 
 If a task is too big to address in a single pass and or larger architectural changes are needed: update plan.md & tasks.md to systematically address the issue bit by bit.
+
+Include task IDs in commit messages when applicable.
 <!-- MANUAL ADDITIONS END -->

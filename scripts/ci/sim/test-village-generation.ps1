@@ -142,8 +142,12 @@ Write-Host ""
 Write-Host "Monitoring generation progress..." -ForegroundColor Cyan
 $generationStart = Get-Date
 $generationComplete = $false
+$r011bInconclusive = $true
+$overlaps = 0
 $villageId = $null
 $structureCount = 0
+# Keep track of unique placement receipts we've already seen so we don't double-count
+$seenReceipts = @{}
 $pathsComplete = $false
 
 while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
@@ -169,9 +173,13 @@ while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
             }
         }
         
-        # Count structure placements
-        if ($line -match "\[STRUCT\]\[RECEIPT\]") {
-            $structureCount++
+        # Count structure placements using unique receipt keys (structureId + origin)
+        if ($line -match "\[STRUCT\]\[RECEIPT\]\s+(\S+)\s+@\s+\((-?\d+),(-?\d+),(-?\d+)\)") {
+            $receiptKey = "$($Matches[1])@$($Matches[2]),$($Matches[3]),$($Matches[4])"
+            if (-not $seenReceipts.ContainsKey($receiptKey)) {
+                $seenReceipts[$receiptKey] = $true
+                $structureCount = $seenReceipts.Keys.Count
+            }
         }
         
         # Check for path completion
@@ -247,38 +255,51 @@ if ($villageId) {
     # Check for overlaps (R011b acceptance criteria)
     Write-Host ""
     Write-Host "Checking for overlaps (R011b)..." -ForegroundColor Cyan
-    $overlaps = 0
-    for ($i = 0; $i -lt $receipts.Count; $i++) {
-        for ($j = $i + 1; $j -lt $receipts.Count; $j++) {
-            $r1 = $receipts[$i]
-            $r2 = $receipts[$j]
-            
-            # AABB overlap check: A overlaps B if maxA >= minB AND minA <= maxB (for all 3 axes)
-            $xOverlap = $r1.MaxX -ge $r2.MinX -and $r1.MinX -le $r2.MaxX
-            $yOverlap = $r1.MaxY -ge $r2.MinY -and $r1.MinY -le $r2.MaxY
-            $zOverlap = $r1.MaxZ -ge $r2.MinZ -and $r1.MinZ -le $r2.MaxZ
-            
-            if ($xOverlap -and $yOverlap -and $zOverlap) {
-                $overlaps++
-                Write-Host "  X OVERLAP DETECTED:" -ForegroundColor Red
-                Write-Host "    $($r1.StructureId): X=[$($r1.MinX)..$($r1.MaxX)] Y=[$($r1.MinY)..$($r1.MaxY)] Z=[$($r1.MinZ)..$($r1.MaxZ)]" -ForegroundColor Red
-                Write-Host "    $($r2.StructureId): X=[$($r2.MinX)..$($r2.MaxX)] Y=[$($r2.MinY)..$($r2.MaxY)] Z=[$($r2.MinZ)..$($r2.MaxZ)]" -ForegroundColor Red
+    
+    # R011b requires at least 2 structures to validate collision detection
+    if ($receipts.Count -lt 2) {
+        Write-Host "  ! INCONCLUSIVE: Need at least 2 structures to validate collision detection (found $($receipts.Count))" -ForegroundColor Yellow
+        Write-Host "  ! Cannot verify R011b with insufficient structures" -ForegroundColor Yellow
+        $r011bInconclusive = $true
+    } else {
+        $overlaps = 0
+        for ($i = 0; $i -lt $receipts.Count; $i++) {
+            for ($j = $i + 1; $j -lt $receipts.Count; $j++) {
+                $r1 = $receipts[$i]
+                $r2 = $receipts[$j]
+                
+                # AABB overlap check: A overlaps B if maxA >= minB AND minA <= maxB (for all 3 axes)
+                $xOverlap = $r1.MaxX -ge $r2.MinX -and $r1.MinX -le $r2.MaxX
+                $yOverlap = $r1.MaxY -ge $r2.MinY -and $r1.MinY -le $r2.MaxY
+                $zOverlap = $r1.MaxZ -ge $r2.MinZ -and $r1.MinZ -le $r2.MaxZ
+                
+                if ($xOverlap -and $yOverlap -and $zOverlap) {
+                    $overlaps++
+                    Write-Host "  X OVERLAP DETECTED:" -ForegroundColor Red
+                    Write-Host "    $($r1.StructureId): X=[$($r1.MinX)..$($r1.MaxX)] Y=[$($r1.MinY)..$($r1.MaxY)] Z=[$($r1.MinZ)..$($r1.MaxZ)]" -ForegroundColor Red
+                    Write-Host "    $($r2.StructureId): X=[$($r2.MinX)..$($r2.MaxX)] Y=[$($r2.MinY)..$($r2.MaxY)] Z=[$($r2.MinZ)..$($r2.MaxZ)]" -ForegroundColor Red
+                }
             }
         }
-    }
-    
-    if ($overlaps -eq 0) {
-        Write-Host "  OK No overlaps detected (R011b: PASS)" -ForegroundColor Green
-    } else {
-        Write-Host "  X $overlaps overlap(s) detected (R011b: FAIL)" -ForegroundColor Red
+        
+        if ($overlaps -eq 0) {
+            Write-Host "  OK No overlaps detected among $($receipts.Count) structures (R011b: PASS)" -ForegroundColor Green
+            $r011bInconclusive = $false
+        } else {
+            Write-Host "  X $overlaps overlap(s) detected (R011b: FAIL)" -ForegroundColor Red
+            $r011bInconclusive = $false
+        }
     }
 }
 
 Write-Host ""
 Write-Host "=== Test Complete ===" -ForegroundColor Cyan
-if ($generationComplete -and $overlaps -eq 0) {
+if ($generationComplete -and $overlaps -eq 0 -and -not $r011bInconclusive) {
     Write-Host "OK All checks passed" -ForegroundColor Green
     exit 0
+} elseif ($r011bInconclusive) {
+    Write-Host "! Test inconclusive - insufficient structures to validate R011b" -ForegroundColor Yellow
+    exit 1
 } else {
     Write-Host "! Some checks failed or incomplete" -ForegroundColor Yellow
     exit 1

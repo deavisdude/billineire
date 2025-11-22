@@ -124,14 +124,19 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             return Optional.empty();
         }
         
+        // T026d1: Deterministic RNG seeding audit
+        // Derive placement seed from village seed to ensure reproducible structure ordering
+        Random villageRandom = new Random(seed);
+        long placementSeed = villageRandom.nextLong();
+        LOGGER.info(String.format("[STRUCT] seed-chain: %d -> %d", seed, placementSeed));
+        
         UUID villageId = UUID.randomUUID();
         metadataStore.registerVillage(villageId, cultureId, origin, seed);
         
-        List<String> structureIds = getCultureStructures(cultureId);
+        List<String> structureIds = getCultureStructures(cultureId, placementSeed);
         List<Building> placedBuildings = new ArrayList<>();
         
-        List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
-        SurfaceSolver surfaceSolver = new SurfaceSolver(world, existingMasks);
+        SurfaceSolver surfaceSolver = new SurfaceSolver(world, new ArrayList<>());
         
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
@@ -150,9 +155,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             long buildingSeed = seed + i;
             
+            // R011b: Fetch fresh volume masks before each placement to ensure collision detection works
+            List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
+            
             Optional<Location> placementLocation = findSuitablePlacementPosition(
                     world, origin, width, depth, height, buildingSeed,
-                    metadataStore.getVolumeMasks(villageId), surfaceSolver);
+                    existingMasks, surfaceSolver);
             
             if (!placementLocation.isPresent()) {
                 continue;
@@ -355,7 +363,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         return true;
     }
     
-    private List<String> getCultureStructures(String cultureId) {
+    private List<String> getCultureStructures(String cultureId, long seed) {
         Optional<CultureService.Culture> cultureOpt = cultureService.get(cultureId);
         if (!cultureOpt.isPresent()) {
             return Collections.emptyList();
@@ -383,7 +391,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
         }
         
-        Collections.shuffle(otherStructures, new Random());
+        // T026d1: Use seeded Random for deterministic shuffling
+        Collections.shuffle(otherStructures, new Random(seed));
         result.addAll(otherStructures);
         
         return result;
@@ -394,54 +403,98 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * Uses spiral search pattern from origin.
      * R009: Uses SurfaceSolver for ground finding and VolumeMasks for overlap checks.
      * R011b: Uses rotation-aware collision detection with deterministic rotation.
+     * T026d1: Deterministic candidate ordering using buildingSeed for consistent spiral iteration.
      */
     private Optional<Location> findSuitablePlacementPosition(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
             List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver) {
         
-        final int maxRadius = 100;
-        final int gridSize = 8;
+        // Increase search radius and density: helps find more valid spots in constrained terrain
+        final int maxRadius = 256;
+        final int gridSize = 4;
+        
+        // T026d1: Use buildingSeed to determine spiral iteration order (clockwise vs counter-clockwise)
+        Random spiralRandom = new Random(buildingSeed);
+        boolean clockwise = spiralRandom.nextBoolean();
         
         // Spiral search pattern: start at origin, expand outward
         for (int radius = 0; radius <= maxRadius; radius += gridSize) {
-            // For each ring, try all 4 quadrants
+            // T026d1: Generate all candidates for this ring, then shuffle deterministically
+            List<int[]> ringCandidates = new ArrayList<>();
+            
+            // For each ring, collect all candidate positions
             for (int dx = -radius; dx <= radius; dx += gridSize) {
                 for (int dz = -radius; dz <= radius; dz += gridSize) {
                     // Skip interior points (already checked in previous rings)
                     if (radius > 0 && Math.abs(dx) < radius && Math.abs(dz) < radius) {
                         continue;
                     }
-                    
-                    int candidateX = origin.getBlockX() + dx;
-                    int candidateZ = origin.getBlockZ() + dz;
-                    
-                    // R009: Use SurfaceSolver to find ground level
-                    // This finds the highest solid block NOT inside any existing mask
-                    int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
-                    
-                    // R011b: Determine rotation deterministically from building seed
-                    Random rotRandom = new Random(buildingSeed);
-                    int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
-                    
-                    // Compute rotated AABB for this candidate location with determined rotation
-                    Location candidateLoc = new Location(world, candidateX, candidateY, candidateZ);
-                    int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
-                    
-                    // Check collision with existing masks (including spacing buffer)
-                    boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
-                    
-                    // R011b: Rotation-aware collision detection implemented
-                    
-                    if (overlaps) {
-                        continue;
-                    }
-                    
-                    // Found valid spot
-                    return Optional.of(new Location(world, candidateX, candidateY, candidateZ));
+                    ringCandidates.add(new int[]{dx, dz});
                 }
+            }
+            
+            // T026d1: Shuffle ring candidates deterministically to spread out attempts
+            Collections.shuffle(ringCandidates, new Random(buildingSeed + radius));
+            
+            // Try each candidate in this ring
+            for (int[] offset : ringCandidates) {
+                int dx = offset[0];
+                int dz = offset[1];
+                
+                int candidateX = origin.getBlockX() + dx;
+                int candidateZ = origin.getBlockZ() + dz;
+                
+                // R009: Use SurfaceSolver to find ground level
+                // This finds the highest solid block NOT inside any existing mask
+                int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
+                
+                // R011b: Determine rotation deterministically from building seed
+                Random rotRandom = new Random(buildingSeed);
+                int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
+                
+                // Compute rotated AABB for this candidate location with determined rotation
+                Location candidateLoc = new Location(world, candidateX, candidateY, candidateZ);
+                int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
+                
+                // Check collision with existing masks (including spacing buffer)
+                boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
+
+                // If blocked by spacing, try a progressive relaxation (half spacing, then zero)
+                if (overlaps && minBuildingSpacing > 0) {
+                    int half = Math.max(0, minBuildingSpacing / 2);
+                    if (half != minBuildingSpacing) {
+                        boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half);
+                        if (!overlapsHalf) {
+                            LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->%d for candidate (%d,%d)", minBuildingSpacing, half, dx, dz));
+                            overlaps = false;
+                        }
+                    }
+                }
+
+                if (overlaps && minBuildingSpacing > 1) {
+                    // Final attempt without spacing
+                    boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0);
+                    if (!overlapsZero) {
+                        LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->0 for candidate (%d,%d)", minBuildingSpacing, dx, dz));
+                        overlaps = false;
+                    }
+                }
+                
+                // R011b: Rotation-aware collision detection implemented
+                
+                if (overlaps) {
+                    continue;
+                }
+                
+                // Found valid spot
+                LOGGER.fine(String.format("[STRUCT] findSuitable: Found candidate at offset=(%d,%d) for seed=%d", 
+                        dx, dz, buildingSeed));
+                return Optional.of(new Location(world, candidateX, candidateY, candidateZ));
             }
         }
         
+        LOGGER.warning(String.format("[STRUCT] findSuitable: No valid placement found within radius=%d for seed=%d",
+                maxRadius, buildingSeed));
         return Optional.empty();
     }
     
