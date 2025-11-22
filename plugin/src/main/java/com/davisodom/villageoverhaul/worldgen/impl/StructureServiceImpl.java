@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
+import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.SiteValidator;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
@@ -123,34 +124,46 @@ public class StructureServiceImpl implements StructureService {
         StructureTemplate smallHouse = new StructureTemplate();
         smallHouse.id = "house_roman_small";
         smallHouse.dimensions = new int[]{9, 7, 9}; // 9x7x9 Roman insula (small apartment)
+        smallHouse.entranceOffset = BlockVector3.at(4, 1, 0);
+        smallHouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_small", smallHouse);
         loadedStructures.put("house_small", smallHouse); // Fallback alias
         
         StructureTemplate mediumHouse = new StructureTemplate();
         mediumHouse.id = "house_roman_medium";
         mediumHouse.dimensions = new int[]{13, 8, 13}; // 13x8x13 Roman domus (townhouse)
+        mediumHouse.entranceOffset = BlockVector3.at(6, 1, 0);
+        mediumHouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_medium", mediumHouse);
         loadedStructures.put("house_medium", mediumHouse); // Fallback alias
         
         StructureTemplate villa = new StructureTemplate();
         villa.id = "house_roman_villa";
         villa.dimensions = new int[]{17, 9, 17}; // 17x9x17 Roman villa
+        villa.entranceOffset = BlockVector3.at(8, 1, 0);
+        villa.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("house_roman_villa", villa);
         
         StructureTemplate workshop = new StructureTemplate();
         workshop.id = "workshop_roman_forge";
         workshop.dimensions = new int[]{11, 8, 11}; // 11x8x11 Blacksmith forge
+        workshop.entranceOffset = BlockVector3.at(5, 1, 0);
+        workshop.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("workshop_roman_forge", workshop);
         loadedStructures.put("workshop", workshop); // Fallback alias
         
         StructureTemplate market = new StructureTemplate();
         market.id = "market_roman_stall";
         market.dimensions = new int[]{7, 6, 7}; // 7x6x7 Market stall
+        market.entranceOffset = BlockVector3.at(3, 1, 0);
+        market.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("market_roman_stall", market);
         
         StructureTemplate bathhouse = new StructureTemplate();
         bathhouse.id = "building_roman_bathhouse";
         bathhouse.dimensions = new int[]{15, 7, 15}; // 15x7x15 Public bathhouse
+        bathhouse.entranceOffset = BlockVector3.at(7, 1, 0);
+        bathhouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("building_roman_bathhouse", bathhouse);
         
         LOGGER.info(String.format("[STRUCT] Loaded %d Roman structure templates", loadedStructures.size()));
@@ -178,6 +191,9 @@ public class StructureServiceImpl implements StructureService {
                  ClipboardReader reader = format.getReader(fis)) {
                 Clipboard clipboard = reader.read();
                 
+                // Normalize clipboard origin to minimum corner for predictable paste behavior
+                clipboard = normalizeClipboardOrigin(clipboard);
+                
                 // Create template with actual dimensions from schematic
                 StructureTemplate template = new StructureTemplate();
                 template.id = structureId;
@@ -185,6 +201,10 @@ public class StructureServiceImpl implements StructureService {
                 
                 BlockVector3 dimensions = clipboard.getDimensions();
                 template.dimensions = new int[]{dimensions.getX(), dimensions.getY(), dimensions.getZ()};
+                
+                // Default entrance: center of Z-min face
+                template.entranceOffset = BlockVector3.at(dimensions.getX() / 2, 1, 0);
+                template.entranceFacing = BlockVector3.at(0, 0, -1);
                 
                 loadedStructures.put(structureId, template);
                 
@@ -207,128 +227,239 @@ public class StructureServiceImpl implements StructureService {
     
     @Override
     public boolean placeStructure(String structureId, World world, Location origin, long seed) {
+        Optional<PlacementResult> result = placeStructureAndGetResult(structureId, world, origin, seed);
+        return result.isPresent();
+    }
+    
+    @Override
+    public Optional<PlacementResult> placeStructureAndGetResult(String structureId, World world, Location origin, long seed) {
         StructureTemplate template = loadedStructures.get(structureId);
         
         if (template == null) {
             LOGGER.warning(String.format("[STRUCT] Structure '%s' not loaded", structureId));
-            return false;
+            return Optional.empty();
         }
         
         LOGGER.info(String.format("[STRUCT] Begin placement: structureId=%s, origin=%s, seed=%d, world=%s",
                 structureId, formatLocation(origin), seed, world.getName()));
         
-        // Attempt placement with re-seating logic
-        boolean placed = attemptPlacementWithReseating(template, world, origin, seed);
+        // Calculate rotation BEFORE placement (deterministic from seed)
+        Random random = new Random(seed);
+        int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
-        if (placed) {
-            LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, seed=%d",
-                    structureId, formatLocation(origin), seed));
+        // Single placement attempt (no re-seating, no collision check for legacy path)
+        Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
+                template, world, origin, seed, null, rotationDegrees);
+        
+        if (actualLocation.isPresent()) {
+            PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
+            LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
+                    structureId, formatLocation(actualLocation.get()), rotationDegrees, seed));
+            return Optional.of(result);
         } else {
-            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
-                    structureId, seed, MAX_RESEAT_ATTEMPTS));
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
+                    structureId, seed));
+            return Optional.empty();
+        }
+    }
+    
+    @Override
+    public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
+            String structureId, World world, Location origin, long seed, UUID villageId,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks) {
+        StructureTemplate template = loadedStructures.get(structureId);
+        
+        if (template == null) {
+            LOGGER.warning(String.format("[STRUCT] Structure '%s' not loaded", structureId));
+            return Optional.empty();
         }
         
-        return placed;
+        LOGGER.info(String.format("[STRUCT] Begin placement (with receipt): structureId=%s, origin=%s, seed=%d, world=%s",
+                structureId, formatLocation(origin), seed, world.getName()));
+        
+        // Calculate rotation BEFORE placement (deterministic from seed)
+        Random random = new Random(seed);
+        int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+        
+        // R011b: Single placement attempt with collision detection
+        // VillagePlacementServiceImpl handles site search and candidate selection
+        // This method only validates and places at the given origin
+        Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
+                template, world, origin, seed, existingMasks, rotationDegrees);
+        
+        if (!actualLocation.isPresent()) {
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
+                    structureId, seed));
+            return Optional.empty();
+        }
+        
+        Location placedOrigin = actualLocation.get();
+        
+        // Compute exact AABB accounting for rotation and clipboard origin
+        int baseWidth = template.dimensions[0];
+        int baseDepth = template.dimensions[2];
+        int height = template.dimensions[1];
+        
+        int[] bounds = computeAABB(placedOrigin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
+        
+        // Sample foundation corners as proof of paste alignment
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners = 
+            sampleFoundationCorners(world, bounds);
+            
+        // Calculate entrance location
+        // R003: Transform anchor via T and snap to adjacent walkable ground outside AABB+buffer
+        // Pass bounds so calculateEntranceLocation can use SurfaceSolver to find natural ground
+        Location entranceLoc = calculateEntranceLocation(world, placedOrigin, template, rotationDegrees, bounds, villageId);
+        
+        // Calculate effective dimensions after rotation
+        int effectiveWidth, effectiveDepth;
+        if (rotationDegrees == 90 || rotationDegrees == 270) {
+            effectiveWidth = baseDepth;
+            effectiveDepth = baseWidth;
+        } else {
+            effectiveWidth = baseWidth;
+            effectiveDepth = baseDepth;
+        }
+        
+        // Build PlacementReceipt
+        com.davisodom.villageoverhaul.model.PlacementReceipt receipt = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+                .structureId(structureId)
+                .villageId(villageId)
+                .world(world)
+                .entrance(entranceLoc.getBlockX(), entranceLoc.getBlockY(), entranceLoc.getBlockZ())
+                .origin(placedOrigin.getBlockX(), placedOrigin.getBlockY(), placedOrigin.getBlockZ())
+                .rotation(rotationDegrees)
+                .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
+                .dimensions(effectiveWidth, height, effectiveDepth)
+                .foundationCorners(corners)
+                .build();
+        
+        // Emit [STRUCT][RECEIPT] log
+        LOGGER.info(String.format("[STRUCT][RECEIPT] %s", receipt.getReceiptSummary()));
+        
+        // Verify corner samples
+        boolean cornersValid = receipt.verifyFoundationCorners();
+        if (!cornersValid) {
+            LOGGER.warning(String.format("[STRUCT][RECEIPT] WARNING: Some foundation corners are not solid blocks: %s",
+                    java.util.Arrays.toString(corners)));
+        }
+        
+        LOGGER.info(String.format("[STRUCT] Seat successful: structure='%s', origin=%s, rotation=%d°, seed=%d",
+                structureId, formatLocation(placedOrigin), rotationDegrees, seed));
+        
+        return Optional.of(receipt);
+    }
+    
+    @Override
+    public Optional<Location> placeStructureAndGetLocation(String structureId, World world, Location origin, long seed) {
+        Optional<PlacementResult> result = placeStructureAndGetResult(structureId, world, origin, seed);
+        return result.map(PlacementResult::getActualLocation);
     }
     
     /**
-     * Attempt placement with re-seating logic.
-     * Tries initial location, then searches nearby if validation fails.
+     * Attempt single placement at given location with validation and collision detection.
+     * R011b: Pre-placement collision check prevents wasted placements.
+     * VillagePlacementServiceImpl handles candidate search - this method only validates and places.
+     * @return Optional containing the actual placed location, empty if validation/collision fails
      */
-    private boolean attemptPlacementWithReseating(StructureTemplate template, World world, Location origin, long seed) {
-        Random random = new Random(seed);
+    private Optional<Location> attemptSinglePlacementAndGetLocation(
+            StructureTemplate template, World world, Location origin, long seed,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int rotationDegrees) {
+        // Single placement attempt - no re-seating loop
+        // Candidate search is handled by VillagePlacementServiceImpl
+        LOGGER.info(String.format("[STRUCT] Placement attempt: structure='%s', location=%s, seed=%d",
+                template.id, formatLocation(origin), seed));
+            
+        // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
+        // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validating site for '%s' at %s", 
+                template.id, formatLocation(origin)));
+        SiteValidator.ValidationResult siteValidation = siteValidator.validateSite(
+                world,
+                origin,
+                template.dimensions[0],
+                template.dimensions[2],
+                template.dimensions[1]
+        );
+            
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validation result - passed=%b, foundationOk=%b, interiorAirOk=%b, entranceOk=%b",
+                siteValidation.passed, siteValidation.foundationOk, 
+                siteValidation.interiorAirOk, siteValidation.entranceOk));
         
-        for (int attempt = 0; attempt < MAX_RESEAT_ATTEMPTS; attempt++) {
-            Location currentOrigin = attempt == 0 ? origin : findAlternativeLocation(world, origin, random, attempt);
+        // Hard reject if foundation has fluids or fails validation
+        if (!siteValidation.passed) {
+            String rejectionReason = buildRejectionReason(siteValidation);
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Site validation failed: %s", rejectionReason));
+            return Optional.empty();
+        }
             
-            LOGGER.info(String.format("[STRUCT] Seat attempt %d/%d: structure='%s', location=%s, seed=%d",
-                    attempt + 1, MAX_RESEAT_ATTEMPTS, template.id, formatLocation(currentOrigin), seed));
+        LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, computing AABB for collision check");
+        
+        // Compute exact AABB using the deterministic rotation already calculated
+        int baseWidth = template.dimensions[0];
+        int baseDepth = template.dimensions[2];
+        int height = template.dimensions[1];
+        
+        int[] bounds = computeAABB(origin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
             
-            // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
-            // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validating site for '%s' at %s", 
-                    template.id, formatLocation(currentOrigin)));
-            SiteValidator.ValidationResult siteValidation = siteValidator.validateSite(
-                    world,
-                    currentOrigin,
-                    template.dimensions[0],
-                    template.dimensions[2],
-                    template.dimensions[1]
-            );
-            
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Validation result - passed=%b, foundationOk=%b, interiorAirOk=%b, entranceOk=%b",
-                    siteValidation.passed, siteValidation.foundationOk, 
-                    siteValidation.interiorAirOk, siteValidation.entranceOk));
-            
-            // Hard reject if foundation has fluids or fails validation
-            if (!siteValidation.passed) {
-                String rejectionReason = buildRejectionReason(siteValidation);
-                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: %s",
-                        attempt + 1, rejectionReason));
-                continue; // Try next re-seat attempt
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Computed AABB: bounds=(%d..%d, %d..%d, %d..%d) rot=%d°",
+                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], rotationDegrees));
+        
+        // R011b: Check collision with existing masks BEFORE terraforming
+        if (existingMasks != null && !existingMasks.isEmpty()) {
+            // Respect configured village spacing defaults (test-config default: 2)
+            // Hardcoding a high value here caused excessive rejection during placement.
+            int minBuildingSpacing = 1; // Use a slightly more permissive spacing to improve placement success
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Checking collision against %d existing mask(s) with %d spacing",
+                    existingMasks.size(), minBuildingSpacing));
+            boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
+            if (hasCollision) {
+                LOGGER.info("[STRUCT] DIAGNOSTIC: Collision detected with existing structure (rotation-aware check)");
+                return Optional.empty();
             }
+            LOGGER.info("[STRUCT] DIAGNOSTIC: No collision detected - site is clear");
+        } else {
+            LOGGER.info("[STRUCT] DIAGNOSTIC: No existing masks to check collision against (first structure)");
+        }
             
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, preparing site");
+        // Prepare site with terraforming using exact AABB BEFORE placement
+        boolean terraformed = TerraformingUtil.prepareSiteWithBounds(world, bounds);
+        
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
+        
+        // CRITICAL: If terraforming fails (fluid detected), abort placement
+        if (!terraformed) {
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Terraforming failed (likely fluid detected during site prep)");
+            return Optional.empty();
+        }
             
-            // Prepare site with terraforming BEFORE placement
-            // Once validation passes, we're committed to this site
-            boolean terraformed = TerraformingUtil.prepareSite(
-                    world,
-                    currentOrigin,
-                    template.dimensions[0],
-                    template.dimensions[2],
-                    template.dimensions[1]
-            );
-            
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
-            
-            // Site prepared - perform actual placement
-            // After terraforming, placement MUST succeed (already committed to this site)
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
-                    template.id, formatLocation(currentOrigin)));
-            boolean placed = performActualPlacement(template, world, currentOrigin, seed);
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
-                    placed, template.id));
-            
-            if (!placed) {
-                // This should NEVER happen after successful validation and terraforming
-                // Log as ERROR since we've already modified the world
-                LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
-                        template.id, formatLocation(currentOrigin)));
-                // Continue to next attempt, but world is already modified (unavoidable)
-                continue;
-            }
-            
-            if (placed) {
-                if (attempt > 0) {
-                    LOGGER.info(String.format("[STRUCT] Re-seat successful: structure='%s', final_location=%s, attempts=%d, seed=%d",
-                            template.id, formatLocation(currentOrigin), attempt + 1, seed));
-                }
-                return true;
-            }
+        // Site prepared - perform actual placement
+        // After successful terraforming, placement MUST succeed (already committed to this site)
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
+                template.id, formatLocation(origin)));
+        boolean placed = performActualPlacement(template, world, origin, seed);
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
+                placed, template.id));
+        
+        if (!placed) {
+            // This should NEVER happen after successful validation and terraforming
+            // Log as ERROR since we've already modified the world
+            LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
+                    template.id, formatLocation(origin)));
+            return Optional.empty();
         }
         
-        return false;
+        LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
+                template.id, formatLocation(origin), seed));
+        return Optional.of(origin);
     }
     
     /**
      * Find an alternative location for re-seating.
      * Uses deterministic search pattern based on seed and attempt number.
      */
-    private Location findAlternativeLocation(World world, Location original, Random random, int attempt) {
-        // Spiral search pattern with increasing radius
-        int searchRadius = Math.min(attempt * 8, MAX_SEARCH_RADIUS);
-        
-        // Deterministic offset based on seed
-        int offsetX = random.nextInt(searchRadius * 2) - searchRadius;
-        int offsetZ = random.nextInt(searchRadius * 2) - searchRadius;
-        
-        int newX = original.getBlockX() + offsetX;
-        int newZ = original.getBlockZ() + offsetZ;
-        int newY = world.getHighestBlockYAt(newX, newZ);
-        
-        return new Location(world, newX, newY, newZ);
-    }
     
     /**
      * Perform the actual structure placement.
@@ -904,6 +1035,189 @@ public class StructureServiceImpl implements StructureService {
     }
     
     /**
+     * Normalize clipboard origin to its minimum corner.
+     * This standardizes paste behavior: origin becomes the structure's SW-bottom corner.
+     * After normalization, paste point = world location of minimum corner.
+     * 
+     * @param clipboard Original clipboard with arbitrary origin
+     * @return New clipboard with origin shifted to minimum corner
+     */
+    private Clipboard normalizeClipboardOrigin(Clipboard clipboard) {
+        BlockVector3 currentOrigin = clipboard.getOrigin();
+        BlockVector3 minPoint = clipboard.getRegion().getMinimumPoint();
+        
+        // If already normalized, return as-is
+        if (currentOrigin.equals(minPoint)) {
+            return clipboard;
+        }
+        
+        // Shift origin to minimum corner
+        clipboard.setOrigin(minPoint);
+        LOGGER.fine(String.format("[STRUCT] Normalized clipboard origin from %s to %s", 
+                currentOrigin, minPoint));
+        
+        return clipboard;
+    }
+    
+    /**
+     * Compute exact AABB bounds for a structure placement, accounting for rotation.
+     * Assumes clipboard origin has been normalized to minimum corner.
+     * Returns int array: [minX, maxX, minY, maxY, minZ, maxZ]
+     * 
+     * @param origin Paste origin location (where clipboard origin is placed)
+     * @param clipboard WorldEdit clipboard (may be null for procedural structures)
+     * @param baseWidth Original structure width (X-axis before rotation, fallback if no clipboard)
+     * @param baseDepth Original structure depth (Z-axis before rotation, fallback if no clipboard)
+     * @param height Structure height (Y-axis, fallback if no clipboard)
+     * @param rotation Rotation angle in degrees (0, 90, 180, 270)
+     * @return int[] {minX, maxX, minY, maxY, minZ, maxZ}
+     */
+    private int[] computeAABB(Location origin, Clipboard clipboard, int baseWidth, int baseDepth, int height, int rotation) {
+        int originX = origin.getBlockX();
+        int originY = origin.getBlockY();
+        int originZ = origin.getBlockZ();
+        
+        if (clipboard != null) {
+            // Clipboard origin is normalized to minimum corner, so we can work directly with dimensions
+            BlockVector3 dimensions = clipboard.getDimensions();
+            int sizeX = dimensions.getX();
+            int sizeY = dimensions.getY();
+            int sizeZ = dimensions.getZ();
+            
+            // Calculate the 8 corners of the bounding box in schematic space (origin is at 0,0,0)
+            // Since origin = minPoint after normalization, corners are just (0,0,0) to (sizeX, sizeY, sizeZ)
+            int[][] corners = new int[8][3];
+            int idx = 0;
+            for (int x : new int[]{0, sizeX}) {
+                for (int y : new int[]{0, sizeY}) {
+                    for (int z : new int[]{0, sizeZ}) {
+                        corners[idx][0] = x;
+                        corners[idx][1] = y;
+                        corners[idx][2] = z;
+                        idx++;
+                    }
+                }
+            }
+            
+            // Rotate each corner around origin (0,0,0) using Y-axis rotation matrix
+            int[][] rotatedCorners = new int[8][3];
+            for (int i = 0; i < 8; i++) {
+                int x = corners[i][0];
+                int y = corners[i][1];
+                int z = corners[i][2];
+                
+                // Apply Y-axis rotation (clockwise when viewed from above)
+                switch (rotation) {
+                    case 0:
+                        rotatedCorners[i][0] = x;
+                        rotatedCorners[i][2] = z;
+                        break;
+                    case 90:
+                        rotatedCorners[i][0] = -z;
+                        rotatedCorners[i][2] = x;
+                        break;
+                    case 180:
+                        rotatedCorners[i][0] = -x;
+                        rotatedCorners[i][2] = -z;
+                        break;
+                    case 270:
+                        rotatedCorners[i][0] = z;
+                        rotatedCorners[i][2] = -x;
+                        break;
+                }
+                rotatedCorners[i][1] = y; // Y unchanged
+            }
+            
+            // Find min/max of rotated corners
+            int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
+            int minRotY = Integer.MAX_VALUE, maxRotY = Integer.MIN_VALUE;
+            int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
+            
+            for (int i = 0; i < 8; i++) {
+                minRotX = Math.min(minRotX, rotatedCorners[i][0]);
+                maxRotX = Math.max(maxRotX, rotatedCorners[i][0]);
+                minRotY = Math.min(minRotY, rotatedCorners[i][1]);
+                maxRotY = Math.max(maxRotY, rotatedCorners[i][1]);
+                minRotZ = Math.min(minRotZ, rotatedCorners[i][2]);
+                maxRotZ = Math.max(maxRotZ, rotatedCorners[i][2]);
+            }
+            
+            // Translate to world coordinates (paste origin + rotated offsets)
+            // Note: rotated corners are already inclusive bounds (0 to size), so no adjustment needed
+            int minX = originX + minRotX;
+            int maxX = originX + maxRotX - 1; // -1 because size is exclusive (0 to N = N blocks = indices 0..N-1)
+            int minY = originY + minRotY;
+            int maxY = originY + maxRotY - 1;
+            int minZ = originZ + minRotZ;
+            int maxZ = originZ + maxRotZ - 1;
+            
+            return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+        }
+        
+        // Fallback for procedural structures (no clipboard)
+        int effectiveWidth, effectiveDepth;
+        if (rotation == 90 || rotation == 270) {
+            effectiveWidth = baseDepth;
+            effectiveDepth = baseWidth;
+        } else {
+            effectiveWidth = baseWidth;
+            effectiveDepth = baseDepth;
+        }
+        
+        // Simple bounds assuming origin is minimum corner
+        int minX = originX;
+        int maxX = originX + effectiveWidth - 1;
+        int minY = originY;
+        int maxY = originY + height - 1;
+        int minZ = originZ;
+        int maxZ = originZ + effectiveDepth - 1;
+        
+        return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+    }
+    
+    /**
+     * Sample the four foundation corners of a placed structure.
+     * Samples at y=minY (foundation level).
+     * Order: NW, NE, SE, SW (clockwise from top-left when viewed from above, Z+ is south)
+     * 
+     * @param world World containing the structure
+     * @param bounds AABB bounds [minX, maxX, minY, maxY, minZ, maxZ]
+     * @return Array of 4 CornerSamples
+     */
+    private com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] sampleFoundationCorners(
+            World world, int[] bounds) {
+        int minX = bounds[0];
+        int maxX = bounds[1];
+        int minY = bounds[2];
+        int minZ = bounds[4];
+        int maxZ = bounds[5];
+        
+        // Sample at foundation level (minY)
+        int y = minY;
+        
+        // Corner order: NW (minX, minZ), NE (maxX, minZ), SE (maxX, maxZ), SW (minX, maxZ)
+        // In Minecraft coords: Z+ is south, X+ is east
+        // So NW = min X, min Z (north-west corner)
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample nw = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                minX, y, minZ, world.getBlockAt(minX, y, minZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample ne = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                maxX, y, minZ, world.getBlockAt(maxX, y, minZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample se = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                maxX, y, maxZ, world.getBlockAt(maxX, y, maxZ).getType());
+        
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample sw = 
+            new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(
+                minX, y, maxZ, world.getBlockAt(minX, y, maxZ).getType());
+        
+        return new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[]{nw, ne, se, sw};
+    }
+    
+    /**
      * Format a location for logging.
      */
     private String formatLocation(Location loc) {
@@ -1040,5 +1354,120 @@ public class StructureServiceImpl implements StructureService {
         String id;
         int[] dimensions; // [width, height, depth]
         Clipboard clipboard; // WorldEdit clipboard (null for placeholder structures)
+        // Entrance anchor relative to origin (0,0,0)
+        BlockVector3 entranceOffset; 
+        // Vector pointing OUT of the entrance
+        BlockVector3 entranceFacing;
+    }
+    
+    /**
+     * Calculate the world location for the structure entrance.
+     * Transforms the relative anchor and snaps to ground outside the structure.
+     */
+    private Location calculateEntranceLocation(World world, Location origin, StructureTemplate template, int rotation, int[] bounds, UUID villageId) {
+        BlockVector3 offset = template.entranceOffset;
+        BlockVector3 facing = template.entranceFacing;
+        
+        // Rotate offset and facing
+        int offX = offset.getX();
+        int offY = offset.getY();
+        int offZ = offset.getZ();
+        
+        int faceX = facing.getX();
+        int faceY = facing.getY();
+        int faceZ = facing.getZ();
+        
+        int rotOffX = offX, rotOffZ = offZ;
+        int rotFaceX = faceX, rotFaceZ = faceZ;
+        
+        switch (rotation) {
+            case 90:
+                rotOffX = -offZ;
+                rotOffZ = offX;
+                rotFaceX = -faceZ;
+                rotFaceZ = faceX;
+                break;
+            case 180:
+                rotOffX = -offX;
+                rotOffZ = -offZ;
+                rotFaceX = -faceX;
+                rotFaceZ = -faceZ;
+                break;
+            case 270:
+                rotOffX = offZ;
+                rotOffZ = -offX;
+                rotFaceX = faceZ;
+                rotFaceZ = -faceX;
+                break;
+        }
+        
+        // Calculate door position in world
+        int doorX = origin.getBlockX() + rotOffX;
+        int doorY = origin.getBlockY() + offY; // Y offset usually doesn't rotate
+        int doorZ = origin.getBlockZ() + rotOffZ;
+        
+        // Project outwards to be safe from buffer
+        // Buffer is 2, so we need to be at least 3 blocks away from the face
+        int targetX = doorX + (rotFaceX * 3);
+        int targetZ = doorZ + (rotFaceZ * 3);
+        
+        // R003: Use SurfaceSolver to find ground level OUTSIDE the structure
+        // Create temporary VolumeMask for this structure
+        com.davisodom.villageoverhaul.model.VolumeMask tempMask = 
+            new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+                .structureId(template.id)
+                .villageId(villageId)
+                .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
+                .build();
+        
+        // Create SurfaceSolver with this mask (so it ignores structure blocks)
+        java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> masks = 
+            java.util.Collections.singletonList(tempMask);
+        com.davisodom.villageoverhaul.worldgen.SurfaceSolver solver = 
+            new com.davisodom.villageoverhaul.worldgen.SurfaceSolver(world, masks);
+        
+        // Find walkable ground at target (ignoring structure blocks)
+        int targetY = solver.getSurfaceHeight(targetX, targetZ) + 1; // +1 for walking surface
+        
+        Location entranceLoc = new Location(world, targetX, targetY, targetZ);
+        LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",
+                template.id, formatLocation(entranceLoc), rotation, offset, facing));
+        
+        return entranceLoc;
+    }
+    
+    /**
+     * Check if an AABB collides with any existing VolumeMasks (with spacing buffer).
+     * R011b: Pre-placement collision detection to prevent wasted placements.
+     * 
+     * @param bounds AABB bounds {minX, maxX, minY, maxY, minZ, maxZ}
+     * @param existingMasks List of existing VolumeMasks to check against
+     * @param spacingBuffer Minimum spacing distance between structures
+     * @return true if collision detected, false if clear
+     */
+    private boolean checkAABBCollision(int[] bounds, java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks, int spacingBuffer) {
+        for (com.davisodom.villageoverhaul.model.VolumeMask mask : existingMasks) {
+            // Expand existing mask with spacing buffer
+            com.davisodom.villageoverhaul.model.VolumeMask expandedMask = mask.expand(spacingBuffer);
+            
+            // Check AABB intersection
+            // Two AABBs intersect if they overlap on ALL three axes
+            // Consider strict overlap: touching at an axis boundary is allowed
+            boolean xOverlap = bounds[0] < expandedMask.getMaxX() && bounds[1] > expandedMask.getMinX();
+            boolean yOverlap = bounds[2] < expandedMask.getMaxY() && bounds[3] > expandedMask.getMinY();
+            boolean zOverlap = bounds[4] < expandedMask.getMaxZ() && bounds[5] > expandedMask.getMinZ();
+            
+            if (xOverlap && yOverlap && zOverlap) {
+                LOGGER.info(String.format("[STRUCT] COLLISION: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing) expanded=(%d..%d, %d..%d, %d..%d)",
+                        bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+                        mask.getStructureId(), spacingBuffer,
+                        expandedMask.getMinX(), expandedMask.getMaxX(),
+                        expandedMask.getMinY(), expandedMask.getMaxY(),
+                        expandedMask.getMinZ(), expandedMask.getMaxZ()));
+                return true;
+            }
+        }
+        
+        return false;
     }
 }

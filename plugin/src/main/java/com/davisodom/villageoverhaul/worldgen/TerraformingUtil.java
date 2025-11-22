@@ -228,12 +228,13 @@ public class TerraformingUtil {
      * Fill small gaps in foundation area.
      * ONLY fills small air pockets near the surface (within 3 blocks below foundation level).
      * Does NOT build pillars from bedrock!
+     * CRITICAL: Ensures foundation layer (foundationY) is completely solid.
      * 
      * @param world Target world
      * @param origin Southwest corner of footprint
      * @param width Footprint width (X)
      * @param depth Footprint depth (Z)
-     * @param foundationY Target Y level for foundation
+     * @param foundationY Target Y level for foundation (MUST be solid after this call)
      * @return Number of blocks filled
      */
     public static int fillGaps(World world, Location origin, int width, int depth, int foundationY) {
@@ -242,6 +243,8 @@ public class TerraformingUtil {
     
     /**
      * Fill gaps with custom limit.
+     * CRITICAL FIX: Fill UP TO AND INCLUDING foundationY to ensure solid foundation corners.
+     * CRITICAL FIX 2: Replace unsuitable foundation materials (SNOW, GRASS, etc.) with DIRT.
      */
     private static int fillGapsWithLimit(World world, Location origin, int width, int depth, int foundationY, int maxBlocks) {
         int filledCount = 0;
@@ -257,16 +260,37 @@ public class TerraformingUtil {
                         origin.getBlockZ() + z
                 );
                 
-                // Only fill if surface is close to foundation level
+                // CRITICAL: ALWAYS solidify the foundation layer, even if terrain is higher
+                // Check foundation block regardless of surface height
+                Block foundationBlock = world.getBlockAt(
+                        origin.getBlockX() + x,
+                        foundationY,
+                        origin.getBlockZ() + z
+                );
+                
+                // Replace unsuitable foundation materials with DIRT
+                if (!isGoodFoundationMaterial(foundationBlock.getType())) {
+                    foundationBlock.setType(Material.DIRT);
+                    filledCount++;
+                    
+                    if (filledCount > maxBlocks) {
+                        LOGGER.warning(String.format("[STRUCT] Gap filling exceeded limit at %s: %d blocks (max %d)",
+                                origin, filledCount, maxBlocks));
+                        return -1;
+                    }
+                }
+                
+                // Additionally, fill gaps BELOW foundation if terrain is lower
                 if (surfaceY >= minFillY && surfaceY < foundationY) {
-                    // Fill from surface to foundation
-                    for (int y = surfaceY; y < foundationY; y++) {
+                    // Fill from surface UP TO (but not including) foundation level (already handled above)
+                    for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(
                                 origin.getBlockX() + x,
                                 y,
                                 origin.getBlockZ() + z
                         );
                         
+                        // Fill if block is not solid (including AIR, SHORT_GRASS, etc.)
                         if (!block.getType().isSolid() && block.getType() != Material.WATER) {
                             block.setType(Material.DIRT);
                             filledCount++;
@@ -284,10 +308,69 @@ public class TerraformingUtil {
         }
         
         if (filledCount > 0) {
-            LOGGER.fine(String.format("[STRUCT] Filled %d gap blocks at %s", filledCount, origin));
-        }
+            LOGGER.info(String.format("[STRUCT] Filled %d gap blocks at %s (foundation layer solidified)", filledCount, origin));
+                    }
         
         return filledCount;
+    }
+    
+    /**
+     * Check if a material is suitable for structure foundations.
+     * Unsuitable materials will be replaced with DIRT during terraforming.
+     */
+    private static boolean isGoodFoundationMaterial(Material material) {
+        // Good foundation materials: solid earth/stone blocks
+        return material == Material.DIRT ||
+               material == Material.GRASS_BLOCK ||
+               material == Material.STONE ||
+               material == Material.DEEPSLATE ||
+               material == Material.ANDESITE ||
+               material == Material.DIORITE ||
+               material == Material.GRANITE ||
+               material == Material.SANDSTONE ||
+               material == Material.RED_SANDSTONE ||
+               material == Material.TERRACOTTA ||
+               material == Material.CLAY ||
+               material == Material.COARSE_DIRT ||
+               material == Material.PODZOL ||
+               material == Material.GRAVEL ||
+               material == Material.SAND ||
+               material == Material.RED_SAND;
+        
+        // Unsuitable: SNOW, SNOW_BLOCK, ICE, SHORT_GRASS, FLOWERS, LOGS, LEAVES, AIR, etc.
+    }
+    
+    /**
+     * Prepare site using exact AABB bounds from PlacementReceipt.
+     * This ensures terraforming operates on the same footprint that will be verified.
+     * 
+     * @param world Target world
+     * @param bounds Exact AABB bounds: {minX, maxX, minY, maxY, minZ, maxZ}
+     * @return true if site preparation succeeded within limits
+     */
+    public static boolean prepareSiteWithBounds(World world, int[] bounds) {
+        if (bounds.length != 6) {
+            throw new IllegalArgumentException("bounds must have 6 elements: minX, maxX, minY, maxY, minZ, maxZ");
+        }
+        
+        int minX = bounds[0];
+        int maxX = bounds[1];
+        int minY = bounds[2];
+        int maxY = bounds[3];
+        int minZ = bounds[4];
+        int maxZ = bounds[5];
+        
+        int width = maxX - minX + 1;
+        int depth = maxZ - minZ + 1;
+        int height = maxY - minY + 1;
+        
+        Location origin = new Location(world, minX, minY, minZ);
+        
+        LOGGER.fine(String.format("[STRUCT] prepareSiteWithBounds: bounds=(%d..%d, %d..%d, %d..%d) dims=%dx%dx%d",
+                minX, maxX, minY, maxY, minZ, maxZ, width, height, depth));
+        
+        // Delegate to existing prepareSite implementation
+        return prepareSiteImpl(world, origin, width, depth, height);
     }
     
     /**
@@ -303,6 +386,13 @@ public class TerraformingUtil {
      * @return true if site preparation succeeded within limits
      */
     public static boolean prepareSite(World world, Location origin, int width, int depth, int height) {
+        return prepareSiteImpl(world, origin, width, depth, height);
+    }
+    
+    /**
+     * Internal implementation of site preparation.
+     */
+    private static boolean prepareSiteImpl(World world, Location origin, int width, int depth, int height) {
         int footprintArea = width * depth;
         boolean isLargeStructure = footprintArea > LARGE_STRUCTURE_THRESHOLD;
         int maxBlocks = isLargeStructure ? MAX_TERRAFORM_BLOCKS_LARGE : MAX_TERRAFORM_BLOCKS;
@@ -344,8 +434,9 @@ public class TerraformingUtil {
             LOGGER.info(String.format("[STRUCT] Large structure detected (%dx%d), skipping grading but filling foundation gaps",
                     width, depth));
             
-            // Fill gaps beneath foundation to prevent floating structures
-            int filled = fillGapsWithLimit(world, origin, width, depth, targetY - 1, maxBlocks);
+            // Fill gaps beneath AND AT foundation level to prevent floating structures
+            // CRITICAL: Use targetY (foundation level), not targetY - 1
+            int filled = fillGapsWithLimit(world, origin, width, depth, targetY, maxBlocks);
             
             if (filled < 0) {
                 LOGGER.warning(String.format("[STRUCT] Foundation filling exceeded limits at %s", origin));
@@ -366,8 +457,8 @@ public class TerraformingUtil {
             return false;
         }
         
-        // Step 3: Fill any remaining gaps
-        int filled = fillGapsWithLimit(world, origin, width, depth, targetY - 1, maxBlocks - graded);
+        // Step 3: Fill any remaining gaps - CRITICAL: use targetY (foundation level), not targetY - 1
+        int filled = fillGapsWithLimit(world, origin, width, depth, targetY, maxBlocks - graded);
         
         if (filled < 0) {
             LOGGER.warning(String.format("[STRUCT] Site preparation failed at %s: filling exceeded limits", origin));

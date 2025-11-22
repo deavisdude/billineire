@@ -9,7 +9,7 @@ Deliver a cross-edition village overhaul as a Paper/Purpur plugin with a determi
 
 ## Technical Context
 
-**Language/Version**: Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17)
+**Language/Version**: Java 21 (Paper 1.20+), optional Kotlin 1.9 (JVM 21)
 **Primary Dependencies**: Paper API (or Purpur fork), Geyser + Floodgate, Vault API, LuckPerms API, WorldGuard + FAWE (optional), MythicMobs (optional), Adventure API, Jackson/Gson for JSON
 **Storage**: Versioned JSON/YAML under plugin data folder for world state; rolling backups. Future-proofed with migration scripts. Optional SQLite for metrics if needed.
 **Testing**: JUnit 5 + MockBukkit for unit/integration; headless deterministic tick harness; Spark/Timings snapshots; contract tests around state hashes.

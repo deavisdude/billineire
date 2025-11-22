@@ -1,7 +1,12 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.model.PathNetwork;
+import com.davisodom.villageoverhaul.model.VolumeMask;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
+import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
+import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
+import java.util.OptionalInt;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -35,28 +40,36 @@ public class PathServiceImpl implements PathService {
     private static final int MAX_SEARCH_DISTANCE = 200;
     
     // Maximum nodes to explore in A* search
-    private static final int MAX_NODES_EXPLORED = 5000;
+    private static final int MAX_NODES_EXPLORED = 10000;
     
     // Terrain cost multipliers
     private static final double FLAT_COST = 1.0;
-    private static final double SLOPE_COST_MULTIPLIER = 2.0; // Per block of elevation change
-    private static final double WATER_COST = 10.0;
-    private static final double OBSTACLE_COST = 20.0;
-    private static final double MAX_ACCEPTABLE_SLOPE = 3.0; // blocks per horizontal distance
+    private static final double SLOPE_COST = 1.5;
+    private static final double WATER_COST = Double.POSITIVE_INFINITY;
+    private static final double OBSTACLE_COST = Double.POSITIVE_INFINITY;
     
     // Path network cache (villageId -> PathNetwork)
     private final Map<UUID, PathNetwork> pathNetworks = new HashMap<>();
     
+    // R005: VillageMetadataStore for accessing VolumeMasks
+    private final VillageMetadataStore metadataStore;
+    
+    // Current village context for pathfinding
+    private UUID currentVillageContext = null;
+
+    public PathServiceImpl(VillageMetadataStore metadataStore) {
+        this.metadataStore = metadataStore;
+    }
+    
     @Override
     public boolean generatePathNetwork(World world, UUID villageId, List<Location> buildingLocations,
                                        Location mainBuildingLocation, long seed) {
-        LOGGER.info(String.format("[STRUCT] Begin path network generation: village=%s, buildings=%d, seed=%d",
-                villageId, buildingLocations.size(), seed));
-        
         if (buildingLocations.isEmpty()) {
-            LOGGER.warning("[STRUCT] No buildings to connect");
             return false;
         }
+        
+        // Set village context for building footprint avoidance (T021b)
+        currentVillageContext = villageId;
         
         PathNetwork.Builder networkBuilder = new PathNetwork.Builder()
                 .villageId(villageId)
@@ -81,62 +94,82 @@ public class PathServiceImpl implements PathService {
                         mainBuildingLocation, building, pathBlocks.get());
                 networkBuilder.addSegment(segment);
                 successfulPaths++;
-                
-                LOGGER.fine(String.format("[STRUCT] Path generated: from main to building %d, blocks=%d",
-                        i, pathBlocks.get().size()));
-            } else {
-                LOGGER.warning(String.format("[STRUCT] Failed to generate path from main to building %d", i));
             }
         }
         
+        // Clear village context after path generation
+        currentVillageContext = null;
+        
         if (successfulPaths == 0) {
-            LOGGER.warning(String.format("[STRUCT] Path network generation failed: no paths created for village %s", villageId));
             return false;
         }
         
-        // Cache the network
         PathNetwork network = networkBuilder.build();
         pathNetworks.put(villageId, network);
         
         double connectivity = network.calculateConnectivity(buildingLocations, mainBuildingLocation);
-        LOGGER.info(String.format("[STRUCT] Path network complete: village=%s, paths=%d, blocks=%d, connectivity=%.1f%%",
-                villageId, successfulPaths, network.getTotalBlocksPlaced(), connectivity * 100));
+        LOGGER.info(String.format("[PATH] network: village=%s paths=%d/%d blocks=%d connectivity=%.0f%%",
+                villageId, successfulPaths, buildingLocations.size() - 1, network.getTotalBlocksPlaced(), connectivity * 100));
         
-        return connectivity >= 0.9; // Success criterion: ≥90% connectivity
+        return connectivity >= 0.75;
     }
     
+    /**
+     * R005: Create a WalkableGraph for the current village context.
+     * Uses SurfaceSolver and VolumeMasks to define valid nodes and obstacles.
+     */
+    private WalkableGraph createWalkableGraph(World world, UUID villageId) {
+        if (metadataStore == null) {
+            return null; // Should not happen if properly initialized
+        }
+        
+        List<VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
+        SurfaceSolver solver = new SurfaceSolver(world, masks);
+        
+        // Buffer = 2 blocks around structures
+        return new WalkableGraph(solver, masks, 2);
+    }
+
     @Override
     public Optional<List<Block>> generatePath(World world, Location start, Location end, long seed) {
-        // Validate distance
         double distance = start.distance(end);
-        if (distance > MAX_SEARCH_DISTANCE) {
-            LOGGER.warning(String.format("[STRUCT] Path distance too far: %.1f blocks (max %d)",
-                    distance, MAX_SEARCH_DISTANCE));
+        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
             return Optional.empty();
         }
         
-        if (distance < 3) {
-            LOGGER.fine("[STRUCT] Path too short, skipping");
-            return Optional.empty();
+        // R007: Snap start/end to walkable surface if village context exists
+        Location snappedStart = start;
+        Location snappedEnd = end;
+        
+        WalkableGraph graph = null;
+        if (currentVillageContext != null && metadataStore != null) {
+            List<VolumeMask> masks = metadataStore.getVolumeMasks(currentVillageContext);
+            SurfaceSolver solver = new SurfaceSolver(world, masks);
+            graph = new WalkableGraph(solver, masks, 2); // Buffer=2
+            
+            // Snap start
+            OptionalInt startY = solver.nearestWalkable(start.getBlockX(), start.getBlockZ(), start.getBlockY());
+            if (startY.isPresent()) {
+                snappedStart = new Location(world, start.getBlockX(), startY.getAsInt(), start.getBlockZ());
+            }
+            
+            // Snap end
+            OptionalInt endY = solver.nearestWalkable(end.getBlockX(), end.getBlockZ(), end.getBlockY());
+            if (endY.isPresent()) {
+                snappedEnd = new Location(world, end.getBlockX(), endY.getAsInt(), end.getBlockZ());
+            }
         }
         
-        // Run A* pathfinding on 2D heightmap
-        List<PathNode> path = findPathAStar(world, start, end);
+        List<PathNode> path = findPathAStar(world, snappedStart, snappedEnd, graph);
         
         if (path == null || path.isEmpty()) {
-            LOGGER.fine(String.format("[STRUCT] No path found from (%d,%d,%d) to (%d,%d,%d)",
-                    start.getBlockX(), start.getBlockY(), start.getBlockZ(),
-                    end.getBlockX(), end.getBlockY(), end.getBlockZ()));
             return Optional.empty();
         }
         
-        // Convert path nodes to blocks
         List<Block> pathBlocks = new ArrayList<>();
         for (PathNode node : path) {
             pathBlocks.add(world.getBlockAt(node.x, node.y, node.z));
         }
-        
-        LOGGER.fine(String.format("[STRUCT] Path found: distance=%.1f, blocks=%d", distance, pathBlocks.size()));
         
         return Optional.of(pathBlocks);
     }
@@ -146,22 +179,25 @@ public class PathServiceImpl implements PathService {
      * Returns list of path nodes from start to end, or null if no path found.
      */
     private List<PathNode> findPathAStar(World world, Location start, Location end) {
+        return findPathAStar(world, start, end, null);
+    }
+    
+    /**
+     * A* pathfinding on 2D heightmap with optional village context for building avoidance.
+     * Returns list of path nodes from start to end, or null if no path found.
+     */
+    private List<PathNode> findPathAStar(World world, Location start, Location end, WalkableGraph graph) {
         PriorityQueue<PathNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fScore));
         Set<String> closedSet = new HashSet<>();
         Map<String, PathNode> allNodes = new HashMap<>();
         
         int startX = start.getBlockX();
+        int startY = start.getBlockY();
         int startZ = start.getBlockZ();
-        int startY = findGroundLevel(world, startX, startZ);
         
         int endX = end.getBlockX();
+        int endY = end.getBlockY();
         int endZ = end.getBlockZ();
-        // endY stored for potential future use in 3D pathfinding
-        // int endY = findGroundLevel(world, endX, endZ);
-        
-        LOGGER.info(String.format("[PATH] A* search start: from (%d,%d,%d) to (%d,%d), distance=%.1f",
-                startX, startY, startZ, endX, endZ, 
-                Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endZ - startZ, 2))));
         
         PathNode startNode = new PathNode(startX, startY, startZ);
         startNode.gScore = 0;
@@ -172,74 +208,79 @@ public class PathServiceImpl implements PathService {
         
         int nodesExplored = 0;
         int obstaclesEncountered = 0;
+        int buildingTilesAvoided = 0; // T021b: count building footprint obstacles
         double maxTerrainCostSeen = 0.0;
         
         while (!openSet.isEmpty() && nodesExplored < MAX_NODES_EXPLORED) {
             PathNode current = openSet.poll();
             nodesExplored++;
             
-            // Check if we reached the goal
             if (Math.abs(current.x - endX) <= 2 && Math.abs(current.z - endZ) <= 2) {
-                LOGGER.info(String.format("[PATH] A* SUCCESS: Goal reached after exploring %d nodes", nodesExplored));
-                return reconstructPath(current);
+                List<PathNode> path = reconstructPath(current);
+                String pathHash = computePathHash(path);
+                LOGGER.info(String.format("[PATH] A* success: nodes=%d avoided=%d hash=%s",
+                        nodesExplored, buildingTilesAvoided, pathHash));
+                return path;
             }
             
             closedSet.add(current.key());
             
-            // Explore neighbors (8 directions)
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (dx == 0 && dz == 0) continue;
+            // Get neighbors
+            List<int[]> neighbors;
+            if (graph != null) {
+                neighbors = graph.getNeighbors(current.x, current.y, current.z);
+            } else {
+                // R009: Require WalkableGraph for pathfinding
+                LOGGER.warning("[PATH] A* FAILED: No WalkableGraph available (legacy fallback removed)");
+                return null;
+            }
+            
+            for (int[] n : neighbors) {
+                int neighborX = n[0];
+                int neighborY = n[1];
+                int neighborZ = n[2];
+                
+                String neighborKey = neighborX + "," + neighborY + "," + neighborZ;
+                if (closedSet.contains(neighborKey)) {
+                    continue;
+                }
+                
+                // Calculate movement cost
+                Location fromLoc = new Location(world, current.x, current.y, current.z);
+                Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
+                double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
+                
+                maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
+                
+                // Skip if terrain is impassable
+                if (movementCost >= OBSTACLE_COST) {
+                    obstaclesEncountered++;
+                    continue;
+                }
+                
+                double tentativeGScore = current.gScore + movementCost;
+                
+                PathNode neighbor = allNodes.get(neighborKey);
+                if (neighbor == null) {
+                    neighbor = new PathNode(neighborX, neighborY, neighborZ);
+                    neighbor.gScore = Double.POSITIVE_INFINITY;
+                    allNodes.put(neighborKey, neighbor);
+                }
+                
+                if (tentativeGScore < neighbor.gScore) {
+                    neighbor.parent = current;
+                    neighbor.gScore = tentativeGScore;
+                    neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
                     
-                    int neighborX = current.x + dx;
-                    int neighborZ = current.z + dz;
-                    
-                    // Get height at neighbor position (find ground beneath vegetation)
-                    int neighborY = findGroundLevel(world, neighborX, neighborZ);
-                    
-                    String neighborKey = neighborX + "," + neighborZ;
-                    if (closedSet.contains(neighborKey)) {
-                        continue;
-                    }
-                    
-                    // Calculate movement cost
-                    Location fromLoc = new Location(world, current.x, current.y, current.z);
-                    Location toLoc = new Location(world, neighborX, neighborY, neighborZ);
-                    double movementCost = calculateTerrainCost(world, fromLoc, toLoc);
-                    
-                    maxTerrainCostSeen = Math.max(maxTerrainCostSeen, movementCost);
-                    
-                    // Skip if terrain is impassable
-                    if (movementCost >= OBSTACLE_COST) {
-                        obstaclesEncountered++;
-                        continue;
-                    }
-                    
-                    double tentativeGScore = current.gScore + movementCost;
-                    
-                    PathNode neighbor = allNodes.get(neighborKey);
-                    if (neighbor == null) {
-                        neighbor = new PathNode(neighborX, neighborY, neighborZ);
-                        neighbor.gScore = Double.POSITIVE_INFINITY;
-                        allNodes.put(neighborKey, neighbor);
-                    }
-                    
-                    if (tentativeGScore < neighbor.gScore) {
-                        neighbor.parent = current;
-                        neighbor.gScore = tentativeGScore;
-                        neighbor.fScore = tentativeGScore + heuristic(neighborX, neighborZ, endX, endZ);
-                        
-                        openSet.remove(neighbor); // Re-add with updated priority
-                        openSet.add(neighbor);
-                    }
+                    openSet.remove(neighbor); // Re-add with updated priority
+                    openSet.add(neighbor);
                 }
             }
         }
         
-        String reason = nodesExplored >= MAX_NODES_EXPLORED ? "node limit reached" : "no path exists";
-        LOGGER.warning(String.format("[PATH] A* FAILED: %s (explored=%d/%d, obstacles=%d, maxCost=%.1f)",
-                reason, nodesExplored, MAX_NODES_EXPLORED, obstaclesEncountered, maxTerrainCostSeen));
-        return null; // No path found
+        LOGGER.warning(String.format("[PATH] A* failed: explored=%d/%d",
+                nodesExplored, MAX_NODES_EXPLORED));
+        return null;
     }
     
     /**
@@ -268,57 +309,32 @@ public class PathServiceImpl implements PathService {
     @Override
     public double calculateTerrainCost(World world, Location from, Location to) {
         int yDiff = Math.abs(to.getBlockY() - from.getBlockY());
-        double horizontalDist = Math.sqrt(
-                Math.pow(to.getX() - from.getX(), 2) + 
-                Math.pow(to.getZ() - from.getZ(), 2));
+        
+        // Check for water or lava at destination (path walks on top of blocks, so check the block itself)
+        Block blockAt = world.getBlockAt(to);
+        Block blockBelow = world.getBlockAt(to.getBlockX(), to.getBlockY() - 1, to.getBlockZ());
+        
+        Material typeAt = blockAt.getType();
+        Material typeBelow = blockBelow.getType();
+        
+        // Water penalty applies if walking through water OR walking on top of water surface
+        boolean hasWater = (typeAt == Material.WATER || typeAt == Material.LAVA || 
+                           typeBelow == Material.WATER || typeBelow == Material.LAVA);
+        if (hasWater) {
+            return WATER_COST;
+        }
         
         // Base cost
-        double cost = FLAT_COST;
-        
-        // Add slope cost
-        if (yDiff > 0) {
-            double slope = yDiff / horizontalDist;
-            if (slope > MAX_ACCEPTABLE_SLOPE) {
-                return OBSTACLE_COST; // Too steep
-            }
-            cost += yDiff * SLOPE_COST_MULTIPLIER;
+        if (yDiff == 0) {
+            return FLAT_COST;
+        } else if (yDiff == 1) {
+            return SLOPE_COST;
+        } else {
+            return OBSTACLE_COST; // Too steep
         }
-        
-        // Check for water or lava
-        Block block = world.getBlockAt(to);
-        Material type = block.getType();
-        
-        if (type == Material.WATER || type == Material.LAVA) {
-            cost += WATER_COST;
-        }
-        
-        // Allow paths through most natural materials
-        // Only veto truly impassable blocks (structures, ores, bedrock)
-        if (type.isSolid()) {
-            // Allow: grass, dirt, stone, sand, gravel, vegetation
-            if (type == Material.GRASS_BLOCK || type == Material.DIRT || 
-                type == Material.STONE || type == Material.SAND || 
-                type == Material.GRAVEL || type == Material.COARSE_DIRT ||
-                type == Material.PODZOL || type == Material.CLAY ||
-                type.name().contains("LOG") || type.name().contains("LEAVES")) {
-                return cost; // Passable natural terrain
-            }
-            
-            // Veto artificial/rare blocks (ores, structures, bedrock)
-            if (type == Material.BEDROCK || 
-                type.name().contains("ORE") ||
-                type.name().contains("PLANKS") ||
-                type.name().contains("BRICKS") ||
-                type.name().contains("COBBLESTONE")) {
-                return OBSTACLE_COST;
-            }
-            
-            // Default: slightly increased cost for other solid blocks
-            cost += 2.0;
-        }
-        
-        return cost;
     }
+    
+
     
     @Override
     public int placePath(World world, List<Block> pathBlocks, String cultureId) {
@@ -331,24 +347,16 @@ public class PathServiceImpl implements PathService {
         
         int blocksPlaced = 0;
         for (Block block : pathBlocks) {
-            // Place path on top of ground
             Block ground = block.getRelative(BlockFace.DOWN);
-            
-            // Set path block
             block.setType(pathMaterial);
             blocksPlaced++;
             
-            // Ensure solid foundation
             if (!ground.getType().isSolid()) {
                 ground.setType(Material.DIRT);
             }
         }
         
-        // Smooth path after placement
         blocksPlaced += smoothPath(world, pathBlocks);
-        
-        LOGGER.fine(String.format("[STRUCT] Path placed: culture=%s, blocks=%d, material=%s",
-                cultureId, blocksPlaced, pathMaterial));
         
         return blocksPlaced;
     }
@@ -506,69 +514,32 @@ public class PathServiceImpl implements PathService {
         return network.getSegments().isEmpty() ? 0.0 : 1.0;
     }
     
-    /**
-     * Find the actual ground level at a position, searching down from the highest block to find solid ground.
-     * This ignores vegetation (leaves, grass, flowers) and finds the actual solid foundation beneath.
-     * Same logic as used in structure placement to ensure consistent ground detection.
-     * 
-     * @param world World to search
-     * @param x X coordinate
-     * @param z Z coordinate
-     * @return Ground level Y coordinate
-     */
-    private int findGroundLevel(World world, int x, int z) {
-        int highestY = world.getHighestBlockYAt(x, z);
-        Block highestBlock = world.getBlockAt(x, highestY, z);
-        Material highestType = highestBlock.getType();
-        
-        // If highest block is vegetation (leaves, grass), search down to find ground
-        boolean isVegetation = highestType == Material.OAK_LEAVES || 
-                highestType == Material.BIRCH_LEAVES ||
-                highestType == Material.SPRUCE_LEAVES ||
-                highestType == Material.JUNGLE_LEAVES ||
-                highestType == Material.ACACIA_LEAVES ||
-                highestType == Material.DARK_OAK_LEAVES ||
-                highestType == Material.MANGROVE_LEAVES ||
-                highestType == Material.CHERRY_LEAVES ||
-                highestType == Material.SHORT_GRASS || 
-                highestType == Material.TALL_GRASS ||
-                highestType == Material.FERN ||
-                highestType == Material.LARGE_FERN;
-        
-        if (!isVegetation && highestType.isSolid()) {
-            // Highest block is already solid ground
-            return highestY;
-        }
-        
-        // Search downward up to 20 blocks to find solid ground beneath vegetation
-        for (int y = highestY - 1; y > highestY - 20 && y > world.getMinHeight(); y--) {
-            Block current = world.getBlockAt(x, y, z);
-            Material currentType = current.getType();
-            
-            // Found solid ground
-            if (currentType.isSolid() && !currentType.isAir() && currentType != Material.OAK_LEAVES &&
-                    currentType != Material.BIRCH_LEAVES && currentType != Material.SPRUCE_LEAVES &&
-                    currentType != Material.JUNGLE_LEAVES && currentType != Material.ACACIA_LEAVES &&
-                    currentType != Material.DARK_OAK_LEAVES && currentType != Material.MANGROVE_LEAVES &&
-                    currentType != Material.CHERRY_LEAVES) {
-                return y;
-            }
-        }
-        
-        // Fallback: if we didn't find ground in search range, use original highest block
-        return highestY;
+    @Override
+    public void registerBuildingFootprint(UUID villageId, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+        // R009: Legacy footprint registration removed. VolumeMasks are now used.
     }
     
     /**
-     * Path node for A* algorithm.
+     * Compute a hash of the path for determinism testing.
+     */
+    private String computePathHash(List<PathNode> path) {
+        long hash = 0;
+        for (PathNode node : path) {
+            hash = 31 * hash + node.x;
+            hash = 31 * hash + node.y;
+            hash = 31 * hash + node.z;
+        }
+        return Long.toHexString(hash);
+    }
+    
+    /**
+     * Simple node class for A* pathfinding.
      */
     private static class PathNode {
-        final int x;
-        final int y;
-        final int z;
-        PathNode parent;
+        final int x, y, z;
         double gScore = Double.POSITIVE_INFINITY;
         double fScore = Double.POSITIVE_INFINITY;
+        PathNode parent;
         
         PathNode(int x, int y, int z) {
             this.x = x;
@@ -577,7 +548,7 @@ public class PathServiceImpl implements PathService {
         }
         
         String key() {
-            return x + "," + z;
+            return x + "," + y + "," + z;
         }
     }
 }

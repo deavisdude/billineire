@@ -18,7 +18,7 @@ deterministic from world/feature seeds and chunk-gated to respect tick budgets.
 
 ## Technical Context
 
-**Language/Version**: Java 17 (Paper 1.20+); optional Kotlin 1.9 (JVM 17)  
+**Language/Version**: Java 21 (Paper 1.20+); optional Kotlin 1.9 (JVM 21)  
 **Primary Dependencies**: Paper API; WorldEdit API (FAWE if present for performance) for
   structure load/rotate/paste; Adventure API (signage/messages); Jackson/Gson for JSON; WorldGuard
   (optional, placement guards); LuckPerms/Vault present in repo but not required for structure gen  
@@ -87,6 +87,31 @@ Must-pass gates and how we satisfy them for this phase:
   terrain change, and caps concurrent planners. Prefer structure registration via a popular
   registry (e.g., CustomStructures) and integrate with Paper’s structure generation pipeline where
   appropriate.
+
+## Open Issue: Structure Placement Reproducibility Blocks Path Determinism (T026d)
+
+During the automated full determinism test on 2025-11-09, two runs with the same seed (12345) produced different outcomes in structure placement:
+
+- Run 1 (Seed 12345): 3 structures placed; 2 paths generated; hashes logged: e0292f0a..., 051d4267...
+- Run 2 (Seed 12345): 0 structures placed; 0 paths generated; determinism comparison impossible
+- Run 3 (Seed 67890): 5 structures placed; 4 paths generated; different hashes observed as expected
+
+Impact:
+- Path determinism (T026d) cannot be validated when structure placement is non-deterministic or intermittently fails.
+- This appears to be a placement pipeline reproducibility issue, not a pathfinding determinism problem.
+
+Evidence (from harness logs):
+- "[STRUCT] Abort: No buildings placed for village ..." in Run 2 only.
+- Successful placements and determinism hashes present in Run 1 and Run 3.
+
+Mitigation Plan (see tasks T026d1..T026d10):
+- Enforce deterministic RNG seeding and iteration orders in placement code paths.
+- Gate placement on chunk readiness; remove timing races between async preparation and main-thread commits.
+- Make re-seat search deterministic and reproducible (stable candidate ordering, deterministic filters).
+- Add targeted diagnostics for zero-placement cases and seed propagation logging for auditability.
+- Provide a harness “fixed layout” mode to isolate path determinism from structure placement variability.
+
+Until these mitigations land, the automated determinism test will PASS variance and may FAIL determinism when structures do not place in both same-seed runs. Re-run after stabilization tasks complete.
 
 ## Project Structure
 

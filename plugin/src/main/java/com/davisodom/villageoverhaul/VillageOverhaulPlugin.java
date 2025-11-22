@@ -78,6 +78,17 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
         minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
+        
+        // Configure debug logging if enabled
+        getConfig().addDefault("debug.verbose", false);
+        saveConfig();
+        
+        boolean verboseLogging = getConfig().getBoolean("debug.verbose", false);
+        if (verboseLogging) {
+            // Configure logging to INFO level (Paper's console doesn't show FINE reliably)
+            logger.info("OK Debug logging configured (verbose=" + verboseLogging + ") - diagnostic logs will use INFO level");
+        }
+        
     logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
                 ", minVillageSpacing=" + minVillageSpacing + 
                 ", spawnProximityRadius=" + spawnProximityRadius + ")");

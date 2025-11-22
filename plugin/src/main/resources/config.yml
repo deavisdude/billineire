@@ -24,6 +24,13 @@ village:
 
 # Debug Flags
 debug:
+  # Enable verbose logging (FINE level) for detailed diagnostic output
+  # When enabled, shows [STRUCT][RECEIPT], [STRUCT][VOLUME], [PATH] logs
+  # and other fine-grained diagnostic messages
+  # WARNING: Generates significant log volume - use only for debugging
+  # Default: false
+  verbose: false
+  
   # Enable detailed tick engine logging
   tick: false
   

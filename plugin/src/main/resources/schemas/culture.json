@@ -29,6 +29,10 @@
       "minItems": 1,
       "description": "Structure template IDs for this culture"
     },
+    "mainBuildingStructureId": {
+      "type": "string",
+      "description": "Structure ID for the main building (e.g., 'forum' for Roman). If not specified, defaults to first structure in structureSet."
+    },
     "professionSet": {
       "type": "array",
       "items": {
