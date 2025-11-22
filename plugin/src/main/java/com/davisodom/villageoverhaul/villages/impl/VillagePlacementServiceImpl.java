@@ -180,14 +180,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int[] dims = dimensions.get();
             int width = dims[0];
             int depth = dims[2];
+            int height = dims[1];
             
             // Derive building-specific seed
             long buildingSeed = seed + i;
             
             // Find suitable position with integrated terrain/spacing/overlap checks
             // R009: Use SurfaceSolver and VolumeMasks
+            // R011b: Pass height and buildingSeed for rotation-aware collision detection
             Optional<Location> placementLocation = findSuitablePlacementPosition(
-                    world, origin, width, depth, 
+                    world, origin, width, depth, height, buildingSeed,
                     metadataStore.getVolumeMasks(villageId), surfaceSolver);
             
             if (!placementLocation.isPresent()) {
@@ -197,9 +199,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             Location buildingLocation = placementLocation.get();
             
-            // R001: Place structure and get PlacementReceipt with ground-truth bounds and corner samples
+            // R001/R011b: Place structure and get PlacementReceipt with ground-truth bounds
+            // R011b: Pass existing masks for pre-placement collision detection
             Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
-                    structureId, world, buildingLocation, buildingSeed, villageId);
+                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks);
             
             if (receiptOpt.isPresent()) {
                 PlacementReceipt receipt = receiptOpt.get();
@@ -208,8 +211,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 metadataStore.addPlacementReceipt(villageId, receipt);
                 
                 // R002: Create and store VolumeMask from receipt
-                VolumeMask volumeMask = VolumeMask.fromReceipt(receipt);
-                metadataStore.addVolumeMask(villageId, volumeMask);
+                VolumeMask placedMask = VolumeMask.fromReceipt(receipt);
+                metadataStore.addVolumeMask(villageId, placedMask);
                 
                 // Update SurfaceSolver with new mask for subsequent placements
                 // (Re-creating solver is cheap enough for per-building frequency)
@@ -513,9 +516,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * Find suitable placement position with integrated terrain, spacing, and overlap checks.
      * Uses spiral search pattern from origin.
      * R009: Uses SurfaceSolver for ground finding and VolumeMasks for overlap checks.
+     * R011b: Uses rotation-aware collision detection with deterministic rotation.
      */
     private Optional<Location> findSuitablePlacementPosition(
-            World world, Location origin, int width, int depth,
+            World world, Location origin, int width, int depth, int height, long buildingSeed,
             List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver) {
         
         final int maxRadius = 100;
@@ -538,33 +542,18 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     // This finds the highest solid block NOT inside any existing mask
                     int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
                     
-                    // Check overlap with existing masks (including spacing buffer)
-                    // Since we don't know final rotation yet, use conservative bounds:
-                    // candidate could extend maxDim in any direction from its origin
-                    int maxDim = Math.max(width, depth);
-                    int buffer = minBuildingSpacing;
+                    // R011b: Determine rotation deterministically from building seed
+                    Random rotRandom = new Random(buildingSeed);
+                    int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
                     
-                    // Conservative candidate footprint: origin could place structure extending maxDim in all directions
-                    // (rotation determines actual extent, so we check worst case)
-                    int candidateRadius = maxDim + buffer;
+                    // Compute rotated AABB for this candidate location with determined rotation
+                    Location candidateLoc = new Location(world, candidateX, candidateY, candidateZ);
+                    int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
                     
-                    boolean overlaps = false;
-                    for (VolumeMask mask : existingMasks) {
-                        // Expand mask by candidate radius for overlap check
-                        // If candidate origin is within (mask + candidateRadius), structures could overlap
-                        int maskMinX = mask.getMinX() - candidateRadius;
-                        int maskMaxX = mask.getMaxX() + candidateRadius;
-                        int maskMinZ = mask.getMinZ() - candidateRadius;
-                        int maskMaxZ = mask.getMaxZ() + candidateRadius;
-                        
-                        // Check if candidate origin is within expanded mask zone
-                        if (candidateX >= maskMinX && candidateX <= maskMaxX &&
-                            candidateZ >= maskMinZ && candidateZ <= maskMaxZ) {
-                            overlaps = true;
-                            break;
-                        }
-                    }
-
+                    // Check collision with existing masks (including spacing buffer)
+                    boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
+                    
+                    // R011b: Rotation-aware collision detection implemented
                     
                     if (overlaps) {
                         continue;
@@ -577,6 +566,122 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         return Optional.empty();
+    }
+    
+    /**
+     * Compute rotated AABB bounds for a structure at given origin with specified rotation.
+     * Used for collision detection BEFORE actual placement.
+     * 
+     * @param origin Structure origin (SW corner, ground level)
+     * @param baseWidth Base structure width (X, before rotation)
+     * @param baseDepth Base structure depth (Z, before rotation)
+     * @param height Structure height (Y, unchanged by rotation)
+     * @param rotation Rotation in degrees (0, 90, 180, or 270)
+     * @return int[] {minX, maxX, minY, maxY, minZ, maxZ} - rotated AABB bounds
+     */
+    private int[] computeRotatedAABB(Location origin, int baseWidth, int baseDepth, int height, int rotation) {
+        int originX = origin.getBlockX();
+        int originY = origin.getBlockY();
+        int originZ = origin.getBlockZ();
+        
+        // Calculate the 8 corners of the bounding box in schematic space (origin at 0,0,0)
+        int[][] corners = new int[8][3];
+        int idx = 0;
+        for (int x : new int[]{0, baseWidth}) {
+            for (int y : new int[]{0, height}) {
+                for (int z : new int[]{0, baseDepth}) {
+                    corners[idx][0] = x;
+                    corners[idx][1] = y;
+                    corners[idx][2] = z;
+                    idx++;
+                }
+            }
+        }
+        
+        // Rotate each corner around origin (0,0,0) using Y-axis rotation matrix
+        int[][] rotatedCorners = new int[8][3];
+        for (int i = 0; i < 8; i++) {
+            int x = corners[i][0];
+            int y = corners[i][1];
+            int z = corners[i][2];
+            
+            // Apply Y-axis rotation (clockwise when viewed from above)
+            switch (rotation) {
+                case 0:
+                    rotatedCorners[i][0] = x;
+                    rotatedCorners[i][2] = z;
+                    break;
+                case 90:
+                    rotatedCorners[i][0] = -z;
+                    rotatedCorners[i][2] = x;
+                    break;
+                case 180:
+                    rotatedCorners[i][0] = -x;
+                    rotatedCorners[i][2] = -z;
+                    break;
+                case 270:
+                    rotatedCorners[i][0] = z;
+                    rotatedCorners[i][2] = -x;
+                    break;
+            }
+            rotatedCorners[i][1] = y; // Y unchanged
+        }
+        
+        // Find min/max of rotated corners
+        int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
+        int minRotY = Integer.MAX_VALUE, maxRotY = Integer.MIN_VALUE;
+        int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
+        
+        for (int i = 0; i < 8; i++) {
+            minRotX = Math.min(minRotX, rotatedCorners[i][0]);
+            maxRotX = Math.max(maxRotX, rotatedCorners[i][0]);
+            minRotY = Math.min(minRotY, rotatedCorners[i][1]);
+            maxRotY = Math.max(maxRotY, rotatedCorners[i][1]);
+            minRotZ = Math.min(minRotZ, rotatedCorners[i][2]);
+            maxRotZ = Math.max(maxRotZ, rotatedCorners[i][2]);
+        }
+        
+        // Translate to world coordinates
+        int minX = originX + minRotX;
+        int maxX = originX + maxRotX - 1; // -1 because size is exclusive
+        int minY = originY + minRotY;
+        int maxY = originY + maxRotY - 1;
+        int minZ = originZ + minRotZ;
+        int maxZ = originZ + maxRotZ - 1;
+        
+        return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+    }
+    
+    /**
+     * Check if a rotated AABB intersects with any existing volume mask (with buffer).
+     * 
+     * @param candidateAABB Candidate structure AABB bounds
+     * @param existingMasks List of existing volume masks
+     * @param buffer Spacing buffer to apply around existing masks
+     * @return true if collision detected, false otherwise
+     */
+    private boolean checkRotatedAABBCollision(int[] candidateAABB, List<VolumeMask> existingMasks, int buffer) {
+        int candMinX = candidateAABB[0];
+        int candMaxX = candidateAABB[1];
+        int candMinZ = candidateAABB[4];
+        int candMaxZ = candidateAABB[5];
+        
+        for (VolumeMask mask : existingMasks) {
+            // Expand mask by buffer
+            int maskMinX = mask.getMinX() - buffer;
+            int maskMaxX = mask.getMaxX() + buffer;
+            int maskMinZ = mask.getMinZ() - buffer;
+            int maskMaxZ = mask.getMaxZ() + buffer;
+            
+            // Check 2D XZ intersection (sufficient for building spacing)
+            boolean xOverlap = candMinX <= maskMaxX && candMaxX >= maskMinX;
+            boolean zOverlap = candMinZ <= maskMaxZ && candMaxZ >= maskMinZ;
+            
+            if (xOverlap && zOverlap) {
+                return true; // Collision detected
+            }
+        }
+        return false; // No collisions
     }
     
     /**

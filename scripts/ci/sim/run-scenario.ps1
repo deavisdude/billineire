@@ -617,14 +617,47 @@ if (!$serverProcess.HasExited) {
                 $response = Send-RconCommand -Password $rconPassword -Command $cmd
                 
                 if ($response) {
-                    Write-Host "  Response: $response" -ForegroundColor Gray
+                    # R011c: Parse concise summary format
+                    # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
+                    #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
                     
-                    if ($response -match "PASS") {
-                        Write-Host "  OK Persistence verification passed" -ForegroundColor Green
-                        $verifiedVillages++
+                    # Extract per-structure summaries (optional detail logging)
+                    $structureLines = $response -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    
+                    # Extract final summary
+                    $summaryLine = ($response -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    
+                    if ($summaryLine) {
+                        Write-Host "  $summaryLine" -ForegroundColor Gray
+                        
+                        if ($summaryLine -match 'PASS') {
+                            Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                            $verifiedVillages++
+                            
+                            # Show structure-level detail if any WARNs
+                            $warnStructures = $structureLines | Where-Object { $_ -match 'WARN' }
+                            if ($warnStructures) {
+                                Write-Host "    ! Structures with acceptable WARNs:" -ForegroundColor Yellow
+                                foreach ($warn in $warnStructures) {
+                                    Write-Host "      $warn" -ForegroundColor Yellow
+                                }
+                            }
+                        } else {
+                            Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                            $failedVillages++
+                            
+                            # Show structure-level failures
+                            $failStructures = $structureLines | Where-Object { $_ -match 'FAIL' }
+                            if ($failStructures) {
+                                Write-Host "    X Failed structures:" -ForegroundColor Red
+                                foreach ($fail in $failStructures) {
+                                    Write-Host "      $fail" -ForegroundColor Red
+                                }
+                            }
+                        }
                     } else {
-                        Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
-                        $failedVillages++
+                        Write-Host "  ! Could not parse verification summary" -ForegroundColor Yellow
+                        Write-Host "    Raw response: $response" -ForegroundColor Gray
                     }
                 } else {
                     Write-Host "  X No response from RCON" -ForegroundColor Red
@@ -675,14 +708,47 @@ if (!$serverProcess.HasExited) {
                 $response = Send-RconCommand -Password $rconPassword -Command $cmd
                 
                 if ($response) {
-                    Write-Host "  Response: $response" -ForegroundColor Gray
+                    # R011c: Parse concise summary format
+                    # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
+                    #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
                     
-                    if ($response -match "PASS") {
-                        Write-Host "  OK Persistence verification passed" -ForegroundColor Green
-                        $verifiedVillages++
+                    # Extract per-structure summaries (optional detail logging)
+                    $structureLines = $response -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    
+                    # Extract final summary
+                    $summaryLine = ($response -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    
+                    if ($summaryLine) {
+                        Write-Host "  $summaryLine" -ForegroundColor Gray
+                        
+                        if ($summaryLine -match 'PASS') {
+                            Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                            $verifiedVillages++
+                            
+                            # Show structure-level detail if any WARNs
+                            $warnStructures = $structureLines | Where-Object { $_ -match 'WARN' }
+                            if ($warnStructures) {
+                                Write-Host "    ! Structures with acceptable WARNs:" -ForegroundColor Yellow
+                                foreach ($warn in $warnStructures) {
+                                    Write-Host "      $warn" -ForegroundColor Yellow
+                                }
+                            }
+                        } else {
+                            Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                            $failedVillages++
+                            
+                            # Show structure-level failures
+                            $failStructures = $structureLines | Where-Object { $_ -match 'FAIL' }
+                            if ($failStructures) {
+                                Write-Host "    X Failed structures:" -ForegroundColor Red
+                                foreach ($fail in $failStructures) {
+                                    Write-Host "      $fail" -ForegroundColor Red
+                                }
+                            }
+                        }
                     } else {
-                        Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
-                        $failedVillages++
+                        Write-Host "  ! Could not parse verification summary" -ForegroundColor Yellow
+                        Write-Host "    Raw response: $response" -ForegroundColor Gray
                     }
                 } else {
                     Write-Host "  X No response from RCON" -ForegroundColor Red

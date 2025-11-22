@@ -309,7 +309,7 @@ public class TerraformingUtil {
         
         if (filledCount > 0) {
             LOGGER.info(String.format("[STRUCT] Filled %d gap blocks at %s (foundation layer solidified)", filledCount, origin));
-        }
+                    }
         
         return filledCount;
     }
@@ -341,6 +341,39 @@ public class TerraformingUtil {
     }
     
     /**
+     * Prepare site using exact AABB bounds from PlacementReceipt.
+     * This ensures terraforming operates on the same footprint that will be verified.
+     * 
+     * @param world Target world
+     * @param bounds Exact AABB bounds: {minX, maxX, minY, maxY, minZ, maxZ}
+     * @return true if site preparation succeeded within limits
+     */
+    public static boolean prepareSiteWithBounds(World world, int[] bounds) {
+        if (bounds.length != 6) {
+            throw new IllegalArgumentException("bounds must have 6 elements: minX, maxX, minY, maxY, minZ, maxZ");
+        }
+        
+        int minX = bounds[0];
+        int maxX = bounds[1];
+        int minY = bounds[2];
+        int maxY = bounds[3];
+        int minZ = bounds[4];
+        int maxZ = bounds[5];
+        
+        int width = maxX - minX + 1;
+        int depth = maxZ - minZ + 1;
+        int height = maxY - minY + 1;
+        
+        Location origin = new Location(world, minX, minY, minZ);
+        
+        LOGGER.fine(String.format("[STRUCT] prepareSiteWithBounds: bounds=(%d..%d, %d..%d, %d..%d) dims=%dx%dx%d",
+                minX, maxX, minY, maxY, minZ, maxZ, width, height, depth));
+        
+        // Delegate to existing prepareSite implementation
+        return prepareSiteImpl(world, origin, width, depth, height);
+    }
+    
+    /**
      * Attempt to prepare a site with minimal terraforming.
      * Combines vegetation trimming and light grading.
      * For very large structures (>30x30), skip grading but ALWAYS fill foundation gaps.
@@ -353,6 +386,13 @@ public class TerraformingUtil {
      * @return true if site preparation succeeded within limits
      */
     public static boolean prepareSite(World world, Location origin, int width, int depth, int height) {
+        return prepareSiteImpl(world, origin, width, depth, height);
+    }
+    
+    /**
+     * Internal implementation of site preparation.
+     */
+    private static boolean prepareSiteImpl(World world, Location origin, int width, int depth, int height) {
         int footprintArea = width * depth;
         boolean isLargeStructure = footprintArea > LARGE_STRUCTURE_THRESHOLD;
         int maxBlocks = isLargeStructure ? MAX_TERRAFORM_BLOCKS_LARGE : MAX_TERRAFORM_BLOCKS;

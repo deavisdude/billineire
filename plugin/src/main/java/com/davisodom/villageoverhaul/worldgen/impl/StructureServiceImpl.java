@@ -248,7 +248,8 @@ public class StructureServiceImpl implements StructureService {
         int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
         // Attempt placement with re-seating logic and get actual location
-        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed);
+        // For legacy method (no receipt), pass null for existingMasks
+        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed, null);
         
         if (actualLocation.isPresent()) {
             PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
@@ -264,7 +265,8 @@ public class StructureServiceImpl implements StructureService {
     
     @Override
     public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
-            String structureId, World world, Location origin, long seed, UUID villageId) {
+            String structureId, World world, Location origin, long seed, UUID villageId,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks) {
         StructureTemplate template = loadedStructures.get(structureId);
         
         if (template == null) {
@@ -279,8 +281,8 @@ public class StructureServiceImpl implements StructureService {
         Random random = new Random(seed);
         int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
-        // Attempt placement with re-seating logic and get actual location
-        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed);
+        // R011b: Attempt placement with re-seating logic and pass existingMasks for collision detection
+        Optional<Location> actualLocation = attemptPlacementWithReseatingAndGetLocation(template, world, origin, seed, existingMasks);
         
         if (!actualLocation.isPresent()) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, attempts=%d, reason=no_valid_site",
@@ -355,9 +357,12 @@ public class StructureServiceImpl implements StructureService {
     /**
      * Attempt placement with re-seating logic, returning the actual placed location.
      * Tries initial location, then searches nearby if validation fails.
+     * R011b: Enhanced with existingMasks for pre-placement collision detection.
      * @return Optional containing the actual placed location, empty if all attempts failed
      */
-    private Optional<Location> attemptPlacementWithReseatingAndGetLocation(StructureTemplate template, World world, Location origin, long seed) {
+    private Optional<Location> attemptPlacementWithReseatingAndGetLocation(
+            StructureTemplate template, World world, Location origin, long seed,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks) {
         Random random = new Random(seed);
         
         for (int attempt = 0; attempt < MAX_RESEAT_ATTEMPTS; attempt++) {
@@ -390,16 +395,34 @@ public class StructureServiceImpl implements StructureService {
                 continue; // Try next re-seat attempt
             }
             
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, preparing site");
+            LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, computing AABB for terraforming");
             
-            // Prepare site with terraforming BEFORE placement
-            boolean terraformed = TerraformingUtil.prepareSite(
-                    world,
-                    currentOrigin,
-                    template.dimensions[0],
-                    template.dimensions[2],
-                    template.dimensions[1]
-            );
+            // Compute exact AABB BEFORE terraforming to ensure alignment with PlacementReceipt
+            Random rotRandom = new Random(seed);
+            int rotationDegrees = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
+            
+            int baseWidth = template.dimensions[0];
+            int baseDepth = template.dimensions[2];
+            int height = template.dimensions[1];
+            
+            int[] bounds = computeAABB(currentOrigin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
+            
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Computed AABB for terraforming: bounds=(%d..%d, %d..%d, %d..%d) rot=%d°",
+                    bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], rotationDegrees));
+            
+            // R011b: Check collision with existing masks BEFORE terraforming
+            if (existingMasks != null && !existingMasks.isEmpty()) {
+                int minBuildingSpacing = 10; // Default spacing from config
+                boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
+                if (hasCollision) {
+                    LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: collision with existing structure (rotation-aware check)",
+                            attempt + 1));
+                    continue; // Try next re-seat attempt WITHOUT wasting placement
+                }
+            }
+            
+            // Prepare site with terraforming using exact AABB BEFORE placement
+            boolean terraformed = TerraformingUtil.prepareSiteWithBounds(world, bounds);
             
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
             
@@ -1431,5 +1454,36 @@ public class StructureServiceImpl implements StructureService {
                 template.id, formatLocation(entranceLoc), rotation, offset, facing));
         
         return entranceLoc;
+    }
+    
+    /**
+     * Check if an AABB collides with any existing VolumeMasks (with spacing buffer).
+     * R011b: Pre-placement collision detection to prevent wasted placements.
+     * 
+     * @param bounds AABB bounds {minX, maxX, minY, maxY, minZ, maxZ}
+     * @param existingMasks List of existing VolumeMasks to check against
+     * @param spacingBuffer Minimum spacing distance between structures
+     * @return true if collision detected, false if clear
+     */
+    private boolean checkAABBCollision(int[] bounds, java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks, int spacingBuffer) {
+        for (com.davisodom.villageoverhaul.model.VolumeMask mask : existingMasks) {
+            // Expand existing mask with spacing buffer
+            com.davisodom.villageoverhaul.model.VolumeMask expandedMask = mask.expand(spacingBuffer);
+            
+            // Check AABB intersection
+            // Two AABBs intersect if they overlap on ALL three axes
+            boolean xOverlap = bounds[0] <= expandedMask.getMaxX() && bounds[1] >= expandedMask.getMinX();
+            boolean yOverlap = bounds[2] <= expandedMask.getMaxY() && bounds[3] >= expandedMask.getMinY();
+            boolean zOverlap = bounds[4] <= expandedMask.getMaxZ() && bounds[5] >= expandedMask.getMinZ();
+            
+            if (xOverlap && yOverlap && zOverlap) {
+                LOGGER.fine(String.format("[STRUCT] Collision detected: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing)",
+                        bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+                        mask.getStructureId(), spacingBuffer));
+                return true;
+            }
+        }
+        
+        return false;
     }
 }

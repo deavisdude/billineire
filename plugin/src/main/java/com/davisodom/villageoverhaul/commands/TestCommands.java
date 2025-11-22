@@ -769,6 +769,13 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         int totalChecks = 0;
         int failedChecks = 0;
         
+        // R011c: Categorized failure tracking
+        int cornerFailures = 0;
+        int perimeterFailures = 0;
+        int outsideMaskFailures = 0;
+        int pathMaskFailures = 0;
+        int structuresChecked = 0;
+        
         // Visuals: Particles at corners and entrances
         for (com.davisodom.villageoverhaul.model.PlacementReceipt receipt : receipts) {
             org.bukkit.World world = Bukkit.getWorld(receipt.getWorldName());
@@ -792,6 +799,11 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // Logic checks: VolumeMasks
         Random random = new Random();
         for (com.davisodom.villageoverhaul.model.VolumeMask mask : masks) {
+            structuresChecked++;
+            int structureCornerFailures = 0;
+            int structurePerimeterFailures = 0;
+            int structureOutsideFailures = 0;
+            
             // Need world to check blocks. Mask doesn't store world name, but Receipt does.
             // Assuming all in same world or we can find it.
             Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt = 
@@ -811,6 +823,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             };
             
             int airCorners = 0;
+            int solidCorners = 0;
             for (int[] corner : foundationCorners) {
                 totalChecks++;
                 org.bukkit.block.Block block = world.getBlockAt(corner[0], corner[1], corner[2]);
@@ -819,14 +832,12 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     if (airCorners > 1) {
                         // Multiple AIR corners = critical failure
                         failedChecks++;
-                        sender.sendMessage(String.format("§cFAIL: Foundation corner at %d,%d,%d is AIR (corner %d/4)", 
-                            corner[0], corner[1], corner[2], airCorners));
+                        cornerFailures++;
+                        structureCornerFailures++;
                         allPass = false;
-                    } else {
-                        // Single AIR corner = acceptable edge case (log as warning, not failure)
-                        sender.sendMessage(String.format("§eWARN: Foundation corner at %d,%d,%d is AIR (acceptable: 1/4 corners at terrain edge)", 
-                            corner[0], corner[1], corner[2]));
                     }
+                } else {
+                    solidCorners++;
                 }
             }
             
@@ -855,8 +866,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 org.bukkit.block.Block block = world.getBlockAt(x, mask.getMinY(), z);
                 if (block.getType().isAir()) {
                     failedChecks++;
-                    sender.sendMessage(String.format("§cFAIL: Foundation perimeter at %d,%d,%d is AIR", 
-                        x, mask.getMinY(), z));
+                    perimeterFailures++;
+                    structurePerimeterFailures++;
                     allPass = false;
                 }
             }
@@ -878,10 +889,24 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 totalChecks++;
                 if (mask.contains(x, y, z)) {
                     failedChecks++;
-                    sender.sendMessage(String.format("§cFAIL: Point %d,%d,%d is INSIDE mask (should be outside)", x, y, z));
+                    outsideMaskFailures++;
+                    structureOutsideFailures++;
                     allPass = false;
                 }
             }
+            
+            // R011c: Per-structure summary line
+            String structureStatus;
+            if (structureCornerFailures > 1) {
+                structureStatus = "§cFAIL";
+            } else if (structureCornerFailures == 1 || structurePerimeterFailures > 0 || structureOutsideFailures > 0) {
+                structureStatus = structureCornerFailures == 1 ? "§eWARN" : "§cFAIL";
+            } else {
+                structureStatus = "§aPASS";
+            }
+            
+            sender.sendMessage(String.format("  Structure %s: %s (corners=%d, perimeter=%d, outside=%d)",
+                mask.getStructureId(), structureStatus, structureCornerFailures, structurePerimeterFailures, structureOutsideFailures));
         }
         
         // 3. Check paths against masks (R010)
@@ -894,11 +919,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     for (com.davisodom.villageoverhaul.model.VolumeMask mask : masks) {
                         if (mask.contains(block.getX(), block.getY(), block.getZ())) {
                             failedChecks++;
-                            sender.sendMessage(String.format("§cFAIL: Path block at %d,%d,%d is INSIDE mask %s", 
-                                block.getX(), block.getY(), block.getZ(), mask.getStructureId()));
+                            pathMaskFailures++;
                             allPass = false;
-                            // Don't break, check all masks? Or break to avoid double counting?
-                            // Break inner loop (masks) for this block
+                            // Break inner loop (masks) for this block to avoid double counting
                             break; 
                         }
                     }
@@ -906,11 +929,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             }
         }
         
+        // R011c: Concise summary with categorized failures
         if (allPass) {
-            sender.sendMessage("§aPASS: All persistence checks passed (" + totalChecks + " checks)");
+            sender.sendMessage(String.format("§aPASS: All persistence checks passed (%d checks, %d structures)", 
+                totalChecks, structuresChecked));
         } else {
-            sender.sendMessage("§cFAIL: " + failedChecks + "/" + totalChecks + " checks failed");
-            sender.sendMessage("§7Note: Single AIR corners (1/4) are acceptable for rotated structures at terrain edges");
+            sender.sendMessage(String.format("§cFAIL: %d/%d checks failed (corner=%d, perimeter=%d, outside-mask=%d, path=%d)",
+                failedChecks, totalChecks, cornerFailures, perimeterFailures, outsideMaskFailures, pathMaskFailures));
+            if (cornerFailures > 0) {
+                sender.sendMessage("§7Benign edge case: Single AIR corners (1/4) show as WARN, not FAIL");
+            }
         }
         
         return true;

@@ -1035,42 +1035,111 @@ Send-RconCommand -Password "test123" -Command "/votest verify-persistence <villa
 # /votest verify-persistence <villageId>
 ```
 
-Checklist (operator):
+### Output Interpretation (R011c)
+
+The `/votest verify-persistence` command provides concise diagnostics with categorized failure types:
+
+**Per-Structure Summary Format:**
+```text
+Structure <id>: PASS|WARN|FAIL (corners=N, perimeter=N, outside=N)
+```
+
+**Status Classifications:**
+- **PASS** (§a green): All checks passed for this structure
+- **WARN** (§e yellow): Single AIR corner detected (acceptable edge case)
+- **FAIL** (§c red): Multiple AIR corners, perimeter defects, or boundary violations
+
+**Final Summary Format:**
+```text
+PASS: All persistence checks passed (N checks, M structures)
+ OR
+FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)
+```
+
+**Failure Categories:**
+- `corner`: Foundation corners (y=minY) at structure AABB corners
+- `perimeter`: Foundation perimeter samples along AABB edges (y=minY)
+- `outside-mask`: Points just outside mask boundaries incorrectly contained
+- `path`: Path blocks incorrectly placed inside structure volumes
+
+### WARN vs FAIL Guidance
+
+**WARN (acceptable, does NOT cause test failure):**
+- **Single AIR corner (1/4)**: Rotated structures may overhang terrain edges at cliff/slope boundaries
+  - Example: `Structure market_roman_stall: WARN (corners=1, perimeter=0, outside=0)`
+  - Action: Visual inspection recommended; verify walls are grounded and interior is stable
+  - Edge cases: Natural terrain transitions, river banks, hillside placements
+
+**FAIL (critical, MUST fix):**
+- **Multiple AIR corners (2+/4)**: Indicates structural instability or terraforming failure
+  - Example: `Structure villa_romana: FAIL (corners=3, perimeter=0, outside=0)`
+  - Root cause: Inadequate foundation preparation or rotation-aware footprint mismatch
+  - Action: Check `[STRUCT][RECEIPT]` logs for placement coordinates; verify terraforming aligned with rotated AABB
+
+- **Perimeter defects**: Foundation edges have AIR blocks where solid ground expected
+  - Example: `Structure forum: FAIL (corners=0, perimeter=5, outside=0)`
+  - Root cause: Site preparation missed edge cases or gap-filling failed
+  - Action: Review TerraformingUtil logs; verify `prepareSiteWithBounds()` operated on correct AABB
+
+- **Boundary violations**: Points outside mask incorrectly contained
+  - Example: `Structure bathhouse: FAIL (corners=0, perimeter=0, outside=12)`
+  - Root cause: VolumeMask bounds mismatch with PlacementReceipt AABB
+  - Action: Check VolumeMask creation logic; verify `fromReceipt()` uses identical bounds
+
+- **Path intersections**: Path blocks placed inside structure volumes
+  - Example: Final summary shows `path=8`
+  - Root cause: Pathfinding did not respect VolumeMask obstacles or SurfaceSolver failed to exclude structure blocks
+  - Action: Review PathServiceImpl obstacle detection; verify WalkableGraph construction excludes masked volumes
+
+### Checklist (operator)
+
 - [ ] Obtain the village id from generation logs (`[STRUCT] User-triggered village generation:` or harness output)
 - [ ] Run `/votest verify-persistence <villageId>` and capture the resulting log (`test-server\logs\verify-<villageId>.log`)
-- [ ] Confirm command output contains a PASS line: `PASS: All persistence checks passed` (or explicit FAIL with coordinates)
-- [ ] If WARN appears for single AIR corner (1/4): acceptable, cross-check with placement `[STRUCT][RECEIPT] WARNING` log
-- [ ] Inspect `[STRUCT][RECEIPT]` lines in `test-server/logs/server.log` for bounds and corner samples
+- [ ] Review per-structure summary lines:
+  - [ ] All PASS → proceed to final summary
+  - [ ] WARN (single corner only) → note in playtest report, visual inspection recommended
+  - [ ] FAIL (multiple corners, perimeter, outside, or path) → critical defect, stop and report
+- [ ] Review final summary:
+  - [ ] PASS → mark checklist complete, archive verification log
+  - [ ] FAIL → collect artifacts (see below) and create ticket
+- [ ] If WARN or FAIL, inspect `[STRUCT][RECEIPT]` lines in `test-server/logs/server.log` for bounds and corner samples
 - [ ] In-game / via RCON verify particle markers at AABB corners and entrance coordinates reported by the command
-- [ ] If any failure, capture these artifacts and include with bug report:
+- [ ] If any critical failure (FAIL status), capture these artifacts and include with bug report:
   - `test-server/logs/verify-<villageId>.log` (verify command output)
   - `test-server/logs/server.log` (plugin logs including `[STRUCT][RECEIPT]` and `[PATH]` lines)
   - `plugin/config/metadata-store.json` or `test-server/plugins/VillageMetadataStore.json` (persisted receipts/volumemasks if present)
   - Screenshot(s) of in-game markers and failing coordinates
-- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
-- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
-- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
+  - Short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
 
-What to look for (quick reference):
-- Expected PASS output (good): `PASS: All persistence checks passed (N checks)`
-- Warning (acceptable): `WARN: Foundation corner at (x,y,z) is AIR (acceptable: 1/4 corners at terrain edge)` - still results in PASS
-- Critical failure: `FAIL: Foundation corner at (x,y,z) is AIR (corner 2/4)` - multiple AIR corners indicate structural instability
-- Other failures: `FAIL: point (x,y,z) unexpectedly inside VolumeMask` or `FAIL: Path block at (x,y,z) is INSIDE mask`
-- Receipt log line to correlate: `[STRUCT][RECEIPT] village=<uuid> structure=<id> bounds=[minX..maxX,minY..maxY,minZ..maxZ] rotation=<deg>`
+### Known Benign Edge Cases (WARN tolerances)
 
-**Known Edge Cases** (tolerable with manual inspection):
 - **Single AIR corner at terrain edge** (1/4 corners): Structure may extend slightly beyond solid ground at cliff/slope boundaries after rotation. This is acceptable if:
   - Only ONE corner is AIR (3/4 solid)
-  - The AIR corner matches a `[STRUCT][RECEIPT] WARNING` during placement (not a new failure)
+  - Per-structure summary shows `WARN` (not `FAIL`)
   - Visual inspection confirms structure is stable (not floating, walls grounded)
   - Example: `market_roman_stall` at (-16,67,-104) with NE corner (1,67,-117)=AIR is acceptable if walls/interior are solid
 - **Action**: Screenshot the placement, verify walls are grounded, note in artifact that 1 corner overhang is expected for rotated structures near terrain transitions
 
-Reporting guideline:
-- If PASS (with or without single-corner WARN): mark checklist complete and archive `verify-<villageId>.log` alongside run artifacts.
-- If FAIL (multiple AIR corners indicated by "corner 2/4" or higher): create a ticket with the artifacts above, include the exact failure coordinates and the matching `[STRUCT][RECEIPT]` line, and tag `worldgen` and `qa`.
-- If FAIL (path inside structure or points outside mask are inside): critical violation, create ticket immediately.
+### Reporting guideline
 
-Notes:
+- **If PASS (with or without single-corner WARN)**: Mark checklist complete and archive `verify-<villageId>.log` alongside run artifacts.
+- **If FAIL (multiple AIR corners indicated by "corner=2" or higher)**: Create a ticket with the artifacts above, include the exact failure coordinates and the matching `[STRUCT][RECEIPT]` line, and tag `worldgen` and `qa`.
+- **If FAIL (path inside structure or points outside mask are inside)**: Critical violation, create ticket immediately with `priority:P0` tag.
+
+### Quick Reference Commands
+
+Extract receipts from logs:
+```powershell
+Select-String '\[STRUCT\]\[RECEIPT\]' test-server\logs\server.log
+```
+
+Parse verification results:
+```powershell
+Select-String '(PASS|FAIL|WARN):' test-server\logs\verify-<villageId>.log
+```
+
+### Notes
+
 - Use `Select-String '\[STRUCT\]\[RECEIPT\]' test-server\logs\server.log` to extract receipts quickly.
 - The harness (`scripts/ci/sim/run-scenario.ps1`) will automatically invoke `/votest verify-persistence` when R010 is enabled; use this checklist for manual playtests and post-failure triage.
+- Single-corner WARNs do NOT cause CI test failure; only multi-corner FAILs or perimeter/boundary/path defects trigger test failures.

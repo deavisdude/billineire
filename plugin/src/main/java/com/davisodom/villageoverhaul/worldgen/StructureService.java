@@ -71,16 +71,19 @@ public interface StructureService {
     /**
      * Place structure and return a PlacementReceipt with canonical transform and proof.
      * This is the R001 implementation that replaces ambiguous logs with ground-truth data.
+     * R011b: Enhanced with pre-placement collision detection to prevent wasted placements.
      * 
      * @param structureId Structure ID to place
      * @param world Target world
      * @param origin Initial placement origin
      * @param seed Deterministic seed
      * @param villageId Village ID for receipt
+     * @param existingMasks List of existing VolumeMasks to check for collisions (can be null/empty)
      * @return Optional PlacementReceipt with exact bounds and corner samples
      */
     Optional<PlacementReceipt> placeStructureAndGetReceipt(
-            String structureId, World world, Location origin, long seed, UUID villageId);
+            String structureId, World world, Location origin, long seed, UUID villageId,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks);
     
     /**
      * Get the dimensions of a loaded structure.
