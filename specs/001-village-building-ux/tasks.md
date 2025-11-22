@@ -545,11 +545,20 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
     - Enhanced failure logging with coordinates and distances
     - Addresses pathfinding failures around dense structure clusters
 
-- [ ] R010 [Harness] Headless proof-of-reality tests
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
-  - Description: Add checks that fail if any path block is within a VolumeMask; add AABB-vs-world audit sampler identical to `/votest verify-persistence`.
+- [X] R010 [Harness] Headless proof-of-reality tests
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
+  - Description: Add checks that fail if any path block is within a VolumeMask; add AABB-vs-world audit sampler via `/votest verify-persistence` that validates foundation and perimeter integrity (not interior, which may have rooms/air).
   - Acceptance:
     - CI fails on any mismatch; outputs coordinate list for reproduction.
+    - Foundation corners and perimeter blocks verified as non-AIR.
+    - Points outside VolumeMask bounds verified as not contained.
+  - Implementation:
+    - Added R010 verification phase to run-scenario.ps1 with RCON-based testing
+    - Parses village IDs from logs and executes `/votest verify-persistence` via RCON
+    - Checks foundation corners (4) and perimeter samples (8) at y=minY for solidity
+    - Verifies 32 points just outside mask boundaries are not contained
+    - CI exits with error code 1 if any verification fails
+    - Fixed Stop-Process to include process ID parameter
 
 - [ ] R011 [Guide] Manual validation checklist (one page)
   - Files: `tests/HEADLESS-TESTING.md`

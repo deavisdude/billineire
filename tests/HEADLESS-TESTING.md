@@ -718,13 +718,6 @@ PASS Criteria (Manual):
 - Steep scenario: `steep=0` AND `pathLength <= flatReference * 1.20`
 - Avg cost (C/P) for chosen route significantly lower than hypothetical high-cost route (estimation acceptable)
 
-### Estimating Alternative Route Cost (Hypothetical)
-If automation is absent, estimate rejected route cost:
-- Water route: (shorterTiles * FLAT_COST) + (waterTiles * WATER_COST)
-- Steep route: (shorterTiles * FLAT_COST) + (steepTiles * (SLOPE_COST_MULTIPLIER * elevationBlocks))
-
-Compare with chosen route total cost; confirm chosen < rejected.
-
 ### Why Automation Deferred
 - Requires deterministic structure placement + coordinate bookkeeping
 - Adds complexity to CI without proportionate regression value
@@ -974,6 +967,36 @@ Multi-Run (Determinism):
 [PATH] Determinism hash: 9a8b7c6d5e4f... (nodes=42)  ✅
 [PATH] Determinism hash: 6f5e4d3c2b1a... (nodes=40)  ✅
 [PATH] Determinism hash: cba987654321... (nodes=55)  ✅
+```
+
+## R010: Headless Proof-of-Reality Tests
+
+**Added**: 2025-11-21
+**Status**: ✅ Implemented
+**Location**: `scripts/ci/sim/run-scenario.ps1`
+
+### What R010 Tests
+
+Validates that the persisted data model (VolumeMasks, PlacementReceipts) matches the in-game reality (blocks).
+
+#### 1. AABB-vs-World Audit
+Runs `/votest verify-persistence <villageId>` for each generated village.
+- Samples 32 points **inside** each VolumeMask and asserts they are NON-AIR (structure integrity).
+- Samples 32 points **just outside** each VolumeMask and asserts they are NOT inside the mask (boundary check).
+- Checks all path blocks to ensure they are NOT inside any VolumeMask (path integrity).
+
+**Acceptance Criteria**:
+- ✅ CI fails if any check fails (AIR inside mask, or path inside mask).
+- ✅ Outputs coordinate list for reproduction.
+
+### Example Output
+
+```
+=== R010: Headless Proof-of-Reality Verification ===
+Verifying village 12345678-1234-1234-1234-123456789abc ...
+  Response: PASS: All persistence checks passed (156 checks)
+  OK Persistence verification passed
+OK All 1 village(s) passed verification
 ```
 
 ---

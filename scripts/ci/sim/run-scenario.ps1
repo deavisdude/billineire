@@ -205,6 +205,10 @@ Write-Host "Ticks: $Ticks" -ForegroundColor White
 Write-Host "Seed: $Seed" -ForegroundColor White
 Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
+# Enable RCON for verification (R010)
+Import-Module "$PSScriptRoot/BotPlayer.psm1" -ErrorAction Stop
+$rconPassword = Enable-Rcon -ServerDir $ServerDir
+
 # Heuristic: user may have passed an unquoted JavaPath into the first positional parameter (ServerDir)
 # e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
 # Only apply this on Windows where Program Files exists
@@ -582,15 +586,127 @@ while ($elapsed -lt $totalWaitSeconds) {
     Write-Host "  Simulation progress: $([Math]::Floor($elapsed))/$totalWaitSeconds seconds" -ForegroundColor DarkGray
 }
 
+# R010: Run verification commands via RCON
+if (!$serverProcess.HasExited) {
+    Write-Host ""
+    Write-Host "=== R010: Headless Proof-of-Reality Verification ===" -ForegroundColor Cyan
+    
+    # Find village IDs from logs
+    if (Test-Path "$ServerDir/server.log") {
+        $logContent = Get-Content "$ServerDir/server.log" -Raw
+        $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
+        $villageMatches = [regex]::Matches($logContent, $villagePattern)
+        
+        $uniqueVillages = @{}
+        foreach ($match in $villageMatches) {
+            $vId = $match.Groups[1].Value
+            $uniqueVillages[$vId] = $true
+        }
+        
+        if ($uniqueVillages.Count -eq 0) {
+            Write-Host "! No villages registered, skipping verification" -ForegroundColor Yellow
+        } else {
+            $verifiedVillages = 0
+            $failedVillages = 0
+            
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "Verifying village $vId ..." -ForegroundColor White
+                
+                # Run verify-persistence
+                $cmd = "votest verify-persistence $vId"
+                $response = Send-RconCommand -Password $rconPassword -Command $cmd
+                
+                if ($response) {
+                    Write-Host "  Response: $response" -ForegroundColor Gray
+                    
+                    if ($response -match "PASS") {
+                        Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                        $verifiedVillages++
+                    } else {
+                        Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                        $failedVillages++
+                    }
+                } else {
+                    Write-Host "  X No response from RCON" -ForegroundColor Red
+                    $failedVillages++
+                }
+                
+                Start-Sleep -Seconds 1
+            }
+            
+            if ($failedVillages -gt 0) {
+                Write-Host "X Verification failed for $failedVillages village(s)" -ForegroundColor Red
+                $verificationFailed = $true
+            } else {
+                Write-Host "OK All $verifiedVillages village(s) passed verification" -ForegroundColor Green
+            }
+        }
+    }
+}
+
+# R010: Run verification commands via RCON
+if (!$serverProcess.HasExited) {
+    Write-Host ""
+    Write-Host "=== R010: Headless Proof-of-Reality Verification ===" -ForegroundColor Cyan
+    
+    # Find village IDs from logs
+    if (Test-Path "$ServerDir/server.log") {
+        $logContent = Get-Content "$ServerDir/server.log" -Raw
+        $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
+        $villageMatches = [regex]::Matches($logContent, $villagePattern)
+        
+        $uniqueVillages = @{}
+        foreach ($match in $villageMatches) {
+            $vId = $match.Groups[1].Value
+            $uniqueVillages[$vId] = $true
+        }
+        
+        if ($uniqueVillages.Count -eq 0) {
+            Write-Host "! No villages registered, skipping verification" -ForegroundColor Yellow
+        } else {
+            $verifiedVillages = 0
+            $failedVillages = 0
+            
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "Verifying village $vId ..." -ForegroundColor White
+                
+                # Run verify-persistence
+                $cmd = "votest verify-persistence $vId"
+                $response = Send-RconCommand -Password $rconPassword -Command $cmd
+                
+                if ($response) {
+                    Write-Host "  Response: $response" -ForegroundColor Gray
+                    
+                    if ($response -match "PASS") {
+                        Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                        $verifiedVillages++
+                    } else {
+                        Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                        $failedVillages++
+                    }
+                } else {
+                    Write-Host "  X No response from RCON" -ForegroundColor Red
+                    $failedVillages++
+                }
+                
+                Start-Sleep -Seconds 1
+            }
+            
+            if ($failedVillages -gt 0) {
+                Write-Host "X Verification failed for $failedVillages village(s)" -ForegroundColor Red
+                $verificationFailed = $true
+            } else {
+                Write-Host "OK All $verifiedVillages village(s) passed verification" -ForegroundColor Green
+            }
+        }
+    }
+}
+
 # Check if server is still running
 if (!$serverProcess.HasExited) {
     Write-Host "Stopping server gracefully..." -ForegroundColor Yellow
-    # Send stop command via stdin (requires RCON or screen, so just kill for now)
-    Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 5
+    Stop-Process -Id $serverProcess.Id -Force
 }
-
-Write-Host "OK Server ran for approximately $Ticks ticks without crashing" -ForegroundColor Green
 
 # Parse [STRUCT] logs for structure placement validation
 if (Test-Path "$ServerDir/server.log") {
@@ -1118,3 +1234,8 @@ if (Test-Path "$ServerDir/server.log") {
 
 Write-Host ""
 Write-Host "Note: Village systems in active development" -ForegroundColor Yellow
+
+if ($verificationFailed) {
+    Write-Host "X R010 Verification failed" -ForegroundColor Red
+    exit 1
+}
