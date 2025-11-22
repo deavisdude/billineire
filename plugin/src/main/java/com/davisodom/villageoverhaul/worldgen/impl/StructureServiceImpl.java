@@ -393,7 +393,6 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, preparing site");
             
             // Prepare site with terraforming BEFORE placement
-            // Once validation passes, we're committed to this site
             boolean terraformed = TerraformingUtil.prepareSite(
                     world,
                     currentOrigin,
@@ -404,8 +403,15 @@ public class StructureServiceImpl implements StructureService {
             
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
             
+            // CRITICAL: If terraforming fails (fluid detected), abort this placement attempt
+            if (!terraformed) {
+                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Seat rejected at attempt %d: terraforming failed (likely fluid detected during site prep)",
+                        attempt + 1));
+                continue; // Try next re-seat attempt
+            }
+            
             // Site prepared - perform actual placement
-            // After terraforming, placement MUST succeed (already committed to this site)
+            // After successful terraforming, placement MUST succeed (already committed to this site)
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
                     template.id, formatLocation(currentOrigin)));
             boolean placed = performActualPlacement(template, world, currentOrigin, seed);

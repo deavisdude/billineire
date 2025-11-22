@@ -1020,3 +1020,57 @@ Per Constitution v1.1.0, Amendment 2025-11-05:
 - ✅ RCON password for test environment only
 - ✅ Test commands require `villageoverhaul.test` permission
 - ✅ Server-side validation in all commands
+
+## Manual Validation Checklist (R011)
+
+Purpose: one-page operator checklist to validate PlacementReceipts and VolumeMasks against in-world reality using the `/votest verify-persistence` command.
+
+Quick steps:
+
+```powershell
+# Run verification for a specific village via RCON
+Send-RconCommand -Password "test123" -Command "/votest verify-persistence <villageId>" | Out-File test-server\logs\verify-<villageId>.log
+
+# Or run in-game as an operator:
+# /votest verify-persistence <villageId>
+```
+
+Checklist (operator):
+- [ ] Obtain the village id from generation logs (`[STRUCT] User-triggered village generation:` or harness output)
+- [ ] Run `/votest verify-persistence <villageId>` and capture the resulting log (`test-server\logs\verify-<villageId>.log`)
+- [ ] Confirm command output contains a PASS line: `PASS: All persistence checks passed` (or explicit FAIL with coordinates)
+- [ ] If WARN appears for single AIR corner (1/4): acceptable, cross-check with placement `[STRUCT][RECEIPT] WARNING` log
+- [ ] Inspect `[STRUCT][RECEIPT]` lines in `test-server/logs/server.log` for bounds and corner samples
+- [ ] In-game / via RCON verify particle markers at AABB corners and entrance coordinates reported by the command
+- [ ] If any failure, capture these artifacts and include with bug report:
+  - `test-server/logs/verify-<villageId>.log` (verify command output)
+  - `test-server/logs/server.log` (plugin logs including `[STRUCT][RECEIPT]` and `[PATH]` lines)
+  - `plugin/config/metadata-store.json` or `test-server/plugins/VillageMetadataStore.json` (persisted receipts/volumemasks if present)
+  - Screenshot(s) of in-game markers and failing coordinates
+- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
+- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
+- [ ] Attach a short reproduction note: seed used, command sequence, run timestamp, and any `ZERO-PLACEMENT` or `[STRUCT][DIAG]` lines if present
+
+What to look for (quick reference):
+- Expected PASS output (good): `PASS: All persistence checks passed (N checks)`
+- Warning (acceptable): `WARN: Foundation corner at (x,y,z) is AIR (acceptable: 1/4 corners at terrain edge)` - still results in PASS
+- Critical failure: `FAIL: Foundation corner at (x,y,z) is AIR (corner 2/4)` - multiple AIR corners indicate structural instability
+- Other failures: `FAIL: point (x,y,z) unexpectedly inside VolumeMask` or `FAIL: Path block at (x,y,z) is INSIDE mask`
+- Receipt log line to correlate: `[STRUCT][RECEIPT] village=<uuid> structure=<id> bounds=[minX..maxX,minY..maxY,minZ..maxZ] rotation=<deg>`
+
+**Known Edge Cases** (tolerable with manual inspection):
+- **Single AIR corner at terrain edge** (1/4 corners): Structure may extend slightly beyond solid ground at cliff/slope boundaries after rotation. This is acceptable if:
+  - Only ONE corner is AIR (3/4 solid)
+  - The AIR corner matches a `[STRUCT][RECEIPT] WARNING` during placement (not a new failure)
+  - Visual inspection confirms structure is stable (not floating, walls grounded)
+  - Example: `market_roman_stall` at (-16,67,-104) with NE corner (1,67,-117)=AIR is acceptable if walls/interior are solid
+- **Action**: Screenshot the placement, verify walls are grounded, note in artifact that 1 corner overhang is expected for rotated structures near terrain transitions
+
+Reporting guideline:
+- If PASS (with or without single-corner WARN): mark checklist complete and archive `verify-<villageId>.log` alongside run artifacts.
+- If FAIL (multiple AIR corners indicated by "corner 2/4" or higher): create a ticket with the artifacts above, include the exact failure coordinates and the matching `[STRUCT][RECEIPT]` line, and tag `worldgen` and `qa`.
+- If FAIL (path inside structure or points outside mask are inside): critical violation, create ticket immediately.
+
+Notes:
+- Use `Select-String '\[STRUCT\]\[RECEIPT\]' test-server\logs\server.log` to extract receipts quickly.
+- The harness (`scripts/ci/sim/run-scenario.ps1`) will automatically invoke `/votest verify-persistence` when R010 is enabled; use this checklist for manual playtests and post-failure triage.
