@@ -81,9 +81,10 @@ public interface StructureService {
      * @param existingMasks List of existing VolumeMasks to check for collisions (can be null/empty)
      * @return Optional PlacementReceipt with exact bounds and corner samples
      */
-    Optional<PlacementReceipt> placeStructureAndGetReceipt(
+        Optional<PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId,
-            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks);
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            java.util.Map<String, Integer> attemptDiagnostics);
     
     /**
      * Get the dimensions of a loaded structure.

@@ -249,7 +249,7 @@ public class StructureServiceImpl implements StructureService {
         
         // Single placement attempt (no re-seating, no collision check for legacy path)
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-                template, world, origin, seed, null, rotationDegrees);
+            template, world, origin, seed, null, rotationDegrees, null);
         
         if (actualLocation.isPresent()) {
             PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
@@ -264,9 +264,10 @@ public class StructureServiceImpl implements StructureService {
     }
     
     @Override
-    public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
+        public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId,
-            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks) {
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            java.util.Map<String, Integer> attemptDiagnostics) {
         StructureTemplate template = loadedStructures.get(structureId);
         
         if (template == null) {
@@ -285,11 +286,17 @@ public class StructureServiceImpl implements StructureService {
         // VillagePlacementServiceImpl handles site search and candidate selection
         // This method only validates and places at the given origin
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-                template, world, origin, seed, existingMasks, rotationDegrees);
+            template, world, origin, seed, existingMasks, rotationDegrees, attemptDiagnostics);
         
         if (!actualLocation.isPresent()) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
                     structureId, seed));
+            if (attemptDiagnostics != null) {
+                attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+                // Try to capture fluid counts if available via last site validation - best-effort
+                // We don't have direct access to the ValidationResult here, but attemptSinglePlacementAndGetLocation
+                // records specific diagnostics into the map when it fails. This is a fallback increment.
+            }
             return Optional.empty();
         }
         
@@ -363,14 +370,15 @@ public class StructureServiceImpl implements StructureService {
      * VillagePlacementServiceImpl handles candidate search - this method only validates and places.
      * @return Optional containing the actual placed location, empty if validation/collision fails
      */
-    private Optional<Location> attemptSinglePlacementAndGetLocation(
+        private Optional<Location> attemptSinglePlacementAndGetLocation(
             StructureTemplate template, World world, Location origin, long seed,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
-            int rotationDegrees) {
+            int rotationDegrees, java.util.Map<String, Integer> attemptDiagnostics) {
         // Single placement attempt - no re-seating loop
         // Candidate search is handled by VillagePlacementServiceImpl
         LOGGER.info(String.format("[STRUCT] Placement attempt: structure='%s', location=%s, seed=%d",
-                template.id, formatLocation(origin), seed));
+            template.id, formatLocation(origin), seed));
+        if (attemptDiagnostics != null) attemptDiagnostics.merge("placementAttempts", 1, Integer::sum);
             
         // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
         // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
@@ -392,6 +400,12 @@ public class StructureServiceImpl implements StructureService {
         if (!siteValidation.passed) {
             String rejectionReason = buildRejectionReason(siteValidation);
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Site validation failed: %s", rejectionReason));
+            if (attemptDiagnostics != null) {
+                attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+                if (siteValidation.classificationResult != null && siteValidation.classificationResult.fluid > 0) {
+                    attemptDiagnostics.merge("water", siteValidation.classificationResult.fluid, Integer::sum);
+                }
+            }
             return Optional.empty();
         }
             
@@ -417,6 +431,7 @@ public class StructureServiceImpl implements StructureService {
             boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
             if (hasCollision) {
                 LOGGER.info("[STRUCT] DIAGNOSTIC: Collision detected with existing structure (rotation-aware check)");
+                if (attemptDiagnostics != null) attemptDiagnostics.merge("overlap", 1, Integer::sum);
                 return Optional.empty();
             }
             LOGGER.info("[STRUCT] DIAGNOSTIC: No collision detected - site is clear");
@@ -432,6 +447,7 @@ public class StructureServiceImpl implements StructureService {
         // CRITICAL: If terraforming fails (fluid detected), abort placement
         if (!terraformed) {
             LOGGER.info("[STRUCT] DIAGNOSTIC: Terraforming failed (likely fluid detected during site prep)");
+            if (attemptDiagnostics != null) attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
             return Optional.empty();
         }
             
@@ -439,7 +455,7 @@ public class StructureServiceImpl implements StructureService {
         // After successful terraforming, placement MUST succeed (already committed to this site)
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
                 template.id, formatLocation(origin)));
-        boolean placed = performActualPlacement(template, world, origin, seed);
+        boolean placed = performActualPlacement(template, world, origin, seed, attemptDiagnostics);
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
                 placed, template.id));
         
@@ -448,6 +464,7 @@ public class StructureServiceImpl implements StructureService {
             // Log as ERROR since we've already modified the world
             LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
                     template.id, formatLocation(origin)));
+            if (attemptDiagnostics != null) attemptDiagnostics.merge("otherFailures", 1, Integer::sum);
             return Optional.empty();
         }
         
@@ -465,27 +482,27 @@ public class StructureServiceImpl implements StructureService {
      * Perform the actual structure placement.
      * Uses FAWE/WorldEdit if available and schematic is loaded, otherwise falls back to Paper API.
      */
-    private boolean performActualPlacement(StructureTemplate template, World world, Location origin, long seed) {
+    private boolean performActualPlacement(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement - clipboard=%s, faweAvailable=%b",
                 (template.clipboard != null ? "present" : "null"), faweAvailable));
         
         // If template has a schematic loaded, use WorldEdit/FAWE placement
         if (template.clipboard != null && faweAvailable) {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeWorldEdit for '%s'", template.id));
-            return placeWorldEdit(template, world, origin, seed);
+            return placeWorldEdit(template, world, origin, seed, attemptDiagnostics);
         } else if (faweAvailable) {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeFAWE for '%s'", template.id));
-            return placeFAWE(template, world, origin, seed);
+            return placeFAWE(template, world, origin, seed, attemptDiagnostics);
         } else {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placePaperAPI for '%s'", template.id));
-            return placePaperAPI(template, world, origin, seed);
+                return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
         }
     }
     
     /**
      * Place structure using WorldEdit/FAWE with actual schematic data.
      */
-    private boolean placeWorldEdit(StructureTemplate template, World world, Location origin, long seed) {
+    private boolean placeWorldEdit(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: placeWorldEdit ENTRY for '%s' at %s", 
                 template.id, formatLocation(origin)));
         
@@ -493,6 +510,7 @@ public class StructureServiceImpl implements StructureService {
         // This prevents race conditions where unloaded chunks cause placement failures
         if (!ensureChunksLoaded(world, origin, template.dimensions)) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', reason=chunks_not_ready", template.id));
+            if (attemptDiagnostics != null) attemptDiagnostics.merge("chunkNotReady", 1, Integer::sum);
             return false;
         }
         
@@ -556,14 +574,14 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.warning(String.format("[STRUCT] WorldEdit placement failed for '%s': %s", 
                     template.id, e.getMessage()));
             e.printStackTrace();
-            return placePaperAPI(template, world, origin, seed);
+            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
         }
     }
     
     /**
      * Place structure using FAWE (fast async world edit).
      */
-    private boolean placeFAWE(StructureTemplate template, World world, Location origin, long seed) {
+    private boolean placeFAWE(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.fine(String.format("[STRUCT] Using FAWE placement for '%s'", template.id));
         
         try {
@@ -628,12 +646,12 @@ public class StructureServiceImpl implements StructureService {
             
             // Until FAWE dependency is added, fall back to Paper API
             LOGGER.fine("[STRUCT] FAWE implementation pending, using Paper API fallback");
-            return placePaperAPI(template, world, origin, seed);
+            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
             
         } catch (Exception e) {
             LOGGER.warning(String.format("[STRUCT] FAWE placement failed for '%s': %s", 
                     template.id, e.getMessage()));
-            return placePaperAPI(template, world, origin, seed);
+            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
         }
     }
     
@@ -641,12 +659,13 @@ public class StructureServiceImpl implements StructureService {
      * Place structure using Paper API block-by-block.
      * Generates Roman-style architecture based on template ID.
      */
-    private boolean placePaperAPI(StructureTemplate template, World world, Location origin, long seed) {
+    private boolean placePaperAPI(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.fine(String.format("[STRUCT] Using Paper API placement for '%s'", template.id));
         
         // T026d4: Ensure all chunks in the structure's footprint are loaded before placement
         if (!ensureChunksLoaded(world, origin, template.dimensions)) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', reason=chunks_not_ready", template.id));
+            if (attemptDiagnostics != null) attemptDiagnostics.merge("chunkNotReady", 1, Integer::sum);
             return false;
         }
         

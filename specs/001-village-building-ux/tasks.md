@@ -759,7 +759,7 @@ Notes:
       - Deterministic deferral prevents race conditions from async chunk loading
       - Zero state mutation when chunks are not ready (clean retry behavior)
       - Ready for determinism validation with test harness
-  - [ ] T026d5 [US2] Structured diagnostics for zero-placement cases
+  - [X] T026d5 [US2] Structured diagnostics for zero-placement cases
     - Files: `StructureServiceImpl.java`
     - Description: Emit `[STRUCT][DIAG] zero-placement root-cause=...` with enumerated counters (candidatesRejected=, terrainInvalid=, chunkNotReady=, overlap=, water=).
     - Acceptance: Every zero-placement event includes root-cause line; harness parses and summarizes counts.
