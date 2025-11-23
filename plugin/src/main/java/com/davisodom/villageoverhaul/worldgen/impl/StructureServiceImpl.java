@@ -489,6 +489,13 @@ public class StructureServiceImpl implements StructureService {
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: placeWorldEdit ENTRY for '%s' at %s", 
                 template.id, formatLocation(origin)));
         
+        // T026d4: Ensure all chunks in the structure's footprint are loaded before placement
+        // This prevents race conditions where unloaded chunks cause placement failures
+        if (!ensureChunksLoaded(world, origin, template.dimensions)) {
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', reason=chunks_not_ready", template.id));
+            return false;
+        }
+        
         try {
             LOGGER.info("[STRUCT] DIAGNOSTIC: Adapting world to WorldEdit");
             com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(world);
@@ -636,6 +643,12 @@ public class StructureServiceImpl implements StructureService {
      */
     private boolean placePaperAPI(StructureTemplate template, World world, Location origin, long seed) {
         LOGGER.fine(String.format("[STRUCT] Using Paper API placement for '%s'", template.id));
+        
+        // T026d4: Ensure all chunks in the structure's footprint are loaded before placement
+        if (!ensureChunksLoaded(world, origin, template.dimensions)) {
+            LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', reason=chunks_not_ready", template.id));
+            return false;
+        }
         
         // Create a Roman-style structure based on template dimensions
         int width = template.dimensions[0];
@@ -1215,6 +1228,62 @@ public class StructureServiceImpl implements StructureService {
                 minX, y, maxZ, world.getBlockAt(minX, y, maxZ).getType());
         
         return new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[]{nw, ne, se, sw};
+    }
+    
+    /**
+     * Ensure all chunks in a structure's footprint are loaded before placement.
+     * T026d4: Prevents race conditions from unloaded chunks causing non-deterministic failures.
+     * 
+     * @param world Target world
+     * @param origin Structure origin location
+     * @param dimensions Structure dimensions [width, height, depth]
+     * @return true if all chunks are loaded/generated, false if any are missing
+     */
+    private boolean ensureChunksLoaded(World world, Location origin, int[] dimensions) {
+        int width = dimensions[0];
+        int depth = dimensions[2];
+        
+        // Calculate chunk range for structure footprint
+        int minChunkX = (origin.getBlockX()) >> 4;
+        int maxChunkX = (origin.getBlockX() + width - 1) >> 4;
+        int minChunkZ = (origin.getBlockZ()) >> 4;
+        int maxChunkZ = (origin.getBlockZ() + depth - 1) >> 4;
+        
+        int chunksToLoad = 0;
+        int chunksLoaded = 0;
+        
+        // Check all chunks in the footprint
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                chunksToLoad++;
+                
+                // Check if chunk is generated (not just loaded in memory)
+                if (!world.isChunkGenerated(chunkX, chunkZ)) {
+                    LOGGER.fine(String.format("[STRUCT] Chunk not generated: (%d, %d)", chunkX, chunkZ));
+                    // Try to load synchronously
+                    try {
+                        world.getChunkAt(chunkX, chunkZ);
+                        chunksLoaded++;
+                    } catch (Exception e) {
+                        LOGGER.warning(String.format("[STRUCT] Failed to load chunk (%d, %d): %s", 
+                                chunkX, chunkZ, e.getMessage()));
+                        return false;
+                    }
+                } else {
+                    chunksLoaded++;
+                }
+            }
+        }
+        
+        boolean allReady = (chunksLoaded == chunksToLoad);
+        
+        if (allReady) {
+            LOGGER.fine(String.format("[STRUCT] Chunk readiness: %d/%d chunks ready", chunksLoaded, chunksToLoad));
+        } else {
+            LOGGER.warning(String.format("[STRUCT] Chunk readiness FAIL: %d/%d chunks ready", chunksLoaded, chunksToLoad));
+        }
+        
+        return allReady;
     }
     
     /**

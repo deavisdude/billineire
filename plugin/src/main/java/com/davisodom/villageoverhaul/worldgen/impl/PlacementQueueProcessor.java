@@ -419,12 +419,22 @@ public class PlacementQueueProcessor {
             return queue.withStatus(PlacementQueue.Status.COMPLETE, System.currentTimeMillis());
         }
         
+        // T026d4: Ensure all chunks needed for this batch are loaded before committing
+        // Get world (assume first entry determines world)
+        World world = Bukkit.getWorlds().get(0); // TODO: Store world reference in queue
+        
+        if (!ensureBatchChunksLoaded(world, batch)) {
+            // Defer this batch to next tick if chunks aren't ready
+            LOGGER.fine(String.format("[STRUCT] Deferring batch: queue=%s, reason=chunks_not_ready", 
+                    queue.getQueueId()));
+            // Return queue unchanged (will retry next tick)
+            return queue;
+        }
+        
         // Place blocks in batch
         int placed = 0;
         for (PlacementQueue.Entry entry : batch) {
             try {
-                // Get world (assume first entry determines world)
-                World world = Bukkit.getWorlds().get(0); // TODO: Store world reference in queue
                 Block block = world.getBlockAt(entry.getX(), entry.getY(), entry.getZ());
                 
                 // Set block type and data
@@ -469,6 +479,46 @@ public class PlacementQueueProcessor {
      */
     public Set<UUID> getActiveQueueIds() {
         return new HashSet<>(activeQueues.keySet());
+    }
+    
+    /**
+     * Ensure all chunks needed for a batch are loaded before committing blocks.
+     * T026d4: Prevents race conditions from unloaded chunks causing placement failures.
+     * 
+     * @param world Target world
+     * @param batch List of block entries to place
+     * @return true if all chunks are loaded/generated, false if any are missing
+     */
+    private boolean ensureBatchChunksLoaded(World world, List<PlacementQueue.Entry> batch) {
+        // Collect unique chunks needed for this batch
+        Set<Long> requiredChunks = new HashSet<>();
+        
+        for (PlacementQueue.Entry entry : batch) {
+            int chunkX = entry.getX() >> 4;
+            int chunkZ = entry.getZ() >> 4;
+            // Pack chunk coords into a single long for set storage
+            long chunkKey = ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
+            requiredChunks.add(chunkKey);
+        }
+        
+        // Verify all chunks are loaded
+        for (long chunkKey : requiredChunks) {
+            int chunkX = (int) (chunkKey >> 32);
+            int chunkZ = (int) chunkKey;
+            
+            if (!world.isChunkGenerated(chunkX, chunkZ)) {
+                // Try to load synchronously
+                try {
+                    world.getChunkAt(chunkX, chunkZ);
+                } catch (Exception e) {
+                    LOGGER.warning(String.format("[STRUCT] Failed to load chunk (%d, %d): %s", 
+                            chunkX, chunkZ, e.getMessage()));
+                    return false;
+                }
+            }
+        }
+        
+        return true;
     }
     
     /**

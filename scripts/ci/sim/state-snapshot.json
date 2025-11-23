@@ -10,9 +10,9 @@
     "wallets":  {
 
                 },
-    "timestamp":  "2025-11-23T15:05:44.3412081-05:00",
+    "timestamp":  "2025-11-23T15:14:16.9540017-05:00",
     "server_ran_successfully":  true,
-    "tick":  600,
+    "tick":  80000,
     "villages":  [
 
                  ]
