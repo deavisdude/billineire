@@ -30,6 +30,7 @@ Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 
 <!-- MANUAL ADDITIONS START -->
 When completing tasks, stop and test your work, then return suggestions and a summary to the user. Do not continue to the next task until instructed.
+
 Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
     baseline. Use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), single-quoted
     regex with explicit [0-9] classes (avoid \d in double-quoted strings), escape
@@ -49,4 +50,6 @@ When running tests and targeting specific behaviors (like village generation), i
 If a task is too big to address in a single pass and or larger architectural changes are needed: update plan.md & tasks.md to systematically address the issue bit by bit.
 
 Include task IDs in commit messages when applicable.
+
+When summarizing changes made, include instructions for how to QA the changes effectively.
 <!-- MANUAL ADDITIONS END -->

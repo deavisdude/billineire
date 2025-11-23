@@ -219,7 +219,9 @@ public class PathServiceImpl implements PathService {
                 List<PathNode> path = reconstructPath(current);
                 String pathHash = computePathHash(path);
                 LOGGER.info(String.format("[PATH] A* success: nodes=%d avoided=%d hash=%s",
-                        nodesExplored, buildingTilesAvoided, pathHash));
+                    nodesExplored, buildingTilesAvoided, pathHash));
+                // Also emit deterministic hash in canonical format for harness parsing
+                LOGGER.info(String.format("[PATH] Determinism hash: %s (nodes=%d)", pathHash, path.size()));
                 return path;
             }
             

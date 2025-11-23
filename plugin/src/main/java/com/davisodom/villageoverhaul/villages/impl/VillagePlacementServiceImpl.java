@@ -404,6 +404,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * R009: Uses SurfaceSolver for ground finding and VolumeMasks for overlap checks.
      * R011b: Uses rotation-aware collision detection with deterministic rotation.
      * T026d1: Deterministic candidate ordering using buildingSeed for consistent spiral iteration.
+     * T026d2: Stable candidate site ordering & filtering - candidates sorted by deterministic key,
+     *         filters applied in fixed sequence.
      */
     private Optional<Location> findSuitablePlacementPosition(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
@@ -413,15 +415,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         final int maxRadius = 256;
         final int gridSize = 4;
         
-        // T026d1: Use buildingSeed to determine spiral iteration order (clockwise vs counter-clockwise)
-        Random spiralRandom = new Random(buildingSeed);
-        boolean clockwise = spiralRandom.nextBoolean();
+        // T026d2: Collect ALL candidate sites first, then sort deterministically
+        List<CandidateSite> allCandidates = new ArrayList<>();
         
         // Spiral search pattern: start at origin, expand outward
         for (int radius = 0; radius <= maxRadius; radius += gridSize) {
-            // T026d1: Generate all candidates for this ring, then shuffle deterministically
-            List<int[]> ringCandidates = new ArrayList<>();
-            
             // For each ring, collect all candidate positions
             for (int dx = -radius; dx <= radius; dx += gridSize) {
                 for (int dz = -radius; dz <= radius; dz += gridSize) {
@@ -429,72 +427,104 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     if (radius > 0 && Math.abs(dx) < radius && Math.abs(dz) < radius) {
                         continue;
                     }
-                    ringCandidates.add(new int[]{dx, dz});
-                }
-            }
-            
-            // T026d1: Shuffle ring candidates deterministically to spread out attempts
-            Collections.shuffle(ringCandidates, new Random(buildingSeed + radius));
-            
-            // Try each candidate in this ring
-            for (int[] offset : ringCandidates) {
-                int dx = offset[0];
-                int dz = offset[1];
-                
-                int candidateX = origin.getBlockX() + dx;
-                int candidateZ = origin.getBlockZ() + dz;
-                
-                // R009: Use SurfaceSolver to find ground level
-                // This finds the highest solid block NOT inside any existing mask
-                int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
-                
-                // R011b: Determine rotation deterministically from building seed
-                Random rotRandom = new Random(buildingSeed);
-                int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
-                
-                // Compute rotated AABB for this candidate location with determined rotation
-                Location candidateLoc = new Location(world, candidateX, candidateY, candidateZ);
-                int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
-                
-                // Check collision with existing masks (including spacing buffer)
-                boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
-
-                // If blocked by spacing, try a progressive relaxation (half spacing, then zero)
-                if (overlaps && minBuildingSpacing > 0) {
-                    int half = Math.max(0, minBuildingSpacing / 2);
-                    if (half != minBuildingSpacing) {
-                        boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half);
-                        if (!overlapsHalf) {
-                            LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->%d for candidate (%d,%d)", minBuildingSpacing, half, dx, dz));
-                            overlaps = false;
-                        }
+                    
+                    int candidateX = origin.getBlockX() + dx;
+                    int candidateZ = origin.getBlockZ() + dz;
+                    
+                    // T026d4: Ensure chunk is loaded before querying surface height
+                    // This prevents non-deterministic behavior from async chunk loading
+                    int chunkX = candidateX >> 4;
+                    int chunkZ = candidateZ >> 4;
+                    if (!world.isChunkGenerated(chunkX, chunkZ)) {
+                        world.getChunkAt(chunkX, chunkZ); // Sync load if needed
                     }
+                    
+                    // R009: Use SurfaceSolver to find ground level
+                    // This finds the highest solid block NOT inside any existing mask
+                    int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
+                    
+                    // Calculate distance from origin for sorting
+                    int distanceSquared = dx * dx + dz * dz;
+                    
+                    allCandidates.add(new CandidateSite(candidateX, candidateY, candidateZ, 
+                            distanceSquared, dx, dz));
                 }
-
-                if (overlaps && minBuildingSpacing > 1) {
-                    // Final attempt without spacing
-                    boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0);
-                    if (!overlapsZero) {
-                        LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->0 for candidate (%d,%d)", minBuildingSpacing, dx, dz));
-                        overlaps = false;
-                    }
-                }
-                
-                // R011b: Rotation-aware collision detection implemented
-                
-                if (overlaps) {
-                    continue;
-                }
-                
-                // Found valid spot
-                LOGGER.fine(String.format("[STRUCT] findSuitable: Found candidate at offset=(%d,%d) for seed=%d", 
-                        dx, dz, buildingSeed));
-                return Optional.of(new Location(world, candidateX, candidateY, candidateZ));
             }
         }
         
-        LOGGER.warning(String.format("[STRUCT] findSuitable: No valid placement found within radius=%d for seed=%d",
-                maxRadius, buildingSeed));
+        // T026d2: Sort candidates by deterministic key: distance, then X, then Z
+        // This ensures same-seed runs produce identical candidate sequences
+        allCandidates.sort((a, b) -> {
+            // Primary: distance from origin (closer sites first)
+            int distCompare = Integer.compare(a.distanceSquared, b.distanceSquared);
+            if (distCompare != 0) return distCompare;
+            
+            // Secondary: X coordinate (stable tie-breaker)
+            int xCompare = Integer.compare(a.x, b.x);
+            if (xCompare != 0) return xCompare;
+            
+            // Tertiary: Z coordinate (final tie-breaker)
+            return Integer.compare(a.z, b.z);
+        });
+        
+        // R011b: Determine rotation deterministically from building seed
+        Random rotRandom = new Random(buildingSeed);
+        int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
+        
+        // T026d2: Apply filters in fixed sequence to each candidate
+        // Fixed sequence: 1) Collision check, 2) Spacing relaxation (if needed)
+        int candidatesChecked = 0;
+        int collisionRejections = 0;
+        
+        for (CandidateSite candidate : allCandidates) {
+            candidatesChecked++;
+            
+            // Compute rotated AABB for this candidate location with determined rotation
+            Location candidateLoc = new Location(world, candidate.x, candidate.y, candidate.z);
+            int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
+            
+            // Filter 1: Check collision with existing masks (including spacing buffer)
+            boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
+
+            // Filter 2: If blocked by spacing, try a progressive relaxation (half spacing, then zero)
+            if (overlaps && minBuildingSpacing > 0) {
+                int half = Math.max(0, minBuildingSpacing / 2);
+                if (half != minBuildingSpacing) {
+                    boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half);
+                    if (!overlapsHalf) {
+                        LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->%d for candidate (%d,%d)", 
+                                minBuildingSpacing, half, candidate.dx, candidate.dz));
+                        overlaps = false;
+                    }
+                }
+            }
+
+            if (overlaps && minBuildingSpacing > 1) {
+                // Final attempt without spacing
+                boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0);
+                if (!overlapsZero) {
+                    LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->0 for candidate (%d,%d)", 
+                            minBuildingSpacing, candidate.dx, candidate.dz));
+                    overlaps = false;
+                }
+            }
+            
+            if (overlaps) {
+                collisionRejections++;
+                continue;
+            }
+            
+            // Found valid spot - log deterministic candidate sequence info
+            LOGGER.fine(String.format("[STRUCT] findSuitable: Found candidate at offset=(%d,%d) " +
+                    "pos=(%d,%d,%d) dist²=%d checked=%d rejected=%d seed=%d", 
+                    candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z,
+                    candidate.distanceSquared, candidatesChecked, collisionRejections, buildingSeed));
+            return Optional.of(new Location(world, candidate.x, candidate.y, candidate.z));
+        }
+        
+        LOGGER.warning(String.format("[STRUCT] findSuitable: No valid placement found within radius=%d " +
+                "checked=%d rejected=%d seed=%d",
+                maxRadius, candidatesChecked, collisionRejections, buildingSeed));
         return Optional.empty();
     }
     
@@ -987,6 +1017,28 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
     
     // ==================== Inner Classes ====================
+    
+    /**
+     * Candidate site for structure placement with deterministic sorting keys.
+     * T026d2: Used for stable candidate ordering.
+     */
+    private static class CandidateSite {
+        final int x;           // World X coordinate
+        final int y;           // World Y coordinate (ground level)
+        final int z;           // World Z coordinate
+        final int distanceSquared;  // Distance² from origin (for sorting)
+        final int dx;          // X offset from origin
+        final int dz;          // Z offset from origin
+        
+        CandidateSite(int x, int y, int z, int distanceSquared, int dx, int dz) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.distanceSquared = distanceSquared;
+            this.dx = dx;
+            this.dz = dz;
+        }
+    }
     
     /**
      * Result of inter-village spacing check with observability metrics.

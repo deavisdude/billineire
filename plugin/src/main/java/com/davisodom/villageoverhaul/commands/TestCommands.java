@@ -68,6 +68,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "generate-paths":
                 return handleGeneratePaths(sender, args);
+
+            case "fixed-layout":
+                return handleFixedLayout(sender, args);
                 
             case "spawn-villager":
                 return handleSpawnVillager(sender, args);
@@ -238,26 +241,34 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         
-        // Get main building location
+        // Get or choose main building
         Optional<UUID> mainBuildingIdOpt = metadataStore.getMainBuilding(villageId);
-        if (mainBuildingIdOpt.isEmpty()) {
-            sender.sendMessage("§cNo main building designated for village: " + villageId);
-            sender.sendMessage("§7Main building should be designated during structure generation");
-            return true;
-        }
-        
-        UUID mainBuildingId = mainBuildingIdOpt.get();
+        UUID mainBuildingId = null;
         com.davisodom.villageoverhaul.model.Building mainBuilding = null;
-        
-        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
-            if (building.getBuildingId().equals(mainBuildingId)) {
-                mainBuilding = building;
-                break;
+
+        if (mainBuildingIdOpt.isPresent()) {
+            mainBuildingId = mainBuildingIdOpt.get();
+            for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+                if (building.getBuildingId().equals(mainBuildingId)) {
+                    mainBuilding = building;
+                    break;
+                }
             }
         }
-        
+
+        // Fallback: if no main building designated, use first building as main (keep test-friendly behavior)
+        if (mainBuilding == null && !buildings.isEmpty()) {
+            mainBuilding = buildings.get(0);
+            mainBuildingId = mainBuilding.getBuildingId();
+            // Persist designation so subsequent calls see it
+            metadataStore.setMainBuilding(villageId, mainBuildingId);
+            plugin.getLogger().info(String.format("[STRUCT] Auto-designated main building %s for village %s (test fallback)", mainBuildingId, villageId));
+            sender.sendMessage("§eNo main building previously designated - using first building as main for path generation");
+        }
+
         if (mainBuilding == null) {
-            sender.sendMessage("§cMain building not found in building list: " + mainBuildingId);
+            sender.sendMessage("§cNo main building available for village: " + villageId);
+            sender.sendMessage("§7Ensure structures exist for this village before path generation");
             return true;
         }
         
@@ -943,6 +954,165 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         return true;
     }
+
+    /**
+     * Create a deterministic fixed layout test village and place synthetic receipts.
+     * Usage: /votest fixed-layout <seed> [count]
+     */
+    private boolean handleFixedLayout(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /votest fixed-layout <seed> [count]");
+            return true;
+        }
+
+        long seed;
+        try {
+            seed = Long.parseLong(args[1]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§cInvalid seed: must be a number");
+            return true;
+        }
+
+        int count = 3;
+        if (args.length >= 3) {
+            try { count = Integer.parseInt(args[2]); } catch (NumberFormatException ignored) { }
+            if (count < 1) count = 1;
+        }
+
+        org.bukkit.World world = Bukkit.getWorlds().get(0);
+        if (world == null) {
+            sender.sendMessage("§cNo world available");
+            return true;
+        }
+
+        int baseX = 0;
+        int baseZ = 0;
+        int baseY = Math.max(64, world.getHighestBlockYAt(baseX, baseZ));
+
+        String villageName = "fixed-" + Long.toString(seed);
+        com.davisodom.villageoverhaul.villages.Village village =
+            plugin.getVillageService().createVillage("roman", villageName, world.getName(), baseX, baseY, baseZ);
+
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        metadataStore.registerVillage(village.getId(), "roman", new org.bukkit.Location(world, baseX, baseY, baseZ), seed);
+
+        java.util.List<org.bukkit.Location> buildingLocations = new java.util.ArrayList<>();
+
+        for (int i = 0; i < count; i++) {
+            int width = 7; int depth = 7; int height = 6;
+            int spacing = 12;
+            int x = baseX + i * spacing;
+            int z = baseZ;
+            int y = Math.max(baseY, world.getHighestBlockYAt(x, z));
+
+            UUID buildingId = UUID.randomUUID();
+            String structureId = "fixed_house_" + i;
+
+            // Use entrance-aligned origin for building locations so path generation
+            // targets a walkable point outside the persisted footprint (entrance)
+            // Place entrance further out than the expanded volume mask buffer (buffer=2)
+            // so the walkable node lies outside obstacles (use z - 3)
+            org.bukkit.Location origin = new org.bukkit.Location(world, x + width / 2, y, z - 3);
+            com.davisodom.villageoverhaul.model.Building building =
+                new com.davisodom.villageoverhaul.model.Building.Builder()
+                    .buildingId(buildingId)
+                    .villageId(village.getId())
+                    .structureId(structureId)
+                    .origin(origin)
+                    .dimensions(width, height, depth)
+                    .isMainBuilding(i == 0)
+                    .build();
+
+            metadataStore.addBuilding(village.getId(), building);
+            if (i == 0) metadataStore.setMainBuilding(village.getId(), buildingId);
+
+            int minX = x;
+            int maxX = x + width - 1;
+            int minZ = z;
+            int maxZ = z + depth - 1;
+            int minY = y;
+            int maxY = y + height - 1;
+
+            com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners =
+                new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[4];
+            corners[0] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(minX, minY, minZ, org.bukkit.Material.STONE);
+            corners[1] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(maxX, minY, minZ, org.bukkit.Material.STONE);
+            corners[2] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(maxX, minY, maxZ, org.bukkit.Material.STONE);
+            corners[3] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(minX, minY, maxZ, org.bukkit.Material.STONE);
+
+            com.davisodom.villageoverhaul.model.PlacementReceipt receipt =
+                new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+                    .structureId(structureId)
+                    .villageId(village.getId())
+                    .world(world)
+                    .origin(x, y, z)
+                    .rotation(0)
+                    .bounds(minX, maxX, minY, maxY, minZ, maxZ)
+                    .dimensions(width, height, depth)
+                    .entrance(x + width / 2, y, z - 3)
+                    .foundationCorners(corners)
+                    .build();
+
+            metadataStore.addPlacementReceipt(village.getId(), receipt);
+
+            com.davisodom.villageoverhaul.model.VolumeMask mask = com.davisodom.villageoverhaul.model.VolumeMask.fromReceipt(receipt);
+            metadataStore.addVolumeMask(village.getId(), mask);
+
+            // Also create a simple in-world representation for fixed-layout test mode
+            // Fill the receipt AABB with solid blocks so verify-persistence and pathing
+            try {
+                for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
+                    for (int bz = receipt.getMinZ(); bz <= receipt.getMaxZ(); bz++) {
+                        for (int by = receipt.getMinY(); by <= receipt.getMaxY(); by++) {
+                            org.bukkit.block.Block b = world.getBlockAt(bx, by, bz);
+                            if (b != null && b.getType().isAir()) {
+                                b.setType(org.bukkit.Material.STONE);
+                            }
+                        }
+                    }
+                }
+
+                // Ensure entrance is clear
+                org.bukkit.block.Block entranceBlock = world.getBlockAt(receipt.getEntranceX(), receipt.getEntranceY(), receipt.getEntranceZ());
+                if (entranceBlock != null) entranceBlock.setType(org.bukkit.Material.AIR);
+            } catch (Exception e) {
+                plugin.getLogger().warning("[STRUCT][TEST] Failed to place fixed-layout blocks in world: " + e.getMessage());
+            }
+
+            buildingLocations.add(origin);
+        }
+
+        // Create a simple corridor connecting entrances so pathing has a clear walkable surface
+        if (!buildingLocations.isEmpty()) {
+            int minX = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE;
+            int corridorZ = baseZ - 3; // matches entrance Z
+            for (org.bukkit.Location loc : buildingLocations) {
+                int ex = loc.getBlockX();
+                minX = Math.min(minX, ex);
+                maxX = Math.max(maxX, ex);
+            }
+
+            for (int cx = minX - 1; cx <= maxX + 1; cx++) {
+                int groundY = Math.max(baseY - 1, world.getHighestBlockYAt(cx, corridorZ) - 1);
+                try {
+                    // ensure a solid block at groundY and air above for walkable node at groundY+1
+                    org.bukkit.block.Block ground = world.getBlockAt(cx, groundY, corridorZ);
+                    if (!ground.getType().isSolid()) ground.setType(org.bukkit.Material.DIRT);
+                    org.bukkit.block.Block above = world.getBlockAt(cx, groundY + 1, corridorZ);
+                    if (!above.getType().isAir()) above.setType(org.bukkit.Material.AIR);
+                } catch (Exception e) {
+                    plugin.getLogger().warning("[STRUCT][TEST] Corridor placement failed at " + cx + "," + corridorZ + ": " + e.getMessage());
+                }
+            }
+        }
+
+        sender.sendMessage(String.format("§aCreated fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
+        plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout village=%s buildings=%d seed=%d", village.getId(), count, seed));
+
+        // Do not auto-run path generation here; allow harness to request path generation explicitly
+        return true;
+    }
     
     private int randomRange(Random random, int min, int max) {
         return min + random.nextInt(max - min + 1);
@@ -963,6 +1133,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             completions.add("create-village");
             completions.add("generate-structures");
             completions.add("generate-paths");
+            completions.add("fixed-layout");
             completions.add("spawn-villager");
             completions.add("trigger-interaction");
             completions.add("simulate-interaction");

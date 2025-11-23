@@ -27,6 +27,8 @@ param(
     [int]$Ticks = 6000,
     [long]$Seed = 12345,
     [string]$SnapshotFile = "state-snapshot.json",
+    [string[]]$AutoCommands = @(),
+    [string]$StopWhen = '',
     [string]$JavaPath = "",
     [bool]$AutoInstallPaper = $true,
     [bool]$AutoInstallJdk = $true,
@@ -384,6 +386,96 @@ Set-Content -Path "$ServerDir/spigot.yml" -Value $spigotYml
 
 Write-Host "Starting Paper server for $Ticks ticks..." -ForegroundColor Yellow
 
+# Ensure no leftover server processes or locks are preventing world access
+function Ensure-NoWorldLock {
+    param([string]$serverDir, [long]$seed)
+
+    $worldFolder = Join-Path $serverDir "test-worlds\test-world-$seed"
+
+    Write-Host "Checking for stale java processes or lock files for world: $worldFolder" -ForegroundColor Cyan
+
+    # Find java processes referencing this server directory or paper.jar
+    try {
+        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'paper.jar' -or $_.CommandLine -match [regex]::Escape($serverDir)) }
+    } catch {
+        $procs = @()
+    }
+
+    if ($procs -and $procs.Count -gt 0) {
+        Write-Host "  Found $($procs.Count) java process(es) referencing server directory - attempting to stop them" -ForegroundColor Yellow
+        foreach ($p in $procs) {
+            try {
+                Write-Host "    Stopping PID $($p.ProcessId) (CommandLine: $($p.CommandLine.Substring(0,[Math]::Min(200,$p.CommandLine.Length))))" -ForegroundColor DarkGray
+                Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+            } catch {
+                Write-Host "    Failed to stop PID $($p.ProcessId): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        # Give processes time to exit and release locks
+        Start-Sleep -Seconds 3
+    }
+
+    # If the world folder exists and contains session.lock or level.dat.lock, attempt cleanup
+    if (Test-Path $worldFolder) {
+        $lockFiles = @()
+        $lockNames = @('session.lock','level.dat_old','level.dat_mcr')
+        foreach ($name in $lockNames) { $lockFiles += Get-ChildItem -Path $worldFolder -Filter $name -ErrorAction SilentlyContinue }
+        foreach ($f in $lockFiles) {
+            try {
+                if (Test-Path $f.FullName) {
+                    Write-Host "  Removing stale lock file: $($f.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $f.FullName -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                Write-Host "  Could not remove lock file $($f.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    # Final quick check: is any process still holding the server tick port (25565) open? If so, warn.
+    try {
+        $netListeners = Get-NetTCPConnection -LocalPort 25565 -ErrorAction SilentlyContinue
+        if ($netListeners -and $netListeners.Count -gt 0) {
+            Write-Host "  Port 25565 appears in use (possible running server). Attempting to stop owning processes." -ForegroundColor Yellow
+            foreach ($conn in $netListeners) {
+                if ($conn.OwningProcess -ne $null) {
+                    try { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue } catch { }
+                }
+            }
+            Start-Sleep -Seconds 2
+        }
+    } catch {
+        # Get-NetTCPConnection may not be available on older PS versions, skip if unavailable
+    }
+
+    Write-Host "World lock check complete" -ForegroundColor Cyan
+
+    # Remove ambiguous plugin copies to avoid duplicate plugin name errors
+    $pluginsDir = Join-Path $serverDir 'plugins'
+    if (Test-Path $pluginsDir) {
+        try {
+            $dupJars = Get-ChildItem -Path $pluginsDir -Filter 'village-overhaul*.jar' -ErrorAction SilentlyContinue
+            foreach ($dup in $dupJars) {
+                if ($dup.Name -ne 'VillageOverhaul.jar') {
+                    Write-Host "  Removing duplicate plugin jar: $($dup.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $dup.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            $remappedDir = Join-Path $pluginsDir '.paper-remapped'
+            if (Test-Path $remappedDir) {
+                Get-ChildItem -Path $remappedDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'VillageOverhaul|village-overhaul' } | ForEach-Object {
+                    Write-Host "  Removing remapped plugin file: $($_.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {
+            Write-Host "  Failed cleaning plugin duplicates: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+
 # Get absolute paths for log files
 $serverLogPath = Join-Path (Resolve-Path $ServerDir) "server.log"
 $serverErrorLogPath = Join-Path (Resolve-Path $ServerDir) "server-error.log"
@@ -399,7 +491,7 @@ if (-not $javaExe) {
 
 Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
 
-$serverProcess = Start-Process -FilePath $javaExe `
+$serverProcess = & { Ensure-NoWorldLock -serverDir $ServerDir -seed $Seed; Start-Process -FilePath $javaExe `
     -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
                   "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
     -WorkingDirectory $ServerDir `
@@ -407,6 +499,7 @@ $serverProcess = Start-Process -FilePath $javaExe `
     -RedirectStandardError $serverErrorLogPath `
     -PassThru `
     -NoNewWindow
+}
 
 if (!$serverProcess) {
     Write-Host "X Failed to start server" -ForegroundColor Red
@@ -559,9 +652,47 @@ $totalWaitSeconds = $tickSeconds + 30  # Add 30 second buffer
 
 Write-Host "Running server for $Ticks ticks (approximately $tickSeconds seconds + buffer)..." -ForegroundColor Yellow
 
+# If AutoCommands were provided, execute them now via RCON so tests can trigger actions (e.g., /vo generate)
+if ($AutoCommands -and $AutoCommands.Count -gt 0) {
+    Write-Host "Executing $($AutoCommands.Count) auto-commands via RCON..." -ForegroundColor Cyan
+    # Allow a slightly longer warm-up for plugin command registration to complete
+    Start-Sleep -Seconds 12
+    foreach ($cmd in $AutoCommands) {
+        Write-Host "  Sending RCON command: $cmd" -ForegroundColor DarkGray
+        $rconResp = Send-RconCommand -Password $rconPassword -Command $cmd
+        if ($rconResp) { Write-Host "    RCON response: $(if ($rconResp.Length -gt 200) { $rconResp.Substring(0,200) + '...' } else { $rconResp })" -ForegroundColor Gray }
+
+        # Special-case: when create-village returns a village ID, automatically kick off structure+path generation
+        if ($cmd -match '^votest (create-village|fixed-layout)\s+\S+') {
+            # Try to extract UUID from response (support both create-village and fixed-layout formats)
+            if ($rconResp -match '([a-f0-9]{8}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{12})') {
+                $villageId = $Matches[1]
+                Write-Host "    Detected created village ID: $villageId - requesting generate-structures and generate-paths" -ForegroundColor Cyan
+                $genResp = Send-RconCommand -Password $rconPassword -Command "votest generate-structures $villageId"
+                if ($genResp) { Write-Host "      generate-structures response: $(if ($genResp.Length -gt 200) { $genResp.Substring(0,200) + '...' } else { $genResp })" -ForegroundColor Gray }
+                Start-Sleep -Seconds 1
+                $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
+                if ($pathsResp) {
+                    Write-Host "      generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray
+                    if ($pathsResp -match 'Path network generated successfully' -or $pathsResp -match 'Path network generation failed' -or $pathsResp -match 'Path network generated') {
+                        Write-Host "      Detected path generation result in RCON response; requesting early stop" -ForegroundColor Cyan
+                        $stopRequested = $true
+                    }
+                }
+            } else {
+                Write-Host "    Could not parse village ID from create-village response" -ForegroundColor Yellow
+            }
+        }
+
+        Start-Sleep -Seconds 2
+    }
+    Write-Host "Auto-commands dispatched" -ForegroundColor Cyan
+}
+
 # Monitor logs during runtime to detect village generation
 $startTime = Get-Date
 $villageGenDetected = $false
+$stopRequested = $false
 $elapsed = 0
 
 while ($elapsed -lt $totalWaitSeconds) {
@@ -581,6 +712,21 @@ while ($elapsed -lt $totalWaitSeconds) {
             $villageGenDetected = $true
             Write-Host "  Village generation detected in logs" -ForegroundColor Green
         }
+    }
+
+    # If caller requested an early stop on a specific log pattern, check for it and exit early when seen
+    if ($StopWhen -and (Test-Path "$ServerDir/server.log")) {
+        $logContent2 = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+        if ($logContent2 -match $StopWhen) {
+            Write-Host "  StopWhen pattern detected in logs; exiting early." -ForegroundColor Cyan
+            break
+        }
+    }
+
+    # If an auto-command or RCON response requested early stop, exit immediately
+    if ($stopRequested) {
+        Write-Host "  Early stop requested by auto-command detection; exiting early." -ForegroundColor Cyan
+        break
     }
     
     Write-Host "  Simulation progress: $([Math]::Floor($elapsed))/$totalWaitSeconds seconds" -ForegroundColor DarkGray
@@ -606,6 +752,14 @@ if (!$serverProcess.HasExited) {
         if ($uniqueVillages.Count -eq 0) {
             Write-Host "! No villages registered, skipping verification" -ForegroundColor Yellow
         } else {
+            # Trigger path generation for each registered village so determinism/path logs are produced
+            Write-Host "Dispatching generate-paths for registered villages via RCON..." -ForegroundColor Cyan
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "  Requesting path generation for village $vId" -ForegroundColor DarkGray
+                $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $vId"
+                if ($pathsResp) { Write-Host "    generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray }
+                Start-Sleep -Seconds 2
+            }
             $verifiedVillages = 0
             $failedVillages = 0
             
