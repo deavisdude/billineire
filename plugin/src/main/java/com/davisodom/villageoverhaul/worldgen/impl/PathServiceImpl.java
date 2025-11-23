@@ -187,7 +187,13 @@ public class PathServiceImpl implements PathService {
      * Returns list of path nodes from start to end, or null if no path found.
      */
     private List<PathNode> findPathAStar(World world, Location start, Location end, WalkableGraph graph) {
-        PriorityQueue<PathNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fScore));
+        // T026d: Deterministic tie-breaking for equal fScore values
+        PriorityQueue<PathNode> openSet = new PriorityQueue<>(
+            Comparator.comparingDouble((PathNode n) -> n.fScore)
+                      .thenComparingInt(n -> n.x)
+                      .thenComparingInt(n -> n.z)
+                      .thenComparingInt(n -> n.y)
+        );
         Set<String> closedSet = new HashSet<>();
         Map<String, PathNode> allNodes = new HashMap<>();
         

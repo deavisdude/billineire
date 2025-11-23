@@ -987,7 +987,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
 
         int baseX = 0;
         int baseZ = 0;
-        int baseY = Math.max(64, world.getHighestBlockYAt(baseX, baseZ));
+        // T026d: Use fixed Y coordinate for deterministic testing (ignore terrain height)
+        int baseY = 64;
+        
+        // T026d: Pre-load chunks to ensure terrain is generated before block placement
+        // This prevents race conditions where terrain generation interferes with fixed-layout placement
+        for (int chunkX = (baseX - 50) >> 4; chunkX <= (baseX + 50) >> 4; chunkX++) {
+            for (int chunkZ = (baseZ - 50) >> 4; chunkZ <= (baseZ + 50) >> 4; chunkZ++) {
+                world.getChunkAt(chunkX, chunkZ);
+            }
+        }
 
         String villageName = "fixed-" + Long.toString(seed);
         com.davisodom.villageoverhaul.villages.Village village =
@@ -1003,7 +1012,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             int spacing = 12;
             int x = baseX + i * spacing;
             int z = baseZ;
-            int y = Math.max(baseY, world.getHighestBlockYAt(x, z));
+            // T026d: Use fixed baseY for all buildings (ignore terrain)
+            int y = baseY;
 
             UUID buildingId = UUID.randomUUID();
             String structureId = "fixed_house_" + i;
@@ -1058,16 +1068,24 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             com.davisodom.villageoverhaul.model.VolumeMask mask = com.davisodom.villageoverhaul.model.VolumeMask.fromReceipt(receipt);
             metadataStore.addVolumeMask(village.getId(), mask);
 
-            // Also create a simple in-world representation for fixed-layout test mode
-            // Fill the receipt AABB with solid blocks so verify-persistence and pathing
+            // T026d: Create in-world representation for fixed-layout test mode
+            // Unconditionally place blocks at exact coordinates (ignore existing terrain)
             try {
+                // First, clear all blocks in and above the receipt AABB to ensure deterministic placement
+                for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
+                    for (int bz = receipt.getMinZ(); bz <= receipt.getMaxZ(); bz++) {
+                        // Clear from minY-5 up to ensure no floating blocks above
+                        for (int by = receipt.getMinY() - 5; by <= receipt.getMaxY() + 10; by++) {
+                            world.getBlockAt(bx, by, bz).setType(org.bukkit.Material.AIR);
+                        }
+                    }
+                }
+                
+                // Now place the structure blocks unconditionally
                 for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
                     for (int bz = receipt.getMinZ(); bz <= receipt.getMaxZ(); bz++) {
                         for (int by = receipt.getMinY(); by <= receipt.getMaxY(); by++) {
-                            org.bukkit.block.Block b = world.getBlockAt(bx, by, bz);
-                            if (b != null && b.getType().isAir()) {
-                                b.setType(org.bukkit.Material.STONE);
-                            }
+                            world.getBlockAt(bx, by, bz).setType(org.bukkit.Material.STONE);
                         }
                     }
                 }
@@ -1083,6 +1101,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
 
         // Create a simple corridor connecting entrances so pathing has a clear walkable surface
+        // T026d: Unconditionally place corridor blocks at fixed Y (ignore terrain)
         if (!buildingLocations.isEmpty()) {
             int minX = Integer.MAX_VALUE;
             int maxX = Integer.MIN_VALUE;
@@ -1093,14 +1112,19 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 maxX = Math.max(maxX, ex);
             }
 
+            int groundY = baseY - 1;
             for (int cx = minX - 1; cx <= maxX + 1; cx++) {
-                int groundY = Math.max(baseY - 1, world.getHighestBlockYAt(cx, corridorZ) - 1);
                 try {
-                    // ensure a solid block at groundY and air above for walkable node at groundY+1
-                    org.bukkit.block.Block ground = world.getBlockAt(cx, groundY, corridorZ);
-                    if (!ground.getType().isSolid()) ground.setType(org.bukkit.Material.DIRT);
-                    org.bukkit.block.Block above = world.getBlockAt(cx, groundY + 1, corridorZ);
-                    if (!above.getType().isAir()) above.setType(org.bukkit.Material.AIR);
+                    // Clear area above and below to ensure clean corridor
+                    for (int clearY = groundY - 5; clearY <= groundY + 10; clearY++) {
+                        world.getBlockAt(cx, clearY, corridorZ).setType(org.bukkit.Material.AIR);
+                    }
+                    
+                    // Place solid ground block unconditionally
+                    world.getBlockAt(cx, groundY, corridorZ).setType(org.bukkit.Material.DIRT);
+                    
+                    // Ensure air above for walkable space
+                    world.getBlockAt(cx, groundY + 1, corridorZ).setType(org.bukkit.Material.AIR);
                 } catch (Exception e) {
                     plugin.getLogger().warning("[STRUCT][TEST] Corridor placement failed at " + cx + "," + corridorZ + ": " + e.getMessage());
                 }

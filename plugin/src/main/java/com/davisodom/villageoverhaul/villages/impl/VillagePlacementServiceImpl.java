@@ -19,6 +19,8 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.plugin.Plugin;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.logging.Logger;
 
@@ -522,9 +524,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             return Optional.of(new Location(world, candidate.x, candidate.y, candidate.z));
         }
         
+        // T026d3: Log retry sequence hash for determinism verification
+        String retryHash = computeRetrySequenceHash(allCandidates);
+        
         LOGGER.warning(String.format("[STRUCT] findSuitable: No valid placement found within radius=%d " +
-                "checked=%d rejected=%d seed=%d",
-                maxRadius, candidatesChecked, collisionRejections, buildingSeed));
+                "checked=%d rejected=%d seed=%d retryHash=%s",
+                maxRadius, candidatesChecked, collisionRejections, buildingSeed, retryHash));
         return Optional.empty();
     }
     
@@ -1129,6 +1134,49 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         double getAverageRejectedAttempts() {
             int totalRejections = terrainRejections + spacingRejections + overlapRejections;
             return totalAttempts > 0 ? (double) totalRejections / totalAttempts : 0.0;
+        }
+    }
+    
+    /**
+     * Compute MD5 hash of retry candidate sequence for T026d3 determinism verification.
+     * Hash is based on ordered (x, y, z) coordinates of all candidate sites.
+     * Identical seeds should produce identical hashes; different seeds should differ.
+     * 
+     * @param candidates Ordered list of candidate sites (already sorted deterministically)
+     * @return 32-character hex hash string, or "ERROR" if hash computation fails
+     */
+    private String computeRetrySequenceHash(List<CandidateSite> candidates) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            StringBuilder coordString = new StringBuilder();
+            
+            // Build ordered coordinate string: "x1,y1,z1;x2,y2,z2;..."
+            for (int i = 0; i < candidates.size(); i++) {
+                CandidateSite c = candidates.get(i);
+                if (i > 0) {
+                    coordString.append(";");
+                }
+                coordString.append(c.x).append(",").append(c.y).append(",").append(c.z);
+            }
+            
+            // Compute MD5 hash
+            byte[] hashBytes = md.digest(coordString.toString().getBytes());
+            
+            // Convert to hex string
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashBytes) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) {
+                    hexString.append('0');
+                }
+                hexString.append(hex);
+            }
+            
+            return hexString.toString();
+            
+        } catch (NoSuchAlgorithmException e) {
+            LOGGER.warning("[STRUCT] Failed to compute retry sequence hash: " + e.getMessage());
+            return "ERROR";
         }
     }
 }
