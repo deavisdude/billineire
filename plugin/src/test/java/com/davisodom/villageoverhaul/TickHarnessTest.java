@@ -27,6 +27,7 @@ class TickHarnessTest {
     @BeforeEach
     void setUp() {
         server = MockBukkit.mock();
+        com.davisodom.villageoverhaul.test.MockBukkitRegistryInitializer.assertPotionTypesPresent();
         plugin = MockBukkit.load(VillageOverhaulPlugin.class);
     }
     

@@ -780,7 +780,8 @@ Notes:
     - Description: Instrument per-attempt rejection counters (fluid, steep, blocked, spacing, overlap) and persist them in the `VillageMetadataStore` alongside other placement metadata. Export a parsable artifact (JSON/CSV) after each run for offline analysis.
     - Acceptance: The harness collects a per-village counters artifact for every run and the numbers match the logged root-cause breakdown.
 
-  - [ ] T052 Investigate & fix MockBukkit/Unit test failures: reproduce failing tests, identify root cause (PotionEffectType/registry initialization), update MockBukkit harness or production code as needed, and add CI checks to prevent regressions (`plugin/src/test/java/...`).
+  - [X] T052 Investigate & fix MockBukkit/Unit test failures: reproduced missing registry issue in CI-like envs; added a small CI sentinel test and helper that assert core PotionEffectType registrations.
+    - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/test/MockBukkitRegistryTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/test/MockBukkitRegistryInitializer.java`
 
   - [ ] T026d14 [P1] Fixed-layout deterministic test mode (harness)
     - Files: `scripts/ci/sim/run-scenario.ps1`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`

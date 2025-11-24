@@ -37,6 +37,7 @@ class PlacementQueueProcessorTest {
     @BeforeEach
     void setUp() {
         server = MockBukkit.mock();
+        com.davisodom.villageoverhaul.test.MockBukkitRegistryInitializer.assertPotionTypesPresent();
         plugin = MockBukkit.load(VillageOverhaulPlugin.class);
         processor = new PlacementQueueProcessor(plugin);
         server.addSimpleWorld("world");

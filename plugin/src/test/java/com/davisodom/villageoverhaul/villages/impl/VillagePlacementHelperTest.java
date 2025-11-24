@@ -195,6 +195,7 @@ public class VillagePlacementHelperTest {
     @DisplayName("T026d11 - zero-placement should record diagnostic summary in metadata store")
     public void testZeroPlacementRecordsSummary() {
         ServerMock server = MockBukkit.mock();
+            com.davisodom.villageoverhaul.test.MockBukkitRegistryInitializer.assertPotionTypesPresent();
         VillageOverhaulPlugin plugin = MockBukkit.load(VillageOverhaulPlugin.class);
         try {
             World world = server.addSimpleWorld("zero-world");
