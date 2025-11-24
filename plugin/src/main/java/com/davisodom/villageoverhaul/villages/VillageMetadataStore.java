@@ -44,6 +44,8 @@ public class VillageMetadataStore {
     // T026d11: Last run placement failure summaries (for diagnostic harvesting)
     // Populated when a village run yields ZERO placements so harness can attach artifacts
     private final Map<UUID, PlacementFailureSummary> lastPlacementFailureSummary = new ConcurrentHashMap<>();
+    // T026d12: Persisted per-run placement rejection counters (villageId -> counters)
+    private final Map<UUID, PlacementRejectionCounters> placementRejectionCounters = new ConcurrentHashMap<>();
     
     public VillageMetadataStore(Plugin plugin) {
         this.plugin = plugin;
@@ -65,6 +67,14 @@ public class VillageMetadataStore {
         villageBuildings.put(villageId, new ArrayList<>());
         logger.info(String.format("[STRUCT] Registered village %s (culture: %s) at %s", 
             villageId, cultureId, formatLocation(origin)));
+
+        // Ensure a placement rejection counters artifact exists for this village
+        try {
+            PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0);
+            recordPlacementRejectionCounters(villageId, counters);
+        } catch (Exception e) {
+            logger.fine(String.format("[STRUCT][DIAG] failed to write initial placement counters for %s: %s", villageId, e.getMessage()));
+        }
     }
     
     /**
@@ -128,6 +138,27 @@ public class VillageMetadataStore {
         placementReceipts.computeIfAbsent(villageId, k -> new ArrayList<>()).add(receipt);
         logger.fine(String.format("[STRUCT][RECEIPT] Stored receipt for structure %s in village %s", 
             receipt.getStructureId(), villageId));
+
+        // Ensure placement rejection counters artifact exists when receipts are first added
+        // This guards fixed-layout and other flows that may add receipts after registerVillage
+        if (!placementRejectionCounters.containsKey(villageId)) {
+            try {
+                PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0);
+                recordPlacementRejectionCounters(villageId, counters);
+            } catch (Exception e) {
+                logger.fine(String.format("[STRUCT][DIAG] failed to write initial counters on addPlacementReceipt for %s: %s", villageId, e.getMessage()));
+            }
+        } else {
+            // Ensure on-disk artifact exists even if it was deleted at runtime
+            try {
+                PlacementRejectionCounters existing = placementRejectionCounters.get(villageId);
+                if (existing != null) {
+                    recordPlacementRejectionCounters(villageId, existing);
+                }
+            } catch (Exception e) {
+                logger.fine(String.format("[STRUCT][DIAG] failed to refresh counters artifact for %s: %s", villageId, e.getMessage()));
+            }
+        }
     }
     
     /**
@@ -154,6 +185,32 @@ public class VillageMetadataStore {
         if (villageId == null || summary == null) return;
         lastPlacementFailureSummary.put(villageId, summary);
         logger.info(String.format("[STRUCT][DIAG] Recorded zero-placement summary for village %s: %s", villageId, summary));
+    }
+
+    /**
+     * T026d12: Record per-attempt rejection counters for a village run.
+     * This method stores counters in-memory and writes a separate artifact file
+     * for offline analysis (village_<id>_placement_rejections.json).
+     */
+    public void recordPlacementRejectionCounters(UUID villageId, PlacementRejectionCounters counters) {
+        if (villageId == null || counters == null) return;
+        placementRejectionCounters.put(villageId, counters);
+
+        // Persist an artifact file for external harvesters/harness
+        try {
+            String filename = String.format("village_%s_placement_rejections.json", villageId);
+            jsonStore.saveJson(filename, counters, JsonStore.SCHEMA_VERSION);
+            logger.info(String.format("[STRUCT][DIAG] Saved placement rejection counters artifact for village %s: %s", villageId, filename));
+        } catch (Exception e) {
+            logger.warning(String.format("[STRUCT][DIAG] Failed to persist placement counters for %s: %s", villageId, e.getMessage()));
+        }
+    }
+
+    /**
+     * Get the most recent persisted placement rejection counters for a village, if any.
+     */
+    public Optional<PlacementRejectionCounters> getPlacementRejectionCounters(UUID villageId) {
+        return Optional.ofNullable(placementRejectionCounters.get(villageId));
     }
 
     /**
@@ -255,6 +312,12 @@ public class VillageMetadataStore {
                     dto.volumeMasks.add(convertVolumeMaskToDTO(mask));
                 }
             }
+
+            // T026d12: Persist placement rejection counters into village DTO
+            if (placementRejectionCounters.containsKey(villageId)) {
+                PlacementRejectionCounters counters = placementRejectionCounters.get(villageId);
+                dto.placementRejectionCounters = counters;
+            }
             
             // Save to individual village file
             String filename = "village_" + villageId + ".json";
@@ -348,6 +411,12 @@ public class VillageMetadataStore {
                     logger.fine(String.format("[STRUCT][VOLUME] Restored %d volume masks for village %s",
                         masks.size(), villageId));
                 }
+
+                // Load persisted placement rejection counters (if present)
+                if (dto.placementRejectionCounters != null) {
+                    placementRejectionCounters.put(villageId, dto.placementRejectionCounters);
+                    logger.fine(String.format("[STRUCT][DIAG] Restored placement rejection counters for village %s", villageId));
+                }
                 
                 loadedCount++;
                 
@@ -370,6 +439,8 @@ public class VillageMetadataStore {
         pathNetworks.clear();
         placementReceipts.clear(); // R001
         volumeMasks.clear(); // R002
+        lastPlacementFailureSummary.clear(); // T026d11
+        placementRejectionCounters.clear(); // T026d12
         logger.info("[STRUCT] Cleared all village metadata");
     }
     
@@ -694,6 +765,7 @@ public class VillageMetadataStore {
         public long lastBorderUpdateTick;
         public List<PlacementReceiptDTO> placementReceipts; // R001: Nullable, added for ground-truth persistence
         public List<VolumeMaskDTO> volumeMasks; // R002: Nullable, added for verified 3D volume persistence
+        public PlacementRejectionCounters placementRejectionCounters; // T026d12: per-run rejection counters
         
         public VillageDataDTO() {} // For Jackson
     }
@@ -841,6 +913,42 @@ public class VillageMetadataStore {
         public String toString() {
             return String.format("fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d,attempts:%d,chunkNotReady:%d,seedChain:%d:%d,candidates:%d",
                     fluid, steep, blocked, spacing, overlap, attempts, chunkNotReady, villageSeed, placementSeed, candidates);
+        }
+    }
+
+    /**
+     * T026d12: Persisted counters for per-attempt placement rejection reasons.
+     * Serialized directly into the village JSON file for offline analysis.
+     */
+    public static class PlacementRejectionCounters {
+        public int attempts;
+        public int fluid;
+        public int steep;
+        public int blocked;
+        public int spacing;
+        public int overlap;
+        public int chunkNotReady;
+        public int candidates;
+        public long recordedTimestamp;
+
+        public PlacementRejectionCounters() {}
+
+        public PlacementRejectionCounters(int attempts, int fluid, int steep, int blocked, int spacing, int overlap, int chunkNotReady, int candidates) {
+            this.attempts = attempts;
+            this.fluid = fluid;
+            this.steep = steep;
+            this.blocked = blocked;
+            this.spacing = spacing;
+            this.overlap = overlap;
+            this.chunkNotReady = chunkNotReady;
+            this.candidates = candidates;
+            this.recordedTimestamp = System.currentTimeMillis();
+        }
+
+        @Override
+        public String toString() {
+            return String.format("attempts=%d,fluid=%d,steep=%d,blocked=%d,spacing=%d,overlap=%d,chunkNotReady=%d,candidates=%d,timestamp=%d",
+                    attempts, fluid, steep, blocked, spacing, overlap, chunkNotReady, candidates, recordedTimestamp);
         }
     }
 }

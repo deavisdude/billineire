@@ -243,6 +243,19 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
             try {
                 metadataStore.recordPlacementFailureSummary(villageId, summary);
+                // Persist per-attempt counters for offline analysis (T026d12)
+                VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                        rejectionTracker.totalAttempts,
+                        rejectionTracker.fluidRejections,
+                        rejectionTracker.steepRejections,
+                        rejectionTracker.blockedRejections,
+                        rejectionTracker.spacingRejections,
+                        rejectionTracker.overlapRejections,
+                        rejectionTracker.chunkNotReady,
+                        rejectionTracker.totalAttempts
+                );
+
+                metadataStore.recordPlacementRejectionCounters(villageId, counters);
             } catch (Exception e) {
                 LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record zero-placement summary: %s", e.getMessage()));
             }
@@ -309,6 +322,23 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         LOGGER.info(String.format("[STRUCT] village: id=%s buildings=%d",
                 villageId, placedBuildings.size()));
+
+        // Persist per-attempt rejection counters so harnesses can analyze placement rejections (T026d12)
+        try {
+            VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                    rejectionTracker.totalAttempts,
+                    rejectionTracker.fluidRejections,
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
+                    rejectionTracker.totalAttempts
+            );
+            metadataStore.recordPlacementRejectionCounters(villageId, counters);
+        } catch (Exception e) {
+            LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record placement rejection counters for village %s: %s", villageId, e.getMessage()));
+        }
         
         return Optional.of(villageId);
     }

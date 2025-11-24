@@ -180,6 +180,94 @@ public class VillageMetadataStoreTest {
         // Should not throw exception when saving empty store
         assertDoesNotThrow(() -> store.saveAll(), "Saving empty store should not throw");
     }
+
+    @Test
+    public void testPersistPlacementRejectionCounters() throws IOException {
+        UUID villageId = UUID.randomUUID();
+        Location origin = new Location(world, 300, 64, 300);
+        store.registerVillage(villageId, "test", origin, 424242L);
+
+        // Create counters and record them
+        VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                123, // attempts
+                10,  // fluid
+                5,   // steep
+                3,   // blocked
+                8,   // spacing
+                2,   // overlap
+                1,   // chunkNotReady
+                200  // candidates
+        );
+
+        store.recordPlacementRejectionCounters(villageId, counters);
+
+        // Ensure in-memory access works
+        Optional<VillageMetadataStore.PlacementRejectionCounters> before = store.getPlacementRejectionCounters(villageId);
+        assertTrue(before.isPresent(), "Counters should be present in memory after recording");
+        assertEquals(123, before.get().attempts, "Attempts should match the recorded value");
+
+        // Save to disk (recordPlacementRejectionCounters also writes an artifact)
+        store.saveAll();
+
+        // Ensure artifact file exists in the plugin data folder
+        java.io.File artifact = new java.io.File(plugin.getDataFolder(), "villages/village_" + villageId + "_placement_rejections.json");
+        assertTrue(artifact.exists(), "Counters artifact file should exist on disk");
+
+        // Clear & reload
+        store.clearAll();
+        store.loadAll();
+
+        Optional<VillageMetadataStore.PlacementRejectionCounters> after = store.getPlacementRejectionCounters(villageId);
+        assertTrue(after.isPresent(), "Counters should be restored after loadAll");
+        assertEquals(10, after.get().fluid, "Fluid count should match after restore");
+    }
+
+    @Test
+    public void testArtifactCreatedOnRegister() throws IOException {
+        UUID villageId = UUID.randomUUID();
+        Location origin = new Location(world, 400, 64, 400);
+        store.registerVillage(villageId, "test", origin, 99999L);
+
+        java.io.File artifact = new java.io.File(plugin.getDataFolder(), "villages/village_" + villageId + "_placement_rejections.json");
+        assertTrue(artifact.exists(), "Artifact should exist immediately after registerVillage()");
+
+        // Load store and ensure counters restored
+        store.loadAll();
+        Optional<VillageMetadataStore.PlacementRejectionCounters> counters = store.getPlacementRejectionCounters(villageId);
+        assertTrue(counters.isPresent(), "Counters should be present after loadAll");
+        assertEquals(0, counters.get().attempts, "Initial attempts counter should be zero");
+    }
+
+    @Test
+    public void testArtifactCreatedOnAddPlacementReceipt() throws IOException {
+        UUID villageId = UUID.randomUUID();
+        Location origin = new Location(world, 500, 64, 500);
+        store.registerVillage(villageId, "test", origin, 424242L);
+
+        // Remove the artifact to simulate missing artifact before adding receipt
+        java.io.File artifact = new java.io.File(plugin.getDataFolder(), "villages/village_" + villageId + "_placement_rejections.json");
+        if (artifact.exists()) artifact.delete();
+
+        // Add a fake receipt which should trigger artifact creation
+        com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[] corners = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[4];
+        corners[0] = new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(0,0,0, org.bukkit.Material.STONE);
+        com.davisodom.villageoverhaul.model.PlacementReceipt receipt = new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+                .structureId("test")
+                .villageId(villageId)
+                .world(world)
+                .origin(0,64,0)
+                .rotation(0)
+                .bounds(0,1,64,65,0,1)
+                .dimensions(2,2,2)
+                .entrance(1,64,0)
+                .foundationCorners(corners)
+                .timestamp(System.currentTimeMillis())
+                .build();
+
+        store.addPlacementReceipt(villageId, receipt);
+
+        assertTrue(artifact.exists(), "Artifact should exist after addPlacementReceipt()");
+    }
     
     @Test
     public void testLoadNonexistentFiles() throws IOException {

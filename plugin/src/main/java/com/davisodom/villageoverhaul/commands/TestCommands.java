@@ -87,6 +87,25 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             case "verify-persistence":
                 return handleVerifyPersistence(sender, args);
                 
+            case "write-placement-counters":
+                if (args.length < 2) {
+                    sender.sendMessage("§cUsage: /votest write-placement-counters <villageId>");
+                    return true;
+                }
+
+                try {
+                    UUID target = UUID.fromString(args[1]);
+                    com.davisodom.villageoverhaul.villages.VillageMetadataStore store = plugin.getMetadataStore();
+                    // write existing counters or zero if missing
+                    com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters counters =
+                            store.getPlacementRejectionCounters(target).orElse(new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0));
+                    store.recordPlacementRejectionCounters(target, counters);
+                    sender.sendMessage("§aPlacement counters written for village: " + target.toString());
+                } catch (Exception ex) {
+                    sender.sendMessage("§cFailed to write counters: " + ex.getMessage());
+                }
+                return true;
+                
             case "metrics":
                 return handleMetrics(sender);
                 
@@ -1004,6 +1023,12 @@ public class TestCommands implements CommandExecutor, TabCompleter {
 
         com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = plugin.getMetadataStore();
         metadataStore.registerVillage(village.getId(), "roman", new org.bukkit.Location(world, baseX, baseY, baseZ), seed);
+        // Ensure placement rejection counters artifact exists for fixed-layout test villages
+        try {
+            metadataStore.recordPlacementRejectionCounters(village.getId(), new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0));
+        } catch (Exception ex) {
+            plugin.getLogger().warning("[STRUCT][DIAG] Failed to create placement counters artifact for fixed-layout village: " + ex.getMessage());
+        }
 
         java.util.List<org.bukkit.Location> buildingLocations = new java.util.ArrayList<>();
 

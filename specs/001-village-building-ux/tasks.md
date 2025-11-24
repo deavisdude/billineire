@@ -775,10 +775,12 @@ Notes:
     - Description: Emit a single, structured root-cause summary whenever a village generation run finishes with zero placed structures. The summary must include total attempts, placed count (0), and rejection breakdown (terrain:fluid, terrain:steep, terrain:blocked, spacing, overlap), plus the seed-chain and candidate counts. The line must be parsable by the harness (example: `ZERO-PLACEMENT rootCause=fluid:13426,steep:234,blocked:2382,spacing:266,overlap:0 attempts=1085 seedChain=...`).
     - Acceptance: A single per-village INFO log is emitted on zero-placement that the CI/harness can parse and attach to artifacts.
 
-  - [ ] T026d12 [P1] Placement rejection counters (persisted)
+  - [X] T026d12 [P1] Placement rejection counters (persisted)
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `scripts/ci/sim/run-scenario.ps1`
     - Description: Instrument per-attempt rejection counters (fluid, steep, blocked, spacing, overlap) and persist them in the `VillageMetadataStore` alongside other placement metadata. Export a parsable artifact (JSON/CSV) after each run for offline analysis.
     - Acceptance: The harness collects a per-village counters artifact for every run and the numbers match the logged root-cause breakdown.
+
+  - [ ] T052 Investigate & fix MockBukkit/Unit test failures: reproduce failing tests, identify root cause (PotionEffectType/registry initialization), update MockBukkit harness or production code as needed, and add CI checks to prevent regressions (`plugin/src/test/java/...`).
 
   - [ ] T026d14 [P1] Fixed-layout deterministic test mode (harness)
     - Files: `scripts/ci/sim/run-scenario.ps1`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`

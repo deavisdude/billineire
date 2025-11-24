@@ -702,7 +702,6 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
 # Monitor logs during runtime to detect village generation
 $startTime = Get-Date
 $villageGenDetected = $false
-$stopRequested = $false
 $elapsed = 0
 
 while ($elapsed -lt $totalWaitSeconds) {
@@ -829,6 +828,36 @@ if (!$serverProcess.HasExited) {
                 }
                 
                 Start-Sleep -Seconds 1
+                # Harvest placement rejection counters artifact if plugin wrote it
+                $artifactPath = Join-Path $ServerDir "plugins\VillageOverhaul\villages\village_${vId}_placement_rejections.json"
+                if (Test-Path $artifactPath) {
+                    try {
+                        $dest = Join-Path $ServerDir "logs\village_${vId}_placement_rejections.json"
+                        Copy-Item -Path $artifactPath -Destination $dest -Force
+                        Write-Host "  Saved placement rejection counters artifact to: $dest" -ForegroundColor Cyan
+                    } catch {
+                        Write-Host "  ! Failed to copy placement counters artifact for ${vId}: $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "  Warn: placement rejection artifact missing for ${vId}, attempting RCON write..." -ForegroundColor Yellow
+                    # Ask the plugin to write the artifact via RCON as a fallback
+                    $writeResp = Send-RconCommand -Password $rconPassword -Command "votest write-placement-counters $vId"
+                    if ($writeResp) { Write-Host "    RCON response: $writeResp" -ForegroundColor DarkGray }
+                    Start-Sleep -Seconds 1
+                    if (Test-Path $artifactPath) {
+                        try {
+                            $dest = Join-Path $ServerDir "logs\village_${vId}_placement_rejections.json"
+                            Copy-Item -Path $artifactPath -Destination $dest -Force
+                            Write-Host "  Saved placement rejection counters artifact to: $dest" -ForegroundColor Cyan
+                        } catch {
+                            Write-Host "  X Failed to copy placement counters artifact for ${vId} after RCON write: $($_.Exception.Message)" -ForegroundColor Red
+                            $verificationFailed = $true
+                        }
+                    } else {
+                        Write-Host "  X Missing placement rejection artifact for ${vId} after RCON attempt - CI requires artifact presence" -ForegroundColor Red
+                        $verificationFailed = $true
+                    }
+                }
             }
             
             if ($failedVillages -gt 0) {
