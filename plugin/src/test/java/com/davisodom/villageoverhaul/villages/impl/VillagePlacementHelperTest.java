@@ -4,6 +4,7 @@ import com.davisodom.villageoverhaul.model.VolumeMask;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.junit.jupiter.api.DisplayName;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -12,6 +13,14 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
+import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl;
+import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
+import org.junit.jupiter.api.BeforeEach;
+import be.seeseemelk.mockbukkit.MockBukkit;
+import be.seeseemelk.mockbukkit.ServerMock;
+import org.bukkit.World;
+import org.bukkit.Location;
 
 /**
  * Unit tests for VillagePlacementHelper (R011b).
@@ -180,6 +189,52 @@ public class VillagePlacementHelperTest {
         boolean collision = VillagePlacementHelper.checkRotatedAABBCollision(candidateAABB, masks, 8);
         
         assertFalse(collision, "No collision should be detected when no existing masks exist");
+    }
+
+    @Test
+    @DisplayName("T026d11 - zero-placement should record diagnostic summary in metadata store")
+    public void testZeroPlacementRecordsSummary() {
+        ServerMock server = MockBukkit.mock();
+        VillageOverhaulPlugin plugin = MockBukkit.load(VillageOverhaulPlugin.class);
+        try {
+            World world = server.addSimpleWorld("zero-world");
+            VillageMetadataStore store = plugin.getMetadataStore();
+            // Avoid loading WorldEdit/FAWE in tests by injecting a noop/mock StructureService
+            com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(com.davisodom.villageoverhaul.worldgen.StructureService.class);
+            Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString())).thenReturn(Optional.empty());
+
+            VillagePlacementServiceImpl service = new VillagePlacementServiceImpl(mockStructure, store, plugin.getCultureService());
+
+            Location origin = new Location(world, 0, 64, 0);
+            long seed = 9999L;
+
+            Optional<java.util.UUID> result = service.placeVillage(world, origin, "nonexistent-culture", seed);
+            assertFalse(result.isPresent(), "Expected no village to be successfully placed");
+
+            // Find the registered village (should be created even on zero-placement)
+            java.util.UUID foundId = null;
+            for (VillageMetadataStore.VillageMetadata meta : store.getAllVillages()) {
+                if (meta.getOrigin().getBlockX() == origin.getBlockX() && meta.getSeed() == seed) {
+                    foundId = meta.getVillageId();
+                    break;
+                }
+            }
+
+            assertNotNull(foundId, "Village should have been registered in metadata store");
+
+            Optional<VillageMetadataStore.PlacementFailureSummary> summary = store.getLastPlacementFailureSummary(foundId);
+            assertTrue(summary.isPresent(), "Placement failure summary should be recorded for zero-placement runs");
+            VillageMetadataStore.PlacementFailureSummary s = summary.get();
+            assertEquals(0, s.attempts, "Attempts should be zero when no candidates exist");
+            assertEquals(0, s.fluid, "Fluid rejections should be zero");
+            assertEquals(0, s.steep, "Steep rejections should be zero");
+            assertEquals(0, s.blocked, "Blocked rejections should be zero");
+            assertEquals(0, s.spacing, "Spacing rejections should be zero");
+            assertEquals(0, s.overlap, "Overlap rejections should be zero");
+
+        } finally {
+            MockBukkit.unmock();
+        }
     }
     
     /**

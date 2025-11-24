@@ -212,14 +212,41 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         if (placedBuildings.isEmpty()) {
-            // Emit structured zero-placement diagnostic for harness parsing
-            LOGGER.info(String.format("[STRUCT][DIAG] zero-placement root-cause=candidatesRejected=%d,terrainInvalid=%d,chunkNotReady=%d,overlap=%d,water=%d seedChain=%d->%d",
-                    rejectionTracker.totalAttempts,
-                    rejectionTracker.terrainRejections,
-                    rejectionTracker.chunkNotReady,
-                    rejectionTracker.overlapRejections,
+            // Emit structured zero-placement diagnostic for harness parsing (T026d11)
+            // Format required by harness: ZERO-PLACEMENT village=<id> rootCause=fluid:<n>,steep:<n>,blocked:<n>,spacing:<n>,overlap:<n> attempts=<n> placed=0 seedChain=<vSeed>:<pSeed> candidates=<n>
+            String diag = String.format("ZERO-PLACEMENT village=%s rootCause=fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d attempts=%d placed=0 seedChain=%d:%d candidates=%d",
+                    villageId,
                     rejectionTracker.fluidRejections,
-                    seed, placementSeed));
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.totalAttempts,
+                    seed, placementSeed,
+                    rejectionTracker.totalAttempts);
+
+            LOGGER.info(diag);
+
+            // Persist lightweight summary so harness/CI can attach structured artifacts later (T026d11)
+            VillageMetadataStore.PlacementFailureSummary summary = new VillageMetadataStore.PlacementFailureSummary(
+                    rejectionTracker.totalAttempts,
+                    rejectionTracker.fluidRejections,
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
+                    seed,
+                    placementSeed,
+                    rejectionTracker.totalAttempts
+            );
+
+            try {
+                metadataStore.recordPlacementFailureSummary(villageId, summary);
+            } catch (Exception e) {
+                LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record zero-placement summary: %s", e.getMessage()));
+            }
+
             return Optional.empty();
         }
         

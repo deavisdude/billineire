@@ -40,6 +40,10 @@ public class VillageMetadataStore {
     
     // R002: VolumeMask storage (villageId -> list of volume masks)
     private final Map<UUID, List<com.davisodom.villageoverhaul.model.VolumeMask>> volumeMasks = new ConcurrentHashMap<>();
+
+    // T026d11: Last run placement failure summaries (for diagnostic harvesting)
+    // Populated when a village run yields ZERO placements so harness can attach artifacts
+    private final Map<UUID, PlacementFailureSummary> lastPlacementFailureSummary = new ConcurrentHashMap<>();
     
     public VillageMetadataStore(Plugin plugin) {
         this.plugin = plugin;
@@ -141,6 +145,22 @@ public class VillageMetadataStore {
         // Use INFO level since Paper's console doesn't reliably show FINE when launched via double-click
         logger.info(String.format("[STRUCT][VOLUME] Stored volume mask for structure %s in village %s: %s", 
             mask.getStructureId(), villageId, mask.getSummary()));
+    }
+
+    /**
+     * T026d11: Record a placement failure summary for a village run that produced zero placements.
+     */
+    public void recordPlacementFailureSummary(UUID villageId, PlacementFailureSummary summary) {
+        if (villageId == null || summary == null) return;
+        lastPlacementFailureSummary.put(villageId, summary);
+        logger.info(String.format("[STRUCT][DIAG] Recorded zero-placement summary for village %s: %s", villageId, summary));
+    }
+
+    /**
+     * Get the most recent placement failure summary for a village, if any.
+     */
+    public Optional<PlacementFailureSummary> getLastPlacementFailureSummary(UUID villageId) {
+        return Optional.ofNullable(lastPlacementFailureSummary.get(villageId));
     }
     
     /**
@@ -784,5 +804,43 @@ public class VillageMetadataStore {
         public long timestamp;
         
         public VolumeMaskDTO() {} // For Jackson
+    }
+
+    /**
+     * T026d11: Lightweight DTO capturing a single-run placement failure summary
+     * This is kept in-memory for harvest by the harness; persistence handled in follow-up task.
+     */
+    public static class PlacementFailureSummary {
+        public int attempts;
+        public int fluid;
+        public int steep;
+        public int blocked;
+        public int spacing;
+        public int overlap;
+        public int chunkNotReady;
+        public long villageSeed;
+        public long placementSeed;
+        public int candidates;
+
+        public PlacementFailureSummary() {}
+
+        public PlacementFailureSummary(int attempts, int fluid, int steep, int blocked, int spacing, int overlap, int chunkNotReady, long villageSeed, long placementSeed, int candidates) {
+            this.attempts = attempts;
+            this.fluid = fluid;
+            this.steep = steep;
+            this.blocked = blocked;
+            this.spacing = spacing;
+            this.overlap = overlap;
+            this.chunkNotReady = chunkNotReady;
+            this.villageSeed = villageSeed;
+            this.placementSeed = placementSeed;
+            this.candidates = candidates;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d,attempts:%d,chunkNotReady:%d,seedChain:%d:%d,candidates:%d",
+                    fluid, steep, blocked, spacing, overlap, attempts, chunkNotReady, villageSeed, placementSeed, candidates);
+        }
     }
 }

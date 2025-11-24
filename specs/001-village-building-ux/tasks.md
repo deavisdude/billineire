@@ -770,7 +770,7 @@ Notes:
   
   ## Zero-placement & Harness Resilience (new)
 
-  - [ ] T026d11 [P1] Zero-placement diagnostics
+  - [X] T026d11 [P1] Zero-placement diagnostics
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
     - Description: Emit a single, structured root-cause summary whenever a village generation run finishes with zero placed structures. The summary must include total attempts, placed count (0), and rejection breakdown (terrain:fluid, terrain:steep, terrain:blocked, spacing, overlap), plus the seed-chain and candidate counts. The line must be parsable by the harness (example: `ZERO-PLACEMENT rootCause=fluid:13426,steep:234,blocked:2382,spacing:266,overlap:0 attempts=1085 seedChain=...`).
     - Acceptance: A single per-village INFO log is emitted on zero-placement that the CI/harness can parse and attach to artifacts.
