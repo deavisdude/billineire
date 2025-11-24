@@ -44,6 +44,16 @@ jobs:
           # Use the provided harness which runs two isolated server runs
           .\scripts\ci\sim\test-fixed-layout-determinism.ps1 -Seed 12345 -FixedLayoutCount 3 -Ticks 300
 
+      - name: Upload fixed-layout run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixed-layout-artifacts
+          path: |
+            test-server-fixed-1/artifacts/**
+            test-server-fixed-1/logs/**
+            test-server-fixed-2/artifacts/**
+            test-server-fixed-2/logs/**
       - name: Run custom villager interaction test (T019r)
         shell: pwsh
         env:

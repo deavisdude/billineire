@@ -20,6 +20,7 @@ param(
     [string]$RunnerScript = "$PSScriptRoot/run-scenario.ps1",
     [string]$ServerDirBase = "test-server-fixed",
     [int]$Runs = 2
+    ,[switch]$ForceZeroPlacement = $false
 )
 
 Set-StrictMode -Version Latest
@@ -62,7 +63,13 @@ function Run-FixedLayoutRun($id) {
     Write-Host "Starting run-scenario.ps1 for run #$id (seed=$Seed, count=$FixedLayoutCount)" -ForegroundColor Cyan
     Write-Host "DEBUG: Invoking run-scenario.ps1 via new PowerShell process" -ForegroundColor DarkGray
     # Capture child run output to avoid polluting our output pipeline
-    $runOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $RunnerScript -ServerDir $serverDir -Ticks $Ticks -Seed $Seed -FixedLayout -FixedLayoutCount $FixedLayoutCount -SnapshotFile "snapshot_run${id}.json" 2>&1 | Out-String
+    $runnerArgs = @(
+        '-NoProfile','-ExecutionPolicy','Bypass','-File',$RunnerScript,
+        '-ServerDir',$serverDir,'-Ticks',$Ticks,'-Seed',$Seed,'-FixedLayout','-FixedLayoutCount',$FixedLayoutCount,'-SnapshotFile','snapshot_run' + $id + '.json'
+    )
+    if ($ForceZeroPlacement) { $runnerArgs += '-ForceZeroPlacement' }
+
+    $runOutput = & powershell @runnerArgs 2>&1 | Out-String
     # Save run output for later inspection
     $logPath = Join-Path $serverDir "logs\run_${id}.log"
     New-Item -ItemType Directory -Path (Split-Path $logPath) -Force | Out-Null
@@ -77,6 +84,35 @@ function Run-FixedLayoutRun($id) {
         Copy-Item -Path (Join-Path $villageDir '*.json') -Destination $artifactsDir -Force -ErrorAction SilentlyContinue
     } else {
         Write-Host "Warning: no persisted village artifacts found in $villageDir" -ForegroundColor Yellow
+    }
+
+    # Inspect run output for zero-placement diagnostics emitted by the plugin
+    $zeroPattern = 'ZERO-PLACEMENT\b'
+    if ($runOutput -match $zeroPattern) {
+        Write-Host "Detected ZERO-PLACEMENT diagnostic in run output" -ForegroundColor Red
+        # Save the matched lines into an artifact file for CI
+        $diagFile = Join-Path $artifactsDir 'zero_placement_diag.txt'
+        ($runOutput -split "`n" | Where-Object { $_ -match $zeroPattern }) | Out-File -FilePath $diagFile -Encoding UTF8
+
+        # Also attempt to copy any placement rejection counters produced by the plugin
+        $rejectionFiles = @(Get-ChildItem -Path (Join-Path $serverDir 'plugins\VillageOverhaul\villages') -Filter '*placement_rejections.json' -File -ErrorAction SilentlyContinue)
+        if ($rejectionFiles.Count -gt 0) {
+            foreach ($f in $rejectionFiles) {
+                try {
+                    Copy-Item -Path $f.FullName -Destination $artifactsDir -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Host "Failed copying rejection artifact $($f.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        } else {
+            Write-Host "No placement rejection artifact present in plugin directory after ZERO-PLACEMENT" -ForegroundColor Yellow
+        }
+
+        # Fail fast: exit with a distinct CI failure code and instruction for remediation
+        Write-Host "\nFAILED: ZERO-PLACEMENT detected for run #$id (seed=$Seed)." -ForegroundColor Red
+        Write-Host "Remediation hints: run the scenario locally in -FixedLayout mode to reproduce, inspect $logPath and $diagFile, or adjust terrain acceptance / fixed-layout configuration." -ForegroundColor Yellow
+        # Provide a distinct exit code to make harness failures explicit
+        exit 3
     }
 
     return [PSCustomObject]@{ ServerDir = $serverDir; ArtifactsDir = $artifactsDir }

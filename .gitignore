@@ -41,6 +41,7 @@ test-server/
 test-worlds/
 crash-reports/
 logs/
+snapshot_run
 # Generated test output
 custom-villager-test-results.json
 state-snapshot.json

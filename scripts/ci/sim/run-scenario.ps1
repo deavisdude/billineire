@@ -36,6 +36,7 @@ param(
     [int]$PaperBuild = 60
     ,[switch]$FixedLayout = $false
     ,[int]$FixedLayoutCount = 3
+    ,[switch]$ForceZeroPlacement = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -498,6 +499,11 @@ $jvmArgs = @("-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
 if ($FixedLayout) {
     $jvmArgs += "-Dvo.suppress.worldgen=true"
     Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
+}
+
+if ($ForceZeroPlacement) {
+    $jvmArgs += "-Dvo.test.forceZeroPlacement=true"
+    Write-Host "Test mode: forcing zero-placement via -Dvo.test.forceZeroPlacement=true" -ForegroundColor Yellow
 }
 $jvmArgs += @("-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed")
 
@@ -1000,6 +1006,45 @@ if (Test-Path "$ServerDir/server.log") {
     } else {
         Write-Host "X $floatingMatches potential floating/embedded structures detected" -ForegroundColor Red
         Write-Host "! Check logs for validation failures" -ForegroundColor Yellow
+    }
+
+    # CI: assert placements — fail fast when a seeded village run produced zero placements
+    $zeroPlacementDetected = $false
+    $zeroMatchPattern = 'ZERO-PLACEMENT\b'
+    if ($logContent -match $zeroMatchPattern) { $zeroPlacementDetected = $true }
+
+    # If we saw structure placement attempts but zero successful placements, that's also a zero-placement condition
+    if (($beginMatches -gt 0) -and ($seatMatches -eq 0)) { $zeroPlacementDetected = $true }
+
+    if ($zeroPlacementDetected -and ($env:CI -eq 'true')) {
+        Write-Host "X CI: Zero structure placements detected for seeded run (failing early)" -ForegroundColor Red
+
+        # Save zero-placement lines and placement rejection counters into artifacts for CI
+        $artifactsDir = Join-Path (Resolve-Path $ServerDir) 'artifacts'
+        if (!(Test-Path $artifactsDir)) { New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null }
+
+        # Extract ZERO-PLACEMENT lines from server.log and write them out
+        $zeroLines = ($logContent -split "`n") | Where-Object { $_ -match $zeroMatchPattern }
+        if ($zeroLines.Count -gt 0) {
+            $diagFile = Join-Path $artifactsDir 'zero_placement_diag.txt'
+            $zeroLines | Out-File -FilePath $diagFile -Encoding UTF8
+            Write-Host "Saved zero-placement diagnostic to: $diagFile" -ForegroundColor Cyan
+        }
+
+        # Copy placement rejection counters artifacts if present
+        $rejectionFiles = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\villages') -Filter '*placement_rejections.json' -File -ErrorAction SilentlyContinue)
+        if ($rejectionFiles.Count -gt 0) {
+            foreach ($f in $rejectionFiles) {
+                $dst = Join-Path $artifactsDir $f.Name
+                Copy-Item -Path $f.FullName -Destination $dst -Force -ErrorAction SilentlyContinue
+                Write-Host "Saved placement rejection artifact to: $dst" -ForegroundColor Cyan
+            }
+        } else {
+            Write-Host "No placement rejection artifact present to copy for CI" -ForegroundColor Yellow
+        }
+
+        Write-Host "Remediation hints: Use -FixedLayout mode to reproduce deterministically, tune terrain acceptance thresholds, or inspect the saved artifacts and logs (artifacts/zero_placement_diag.txt, artifacts/*placement_rejections.json)." -ForegroundColor Yellow
+        exit 4
     }
     
     # Check path connectivity (US2 acceptance criteria: ≥90%)

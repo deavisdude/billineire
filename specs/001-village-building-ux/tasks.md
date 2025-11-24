@@ -788,10 +788,11 @@ Notes:
     - Description: Add a deterministic fixed-layout mode that bypasses random candidate sampling and uses a stable, configuration-driven candidate list (or seeded deterministic generator) so placement pipeline behavior is repeatable across runs for CI validation of determinism.
     - Acceptance: Running in fixed-layout mode with identical inputs produces identical placement outcomes (or identical ZERO-PLACEMENT root-cause) across repeated runs.
 
-  - [ ] T026d15 [P1] CI assert placements step & remediation hints
+  - [X] T026d15 [P1] CI assert placements step & remediation hints
     - Files: `scripts/ci/sim/run-scenario.ps1`, `.github/workflows/ci.yml` (if present)
     - Description: Fail the CI job early when a seeded village run results in zero placements. Attach the root-cause log line, counters artifact, and suggest remediation steps (fixed-layout mode, terrain-acceptance tuning, or manual inspection). Provide an explicit exit code and artifact links.
     - Acceptance: CI shows a clear failure when zero-placement occurs and includes links to the artifacts and a recommended remediation path.
+    - Implementation: Added early-fail detection to `scripts/ci/sim/test-fixed-layout-determinism.ps1` and `scripts/ci/sim/run-scenario.ps1` that detect `ZERO-PLACEMENT`, copy diagnostics/artifacts to `artifacts/` and exit with a distinct non-zero code; CI workflow `fixed-layout-determinism.yml` now uploads run artifacts for triage.
   - [ ] T026d7 [US2] Seed propagation logging & verification (PRIORITY: P1)
     - Files: `VillagePlacementServiceImpl.java`, `StructureServiceImpl.java`, `PathServiceImpl.java`
     - Description: Instrument and verify the full seed-chain used by placement and path generation. Emit a single, parseable seed-chain log line per village in the format:

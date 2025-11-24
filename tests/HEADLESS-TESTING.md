@@ -317,6 +317,7 @@ Helper functions for future bot player simulation (requires additional server-si
 - `scripts/ci/sim/test-custom-villager-interaction.ps1` - T019r test
 - `scripts/ci/sim/test-npc-performance.ps1` - T019s test
 - `scripts/ci/sim/test-fixed-layout-determinism.ps1` - New: run two fixed-layout repeats and compare persisted village artifacts for determinism
+  - CI runs for fixed-layout determinism now fail early on ZERO-PLACEMENT; diagnostics and placement rejection artifacts are saved under `test-server-fixed-*/artifacts/` for triage (see T026d15).
 - `scripts/ci/sim/BotPlayer.psm1` - Helper module (RCON, log monitoring, etc.)
 
 ### Plugin Code
