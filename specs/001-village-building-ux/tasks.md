@@ -763,7 +763,7 @@ Notes:
     - Files: `StructureServiceImpl.java`
     - Description: Emit `[STRUCT][DIAG] zero-placement root-cause=...` with enumerated counters (candidatesRejected=, terrainInvalid=, chunkNotReady=, overlap=, water=).
     - Acceptance: Every zero-placement event includes root-cause line; harness parses and summarizes counts.
-  - [ ] T026d6 [P] [US2] Fixed layout harness mode
+  - [X] T026d6 [P] [US2] Fixed layout harness mode
     - Files: `scripts/ci/sim/run-scenario.ps1`, `test-path-determinism.ps1`
     - Description: Add `-FixedLayout` flag to place a predefined list of structure footprints (no search) to isolate path determinism; uses stable coordinates relative to seed.
     - Acceptance: In fixed layout mode, determinism test passes (Run 1 == Run 2 hashes) for seed 12345.
@@ -810,6 +810,21 @@ Notes:
     - Files: `tests/HEADLESS-TESTING.md`, `specs/001-village-building-ux/plan.md`, `docs/compatibility-matrix.md`
     - Description: Replace open issue note with resolution summary; add determinism guarantees section.
     - Acceptance: HEADLESS-TESTING.md shows "Determinism Stabilized" and sample dual-run PASS output.
+
+  - [ ] T026d16 [US2] Deterministic IDs for Fixed-Layout
+    - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
+    - Description: Ensure `votest fixed-layout` produces deterministic village and building identifiers derived from the provided seed and layout index instead of random UUIDs. Replace `UUID.randomUUID()` uses in fixed-layout test mode with deterministic UUID generation (e.g., name-based UUID or HMAC-based derivation from seed+index).
+    - Acceptance: Fixed-layout runs with the same seed produce identical village UUIDs and building IDs across repeated runs; harness log parsing can rely on stable IDs for cross-run comparisons.
+
+  - [ ] T026d17 [US2] Audit & eliminate non-deterministic sources in placement/path pipeline
+    - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessor.java`
+    - Description: Perform a code audit to find and replace non-deterministic calls (`new Random()` without seed, `UUID.randomUUID()`, `System.nanoTime()`, `currentTimeMillis()`, thread-local randomness) within the placement and path pipeline. Introduce a seeded RNG cascade derived from the village/world seed and place-derived offsets where randomness is required.
+    - Acceptance: No occurrences of unseeded RNG or runtime-unique UUID creation in the listed classes; unit tests demonstrate reproducible placement sequences when using the same seed.
+
+  - [ ] T026d18 [US2] Harness log sanitization & stable parsing
+    - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-path-determinism.ps1`
+    - Description: Normalize RCON/plugin output before parsing: strip color/control codes, remove non-ASCII characters, and normalize line endings so the harness reliably extracts village IDs, seed-chain lines, and path hashes regardless of environment. Update `Get-PathHashes()` and verification parsing to use sanitized input.
+    - Acceptance: Harness parsing functions (`Get-PathHashes`, verification parsing) correctly extract hashes, seed-chain lines, and village IDs from sanitized logs; RCON color codes no longer cause "Could not parse verification summary" errors.
 
   - Acceptance:
     - Reported distance is within a small epsilon of `minVillageSpacing`.

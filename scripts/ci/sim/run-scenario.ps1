@@ -34,6 +34,8 @@ param(
     [bool]$AutoInstallJdk = $true,
     [string]$PaperVersion = "1.21.8",
     [int]$PaperBuild = 60
+    ,[switch]$FixedLayout = $false
+    ,[int]$FixedLayoutCount = 3
 )
 
 $ErrorActionPreference = "Stop"
@@ -653,6 +655,14 @@ $totalWaitSeconds = $tickSeconds + 30  # Add 30 second buffer
 Write-Host "Running server for $Ticks ticks (approximately $tickSeconds seconds + buffer)..." -ForegroundColor Yellow
 
 # If AutoCommands were provided, execute them now via RCON so tests can trigger actions (e.g., /vo generate)
+# Support a fixed-layout mode that instructs the plugin to place deterministic footprints
+# via `/votest fixed-layout <seed> <count>` (no search, deterministic placements).
+if ($FixedLayout) {
+    $fixedCmd = "votest fixed-layout $Seed $FixedLayoutCount"
+    if (-not ($AutoCommands -contains $fixedCmd)) {
+        $AutoCommands += $fixedCmd
+    }
+}
 if ($AutoCommands -and $AutoCommands.Count -gt 0) {
     Write-Host "Executing $($AutoCommands.Count) auto-commands via RCON..." -ForegroundColor Cyan
     # Allow a slightly longer warm-up for plugin command registration to complete

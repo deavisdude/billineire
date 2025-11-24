@@ -162,7 +162,8 @@ function Invoke-ScenarioWithRetries {
         [string]$serverDir,
         [string]$outLog,
         [int]$maxRetries = 2,
-        [string[]]$autoCommands = @()
+        [string[]]$autoCommands = @(),
+        [int]$fixedLayoutCount = 0
     )
 
     $attempt = 0
@@ -174,7 +175,11 @@ function Invoke-ScenarioWithRetries {
         # Stop when either a Determinism hash or an A* success hash is logged
         # Stop when determinism hash or A* success hash appears, or when path network success/failure is logged
         $stopPattern = '\[PATH\] Determinism hash:|\[PATH\] A\* success: .* hash=|\[STRUCT\] Path network complete:|Path network (generated successfully|generation failed)'
-        & .\run-scenario.ps1 -Ticks $currentTicks -Seed $seed -ServerDir $serverDir -AutoCommands $autoCommands -StopWhen $stopPattern | Out-Null
+        if ($fixedLayoutCount -gt 0) {
+            & .\run-scenario.ps1 -Ticks $currentTicks -Seed $seed -ServerDir $serverDir -FixedLayout -FixedLayoutCount $fixedLayoutCount -StopWhen $stopPattern | Out-Null
+        } else {
+            & .\run-scenario.ps1 -Ticks $currentTicks -Seed $seed -ServerDir $serverDir -AutoCommands $autoCommands -StopWhen $stopPattern | Out-Null
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-Host "! Scenario run exited with code $LASTEXITCODE (continuing to inspect logs)" -ForegroundColor Yellow
         }
@@ -203,8 +208,7 @@ Write-Host "=== Run 1: Seed A (first run) ===" -ForegroundColor Cyan
 $run1Log = "$ServerDir/logs/determinism-test-seedA-run1.log"
 Remove-Item $run1Log -Force -ErrorAction SilentlyContinue
 
-$generateCmdA = "votest fixed-layout $SeedA 3"
-$result1 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedA -serverDir $ServerDir -outLog $run1Log -maxRetries 2 -autoCommands @($generateCmdA)
+$result1 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedA -serverDir $ServerDir -outLog $run1Log -maxRetries 2 -fixedLayoutCount 3
 if ($result1 -is [int] -and $result1 -ne 0) { exit $result1 }
 $hashesRun1 = $result1.hashes
 Write-Host "Run 1 complete: $($hashesRun1.Count) path hashes captured" -ForegroundColor Green
@@ -216,8 +220,7 @@ Remove-Item "$ServerDir/test-worlds/test-world-$SeedA" -Recurse -Force -ErrorAct
 $run2Log = "$ServerDir/logs/determinism-test-seedA-run2.log"
 Remove-Item $run2Log -Force -ErrorAction SilentlyContinue
 
-$generateCmdA2 = "votest fixed-layout $SeedA 3"
-$result2 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedA -serverDir $ServerDir -outLog $run2Log -maxRetries 2 -autoCommands @($generateCmdA2)
+$result2 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedA -serverDir $ServerDir -outLog $run2Log -maxRetries 2 -fixedLayoutCount 3
 if ($result2 -is [int] -and $result2 -ne 0) { exit $result2 }
 $hashesRun2 = $result2.hashes
 Write-Host "Run 2 complete: $($hashesRun2.Count) path hashes captured" -ForegroundColor Green
@@ -228,8 +231,7 @@ Write-Host "=== Run 3: Seed B (different seed - testing variance) ===" -Foregrou
 $run3Log = "$ServerDir/logs/determinism-test-seedB-run1.log"
 Remove-Item $run3Log -Force -ErrorAction SilentlyContinue
 
-$generateCmdB = "votest fixed-layout $SeedB 3"
-$result3 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedB -serverDir $ServerDir -outLog $run3Log -maxRetries 2 -autoCommands @($generateCmdB)
+$result3 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedB -serverDir $ServerDir -outLog $run3Log -maxRetries 2 -fixedLayoutCount 3
 if ($result3 -is [int] -and $result3 -ne 0) { exit $result3 }
 $hashesRun3 = $result3.hashes
 Write-Host "Run 3 complete: $($hashesRun3.Count) path hashes captured" -ForegroundColor Green
