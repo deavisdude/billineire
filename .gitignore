@@ -41,6 +41,10 @@ test-server/
 test-worlds/
 crash-reports/
 logs/
+# Generated test output
+custom-villager-test-results.json
+state-snapshot.json
+snapshot_run*.json
 
 # Build artifacts
 dist/
