@@ -1004,8 +1004,10 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        int baseX = 0;
-        int baseZ = 0;
+        // Derive deterministic base coordinates from seed so different seeds yield different layouts
+        int seedInt = (int)(seed & 0x7fffffff);
+        int baseX = (seedInt % 200) - 100;
+        int baseZ = ((seedInt / 200) % 200) - 100;
         // T026d: Use fixed Y coordinate for deterministic testing (ignore terrain height)
         int baseY = 64;
         
@@ -1018,8 +1020,17 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
 
         String villageName = "fixed-" + Long.toString(seed);
-        com.davisodom.villageoverhaul.villages.Village village =
-            plugin.getVillageService().createVillage("roman", villageName, world.getName(), baseX, baseY, baseZ);
+        // Use deterministic village UUID derived from seed so fixed-layout runs are repeatable
+        java.util.UUID villageId = java.util.UUID.nameUUIDFromBytes(("fixed-layout-village-" + seed).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // Load village into service using deterministic ID (avoids random UUIDs)
+        plugin.getVillageService().loadVillage(villageId, "roman", villageName, 1000L, world.getName(), baseX, baseY, baseZ);
+        java.util.Optional<com.davisodom.villageoverhaul.villages.Village> villageOpt = plugin.getVillageService().getVillage(villageId);
+        if (villageOpt.isEmpty()) {
+            sender.sendMessage("§cFailed to create deterministic village");
+            plugin.getLogger().warning("[STRUCT][TEST] Failed to load deterministic village id=" + villageId);
+            return true;
+        }
+        com.davisodom.villageoverhaul.villages.Village village = villageOpt.get();
 
         com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = plugin.getMetadataStore();
         metadataStore.registerVillage(village.getId(), "roman", new org.bukkit.Location(world, baseX, baseY, baseZ), seed);
@@ -1040,7 +1051,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             // T026d: Use fixed baseY for all buildings (ignore terrain)
             int y = baseY;
 
-            UUID buildingId = UUID.randomUUID();
+            // Deterministic building id derived from seed+index so repeated runs reproduce the same ids
+            UUID buildingId = UUID.nameUUIDFromBytes(("fixed-layout-" + seed + "-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             String structureId = "fixed_house_" + i;
 
             // Use entrance-aligned origin for building locations so path generation

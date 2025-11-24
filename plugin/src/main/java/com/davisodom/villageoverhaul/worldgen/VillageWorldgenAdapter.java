@@ -13,6 +13,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.WorldLoadEvent;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,8 +53,18 @@ public class VillageWorldgenAdapter implements Listener {
     /**
      * Can be called from onEnable to eagerly seed when a default world is already present (MockBukkit/CI).
      * For live servers, schedules a delayed check since worlds load before plugin enable.
+     * 
+     * T026d14: If system property "vo.suppress.worldgen" is set to "true", worldgen seeding is
+     * skipped entirely. This allows CI harnesses running fixed-layout determinism tests to
+     * prevent background village generation that would create non-deterministic artifacts.
      */
     public void seedIfPossible() {
+        // T026d14: Check for CI suppression flag
+        if ("true".equalsIgnoreCase(System.getProperty("vo.suppress.worldgen"))) {
+            logger.info("[WORLDGEN] Worldgen seeding suppressed by system property vo.suppress.worldgen=true");
+            return;
+        }
+        
         // Immediate attempt (works in tests where world is added before plugin load)
         if (!Bukkit.getWorlds().isEmpty()) {
             scheduleAsyncSeed(Bukkit.getWorlds().get(0));
@@ -128,8 +139,13 @@ public class VillageWorldgenAdapter implements Listener {
             default -> "Village I";
         };
 
+        // T026d14: Use deterministic UUID derived from world seed for reproducible CI runs
+        long worldSeed = world.getSeed();
+        UUID deterministicVillageId = UUID.nameUUIDFromBytes(
+            ("worldgen-village-" + worldSeed + "-" + baseX + "-" + baseZ).getBytes(StandardCharsets.UTF_8));
+        
         VillageService vs = plugin.getVillageService();
-        var village = vs.createVillage(cultureId, name, world.getName(), baseX, y + 1, baseZ);
+        var village = vs.createVillage(deterministicVillageId, cultureId, name, world.getName(), baseX, y + 1, baseZ);
         
         // Village creation and structure placement must happen on main thread
         // We're already async from terrain search, so schedule sync for block operations
@@ -168,12 +184,12 @@ public class VillageWorldgenAdapter implements Listener {
             }
             
             // Generate village structures using placement service
-            // Note: Village registration now happens INSIDE placeVillage() after spacing validation
+            // T026d14: Pass deterministic UUID to ensure same village ID is used for structures
             Location villageOrigin = new Location(world, baseX, finalY, baseZ);
             long seed = world.getSeed() + villageId.getMostSignificantBits();
             
             logger.info("[STRUCT] Generating structures for village '" + villageName + "' (ID: " + villageId + ")");
-            Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed);
+            Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed, villageId);
             
             if (placedVillageId.isPresent()) {
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "

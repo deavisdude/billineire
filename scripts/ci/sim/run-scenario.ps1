@@ -493,9 +493,16 @@ if (-not $javaExe) {
 
 Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
 
+# T026d14: Build JVM arguments dynamically; suppress worldgen in fixed-layout mode to ensure deterministic artifacts
+$jvmArgs = @("-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
+if ($FixedLayout) {
+    $jvmArgs += "-Dvo.suppress.worldgen=true"
+    Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
+}
+$jvmArgs += @("-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed")
+
 $serverProcess = & { Ensure-NoWorldLock -serverDir $ServerDir -seed $Seed; Start-Process -FilePath $javaExe `
-    -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
-                  "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
+    -ArgumentList $jvmArgs `
     -WorkingDirectory $ServerDir `
     -RedirectStandardOutput $serverLogPath `
     -RedirectStandardError $serverErrorLogPath `
@@ -578,9 +585,9 @@ while ($elapsed -lt $maxWaitSeconds) {
             if ($tempJava) {
                 Write-Host "Retrying server start using temporary JDK: $tempJava" -ForegroundColor Cyan
                 $javaExe = $tempJava
+                # T026d14: Reuse $jvmArgs (already includes worldgen suppression if FixedLayout)
                 $serverProcess = Start-Process -FilePath $javaExe `
-                    -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
-                                  "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
+                    -ArgumentList $jvmArgs `
                     -WorkingDirectory $ServerDir `
                     -RedirectStandardOutput $serverLogPath `
                     -RedirectStandardError $serverErrorLogPath `

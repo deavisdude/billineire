@@ -16,10 +16,16 @@ public class VillageService {
     }
     
     /**
-     * Register a new village
+     * Register a new village with a random UUID.
      */
     public Village createVillage(String cultureId, String name, String worldName, int x, int y, int z) {
-        UUID id = UUID.randomUUID();
+        return createVillage(UUID.randomUUID(), cultureId, name, worldName, x, y, z);
+    }
+    
+    /**
+     * Register a new village with an explicit UUID (for deterministic/test scenarios).
+     */
+    public Village createVillage(UUID id, String cultureId, String name, String worldName, int x, int y, int z) {
         Village village = new Village(id, cultureId, name, worldName, x, y, z);
         villages.put(id, village);
         return village;

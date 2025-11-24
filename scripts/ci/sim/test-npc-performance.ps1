@@ -93,6 +93,21 @@ if (!$pluginJar) {
 
 Write-Host "OK Found plugin: $($pluginJar.Name)" -ForegroundColor Green
 
+# Determine RCON password for this server (fallback to 'test123')
+$rconPassword = 'test123'
+$serverProps = Join-Path $ServerDir 'server.properties'
+if (Test-Path $serverProps) {
+    $match = Select-String -Path $serverProps -Pattern '^\s*rcon\.password\s*=\s*(.+)$' -AllMatches
+    if ($match -and $match.Matches.Count -gt 0) {
+        $rconPassword = $match.Matches[0].Groups[1].Value.Trim()
+        Write-Host "Using RCON password from server.properties: $rconPassword" -ForegroundColor Gray
+    } else {
+        Write-Host "No rcon.password found in server.properties; using default password" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "server.properties not found; using default RCON password" -ForegroundColor Yellow
+}
+
 # Import bot player module for helper functions
 $modulePath = Join-Path $PSScriptRoot "BotPlayer.psm1"
 if (Test-Path $modulePath) {
@@ -197,7 +212,7 @@ for ($i = 0; $i -lt $VillagerCount; $i++) {
     $y = 64
     
     try {
-        $spawnResult = Send-RconCommand -Password "test123" -Command "votest spawn-villager merchant $x $y $z"
+        $spawnResult = Send-RconCommand -Password $rconPassword -Command "votest spawn-villager merchant $x $y $z"
         
         if ($spawnResult -match "Spawned custom villager.*UUID:\s*([a-f0-9-]+)") {
             $villagerUuid = $Matches[1]
@@ -219,7 +234,7 @@ Write-Host "OK Spawned $($spawnedVillagers.Count)/$VillagerCount villagers" -For
 # Query performance stats via RCON
 Write-Host "`nQuerying initial performance stats..." -ForegroundColor Yellow
 try {
-    $perfResult = Send-RconCommand -Password "test123" -Command "votest performance"
+    $perfResult = Send-RconCommand -Password $rconPassword -Command "votest performance"
     Write-Host "  $perfResult" -ForegroundColor Gray
 } catch {
     Write-Host "  ! Could not query performance stats" -ForegroundColor Yellow

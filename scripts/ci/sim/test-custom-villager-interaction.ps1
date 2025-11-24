@@ -35,12 +35,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Detect Java 17+ for Paper 1.20.4
+# Detect Java 17+ for Paper 1.20.4 — prefer JDK 21 when available
 $javaPath = "java"
-$java17Path = "C:\Program Files\Java\jdk-17\bin\java.exe"
+$java21Path = "C:\Program Files\Java\jdk-21\bin\java.exe"
 $java20Path = "C:\Program Files\Java\jdk-20\bin\java.exe"
+$java17Path = "C:\Program Files\Java\jdk-17\bin\java.exe"
 
-if (Test-Path $java20Path) {
+if (Test-Path $java21Path) {
+    $javaPath = $java21Path
+    Write-Host "Using Java 21: $javaPath" -ForegroundColor Gray
+} elseif (Test-Path $java20Path) {
     $javaPath = $java20Path
     Write-Host "Using Java 20: $javaPath" -ForegroundColor Gray
 } elseif (Test-Path $java17Path) {
@@ -76,6 +80,21 @@ if (!(Test-Path "$ServerDir/paper.jar")) {
     Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
     Write-Host "  Run: .\run-headless-paper.ps1 -AcceptEula" -ForegroundColor Yellow
     exit 1
+}
+
+# Determine RCON password for this server (fallback to 'test123')
+$rconPassword = 'test123'
+$serverProps = Join-Path $ServerDir 'server.properties'
+if (Test-Path $serverProps) {
+    $match = Select-String -Path $serverProps -Pattern '^\s*rcon\.password\s*=\s*(.+)$' -AllMatches
+    if ($match -and $match.Matches.Count -gt 0) {
+        $rconPassword = $match.Matches[0].Groups[1].Value.Trim()
+        Write-Host "Using RCON password from server.properties: $rconPassword" -ForegroundColor Gray
+    } else {
+        Write-Host "No rcon.password found in server.properties; using default password" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "server.properties not found; using default RCON password" -ForegroundColor Yellow
 }
 
 # Check if our plugin is installed
@@ -205,7 +224,7 @@ $villagerUuid = $null
 # Test 1: Create a test village
 Write-Host "`n[1/4] Creating test village via /votest..." -ForegroundColor Cyan
 try {
-    $createVillageResult = Send-RconCommand -Password "test123" -Command "votest create-village TestVillage 0 64 0"
+    $createVillageResult = Send-RconCommand -Password $rconPassword -Command "votest create-village TestVillage 0 64 0"
     
     if ($createVillageResult -match "Created test village.*ID:\s*([a-f0-9-]+)") {
         $villageId = $Matches[1]
@@ -222,7 +241,7 @@ try {
 Write-Host "`n[2/4] Spawning custom villager via /votest..." -ForegroundColor Cyan
 if ($villageId) {
     try {
-        $spawnResult = Send-RconCommand -Password "test123" -Command "votest spawn-villager merchant $villageId 0 64 0"
+        $spawnResult = Send-RconCommand -Password $rconPassword -Command "votest spawn-villager merchant $villageId 0 64 0"
         
         if ($spawnResult -match "Spawned custom villager.*UUID:\s*([a-f0-9-]+)") {
             $villagerUuid = $Matches[1]
@@ -256,7 +275,7 @@ Write-Host "`n[3/4] Testing simulated player interaction..." -ForegroundColor Cy
 if ($villagerUuid) {
     try {
         # Use simulate-interaction which creates a mock player context
-        $interactResult = Send-RconCommand -Password "test123" -Command "votest simulate-interaction $villagerUuid"
+        $interactResult = Send-RconCommand -Password $rconPassword -Command "votest simulate-interaction $villagerUuid"
         
         if ($interactResult -match "Simulated trade completed") {
             Write-Host "OK Simulated interaction completed: $interactResult" -ForegroundColor Green
@@ -283,7 +302,7 @@ if ($villagerUuid) {
 # Test 4: Verify plugin metrics
 Write-Host "`n[4/4] Checking plugin metrics..." -ForegroundColor Cyan
 try {
-    $metricsResult = Send-RconCommand -Password "test123" -Command "votest metrics"
+    $metricsResult = Send-RconCommand -Password $rconPassword -Command "votest metrics"
     Write-Host "OK Metrics command executed: $metricsResult" -ForegroundColor Green
     
     # Wait a moment and check logs for metrics dump

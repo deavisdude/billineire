@@ -783,7 +783,7 @@ Notes:
   - [X] T052 Investigate & fix MockBukkit/Unit test failures: reproduced missing registry issue in CI-like envs; added a small CI sentinel test and helper that assert core PotionEffectType registrations.
     - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/test/MockBukkitRegistryTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/test/MockBukkitRegistryInitializer.java`
 
-  - [ ] T026d14 [P1] Fixed-layout deterministic test mode (harness)
+  - [X] T026d14 [P1] Fixed-layout deterministic test mode (harness)
     - Files: `scripts/ci/sim/run-scenario.ps1`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
     - Description: Add a deterministic fixed-layout mode that bypasses random candidate sampling and uses a stable, configuration-driven candidate list (or seeded deterministic generator) so placement pipeline behavior is repeatable across runs for CI validation of determinism.
     - Acceptance: Running in fixed-layout mode with identical inputs produces identical placement outcomes (or identical ZERO-PLACEMENT root-cause) across repeated runs.

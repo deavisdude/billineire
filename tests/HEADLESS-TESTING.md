@@ -68,6 +68,15 @@ cd ..
 3. Cleans remapped plugin cache (eliminates "ambiguous plugin name" warnings)
 4. Runs `run-scenario.ps1` with specified ticks/seed
 
+## CI Integration
+
+- The repository includes a GitHub Actions workflow which runs several headless tests on Windows runners.
+- Workflow path: `.github/workflows/fixed-layout-determinism.yml`
+- The workflow installs JDK 21 and runs these harnesses to validate deterministic artifacts and basic behaviour:
+  - `scripts/ci/sim/test-fixed-layout-determinism.ps1` (T026d determinism check)
+  - `scripts/ci/sim/test-custom-villager-interaction.ps1` (T019r)
+  - `scripts/ci/sim/test-npc-performance.ps1` (T019s - small workload under CI)
+
 **Exit codes**:
 - `0` = Build and test passed
 - `1` = Build failed or JAR not found
@@ -307,6 +316,7 @@ Helper functions for future bot player simulation (requires additional server-si
 - `scripts/ci/sim/run-scenario.ps1` - Main test harness with path validation (T026, T026a)
 - `scripts/ci/sim/test-custom-villager-interaction.ps1` - T019r test
 - `scripts/ci/sim/test-npc-performance.ps1` - T019s test
+- `scripts/ci/sim/test-fixed-layout-determinism.ps1` - New: run two fixed-layout repeats and compare persisted village artifacts for determinism
 - `scripts/ci/sim/BotPlayer.psm1` - Helper module (RCON, log monitoring, etc.)
 
 ### Plugin Code

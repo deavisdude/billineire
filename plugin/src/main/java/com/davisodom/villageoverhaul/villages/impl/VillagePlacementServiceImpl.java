@@ -113,6 +113,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     @Override
     public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed) {
+        // Delegate to overload with random UUID for backward compatibility
+        return placeVillage(world, origin, cultureId, seed, UUID.randomUUID());
+    }
+    
+    /**
+     * Place a village with an explicit UUID (for deterministic/test scenarios).
+     * T026d14: Allows callers to specify a deterministic UUID derived from seed.
+     */
+    public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed, UUID villageId) {
         boolean isFirst = isFirstVillage(world);
         
         if (isFirst) {
@@ -132,7 +141,6 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         long placementSeed = villageRandom.nextLong();
         LOGGER.info(String.format("[STRUCT] seed-chain: %d -> %d", seed, placementSeed));
         
-        UUID villageId = UUID.randomUUID();
         metadataStore.registerVillage(villageId, cultureId, origin, seed);
         // Diagnostic counters for this placement run (used to emit zero-placement summary)
         PlacementRejectionTracker rejectionTracker = new PlacementRejectionTracker();
