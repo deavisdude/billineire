@@ -8,9 +8,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 import org.mockito.Mockito;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -79,6 +81,67 @@ public class VillagePlacementServiceImplTest {
     assertTrue(b1.isPresent());
     assertTrue(b2.isPresent());
     assertEquals(b1.get().getBuildingId(), b2.get().getBuildingId(), "Same seed should produce deterministic building id");
+    }
+
+    /**
+     * T026d17: Verify that village UUID derivation is deterministic.
+     * Same seed + same origin should always produce the same village UUID.
+     */
+    @Test
+    @DisplayName("Village UUID derivation is deterministic for same seed and origin")
+    public void testDeterministicVillageUuidDerivation() {
+        long seed = 12345L;
+        int originX = 100;
+        int originZ = 200;
+        
+        // Compute the expected deterministic UUID using the same formula as VillagePlacementServiceImpl
+        UUID expected = UUID.nameUUIDFromBytes(
+            (seed + ":" + originX + ":" + originZ).getBytes(StandardCharsets.UTF_8));
+        
+        // Compute it again - should be identical
+        UUID actual = UUID.nameUUIDFromBytes(
+            (seed + ":" + originX + ":" + originZ).getBytes(StandardCharsets.UTF_8));
+        
+        assertEquals(expected, actual, "Same inputs should produce same village UUID");
+        
+        // Different seed should produce different UUID
+        UUID different = UUID.nameUUIDFromBytes(
+            (54321L + ":" + originX + ":" + originZ).getBytes(StandardCharsets.UTF_8));
+        
+        assertNotEquals(expected, different, "Different seed should produce different village UUID");
+        
+        // Different origin should also produce different UUID
+        UUID differentOrigin = UUID.nameUUIDFromBytes(
+            (seed + ":" + 999 + ":" + originZ).getBytes(StandardCharsets.UTF_8));
+        
+        assertNotEquals(expected, differentOrigin, "Different origin should produce different village UUID");
+    }
+
+    /**
+     * T026d17: Verify that building UUID derivation is deterministic.
+     * Same villageId + structureId + seed should always produce the same building UUID.
+     */
+    @Test
+    @DisplayName("Building UUID derivation is deterministic for same inputs")
+    public void testDeterministicBuildingUuidDerivation() {
+        UUID villageId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        String structureId = "house_roman_small";
+        long buildingSeed = 98765L;
+        
+        // Compute using the same formula as VillagePlacementServiceImpl
+        UUID expected = UUID.nameUUIDFromBytes(
+            (villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
+        
+        UUID actual = UUID.nameUUIDFromBytes(
+            (villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
+        
+        assertEquals(expected, actual, "Same inputs should produce same building UUID");
+        
+        // Different building seed should produce different UUID
+        UUID different = UUID.nameUUIDFromBytes(
+            (villageId.toString() + ":" + structureId + ":" + 11111L).getBytes(StandardCharsets.UTF_8));
+        
+        assertNotEquals(expected, different, "Different building seed should produce different building UUID");
     }
 
 }

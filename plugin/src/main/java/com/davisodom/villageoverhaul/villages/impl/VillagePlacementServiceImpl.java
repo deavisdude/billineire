@@ -114,8 +114,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     @Override
     public Optional<UUID> placeVillage(World world, Location origin, String cultureId, long seed) {
-        // Delegate to overload with random UUID for backward compatibility
-        return placeVillage(world, origin, cultureId, seed, UUID.randomUUID());
+        // T026d17: Derive deterministic village UUID from seed instead of random UUID
+        // This ensures the same seed always produces the same village ID for reproducibility
+        UUID deterministicVillageId = UUID.nameUUIDFromBytes(
+            (seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ()).getBytes(StandardCharsets.UTF_8));
+        return placeVillage(world, origin, cultureId, seed, deterministicVillageId);
     }
     
     /**

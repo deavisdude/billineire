@@ -13,6 +13,7 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -158,7 +159,11 @@ public class PlacementQueueProcessor {
             return future;
         }
         
-        UUID queueId = UUID.randomUUID();
+        // T026d17: Derive deterministic queue ID from building ID and seed
+        // This ensures same inputs always produce same queue ID for reproducibility
+        UUID queueId = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":" + seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ())
+                .getBytes(StandardCharsets.UTF_8));
         
         LOGGER.info(String.format("[STRUCT] Async prepare queue: building=%s, blocks=%d, seed=%d",
                 buildingId, clipboard.getDimensions().getX() * clipboard.getDimensions().getY() * clipboard.getDimensions().getZ(),
@@ -272,7 +277,9 @@ public class PlacementQueueProcessor {
             List<BlockPlacement> blocks,
             long seed) {
         
-        UUID queueId = UUID.randomUUID();
+        // T026d17: Derive deterministic queue ID from building ID and seed
+        UUID queueId = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":simple:" + seed).getBytes(StandardCharsets.UTF_8));
         
         // Sort blocks by Y (layer), then Z (row), then X for deterministic ordering
         blocks.sort(Comparator.comparingInt(BlockPlacement::y)

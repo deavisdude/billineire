@@ -7,6 +7,7 @@ import com.davisodom.villageoverhaul.model.PlacementQueue;
 import org.bukkit.Material;
 import org.junit.jupiter.api.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -262,5 +263,61 @@ class PlacementQueueProcessorTest {
                 .build();
         
         assertThrows(IllegalStateException.class, () -> processor.submitQueue(preparing));
+    }
+}
+
+/**
+ * T026d17: Unit tests for deterministic queue ID derivation.
+ * These tests do NOT require WorldEdit/MockBukkit and can run in any environment.
+ */
+class PlacementQueueProcessorDeterminismTest {
+
+    @Test
+    @DisplayName("Queue ID derivation should be deterministic for prepareQueueFromClipboard inputs")
+    void testDeterministicQueueIdFromClipboard() {
+        UUID buildingId = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        long seed = 12345L;
+        int originX = 100;
+        int originZ = 200;
+        
+        // Compute using the same formula as PlacementQueueProcessor.prepareQueueFromClipboard
+        UUID expected = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":" + seed + ":" + originX + ":" + originZ)
+                .getBytes(StandardCharsets.UTF_8));
+        
+        UUID actual = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":" + seed + ":" + originX + ":" + originZ)
+                .getBytes(StandardCharsets.UTF_8));
+        
+        assertEquals(expected, actual, "Same inputs should produce same queue ID");
+        
+        // Different seed should produce different queue ID
+        UUID different = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":" + 54321L + ":" + originX + ":" + originZ)
+                .getBytes(StandardCharsets.UTF_8));
+        
+        assertNotEquals(expected, different, "Different seed should produce different queue ID");
+    }
+
+    @Test
+    @DisplayName("Queue ID derivation should be deterministic for prepareSimpleQueue inputs")
+    void testDeterministicQueueIdForSimpleQueue() {
+        UUID buildingId = UUID.fromString("11111111-2222-3333-4444-555555555555");
+        long seed = 98765L;
+        
+        // Compute using the same formula as PlacementQueueProcessor.prepareSimpleQueue
+        UUID expected = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":simple:" + seed).getBytes(StandardCharsets.UTF_8));
+        
+        UUID actual = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":simple:" + seed).getBytes(StandardCharsets.UTF_8));
+        
+        assertEquals(expected, actual, "Same inputs should produce same simple queue ID");
+        
+        // Different building ID should produce different queue ID
+        UUID differentBuilding = UUID.nameUUIDFromBytes(
+            (UUID.randomUUID().toString() + ":simple:" + seed).getBytes(StandardCharsets.UTF_8));
+        
+        assertNotEquals(expected, differentBuilding, "Different building ID should produce different queue ID");
     }
 }

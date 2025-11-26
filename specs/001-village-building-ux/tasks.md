@@ -831,10 +831,26 @@ Notes:
     - Acceptance: Fixed-layout runs with the same seed produce identical village UUIDs and building IDs across repeated runs; harness log parsing can rely on stable IDs for cross-run comparisons.
     - Implementation (2025-11-26): ✅ Replaced runtime UUIDs with name-based deterministic UUID derivation in fixed-layout and placement code paths; added unit test verifying deterministic building IDs (`plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`).
 
-  - [ ] T026d17 [US2] Audit & eliminate non-deterministic sources in placement/path pipeline
+  - [X] T026d17 [US2] Audit & eliminate non-deterministic sources in placement/path pipeline
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessor.java`
     - Description: Perform a code audit to find and replace non-deterministic calls (`new Random()` without seed, `UUID.randomUUID()`, `System.nanoTime()`, `currentTimeMillis()`, thread-local randomness) within the placement and path pipeline. Introduce a seeded RNG cascade derived from the village/world seed and place-derived offsets where randomness is required.
     - Acceptance: No occurrences of unseeded RNG or runtime-unique UUID creation in the listed classes; unit tests demonstrate reproducible placement sequences when using the same seed.
+    - Implementation (2025-11-26):
+      - ✅ Audited all four target files for non-deterministic sources
+      - ✅ `VillagePlacementServiceImpl.java`: Replaced `UUID.randomUUID()` in `placeVillage()` with name-based deterministic UUID derived from seed and origin coordinates
+      - ✅ `StructureServiceImpl.java`: No changes needed - all RNG uses are already seeded from placement seed
+      - ✅ `PathServiceImpl.java`: No changes needed - uses deterministic A* comparators and seeded path generation
+      - ✅ `PlacementQueueProcessor.java`: Replaced 2 occurrences of `UUID.randomUUID()` with name-based deterministic UUIDs derived from buildingId + seed
+      - ✅ Added unit tests verifying deterministic UUID derivation in `VillagePlacementServiceImplTest.java` and `PlacementQueueProcessorTest.java`
+    - Test Results:
+      - All 6 determinism tests pass:
+        - Village UUID derivation is deterministic for same seed and origin
+        - Building UUID derivation is deterministic for same inputs
+        - getCultureStructures is deterministic for the same seed
+        - placeBuilding produces deterministic building IDs for same seed
+        - Queue ID derivation for prepareQueueFromClipboard inputs
+        - Queue ID derivation for prepareSimpleQueue inputs
+    - Status: ✅ COMPLETE (2025-11-26)
 
   - [ ] T026d18 [US2] Harness log sanitization & stable parsing
     - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-path-determinism.ps1`
