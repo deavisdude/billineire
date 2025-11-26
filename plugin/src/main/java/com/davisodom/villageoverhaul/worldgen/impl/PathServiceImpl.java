@@ -106,6 +106,10 @@ public class PathServiceImpl implements PathService {
         
         PathNetwork network = networkBuilder.build();
         pathNetworks.put(villageId, network);
+        // Persist network to metadata store so harness/tests can inspect deterministic results
+        if (metadataStore != null) {
+            metadataStore.setPathNetwork(villageId, network);
+        }
         
         double connectivity = network.calculateConnectivity(buildingLocations, mainBuildingLocation);
         LOGGER.info(String.format("[PATH] network: village=%s paths=%d/%d blocks=%d connectivity=%.0f%%",

@@ -793,7 +793,7 @@ Notes:
     - Description: Fail the CI job early when a seeded village run results in zero placements. Attach the root-cause log line, counters artifact, and suggest remediation steps (fixed-layout mode, terrain-acceptance tuning, or manual inspection). Provide an explicit exit code and artifact links.
     - Acceptance: CI shows a clear failure when zero-placement occurs and includes links to the artifacts and a recommended remediation path.
     - Implementation: Added early-fail detection to `scripts/ci/sim/test-fixed-layout-determinism.ps1` and `scripts/ci/sim/run-scenario.ps1` that detect `ZERO-PLACEMENT`, copy diagnostics/artifacts to `artifacts/` and exit with a distinct non-zero code; CI workflow `fixed-layout-determinism.yml` now uploads run artifacts for triage.
-  - [ ] T026d7 [US2] Seed propagation logging & verification (PRIORITY: P1)
+  - [X] T026d7 [US2] Seed propagation logging & verification (PRIORITY: P1)
     - Files: `VillagePlacementServiceImpl.java`, `StructureServiceImpl.java`, `PathServiceImpl.java`
     - Description: Instrument and verify the full seed-chain used by placement and path generation. Emit a single, parseable seed-chain log line per village in the format:
       - `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>`
@@ -801,6 +801,13 @@ Notes:
       - Ensure `pathSeed` is derived deterministically from the placement seed (and transitively from the village/world seed) rather than a runtime-new RNG.
       - Add unit/integration checks that assert different top-level seeds produce different path hashes.
     - Acceptance: Same-seed runs produce identical seed triplets and identical path hashes; different seeds produce different seed triplets and differing path hashes. Harness (`test-path-determinism.ps1`) should parse and compare these lines as part of determinism/variance checks.
+    - Implementation (2025-11-25):
+      - ✅ Derive `placementSeed` via `new Random(villageSeed).nextLong()` (VillagePlacementServiceImpl)
+      - ✅ Derive `pathBaseSeed` via `new Random(placementSeed).nextLong()` and pass it to `PathServiceImpl` for deterministic path seeds
+      - ✅ Building seeds now computed as `placementSeed + index` (fixes prior use of top-level seed)
+      - ✅ Emit single parseable seed-chain line per village: `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>`
+      - ✅ Persist generated `PathNetwork` into `VillageMetadataStore` so harness/tests can inspect path results
+      - ✅ Unit tests added to verify seed-chain derivation and path-base determinism
     - Notes: Prioritize this task now (move ahead of other T026d items) because it blocks final determinism acceptance.
   - [ ] T026d8 [US2] Determinism regression headless test
     - Files: `scripts/ci/sim/test-path-determinism.ps1`, `tests/HEADLESS-TESTING.md`

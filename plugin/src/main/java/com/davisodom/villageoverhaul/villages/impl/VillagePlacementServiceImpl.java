@@ -139,6 +139,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Derive placement seed from village seed to ensure reproducible structure ordering
         Random villageRandom = new Random(seed);
         long placementSeed = villageRandom.nextLong();
+        // Derive a deterministic base seed for path generation from placement seed
+        long pathBaseSeed = new Random(placementSeed).nextLong();
         LOGGER.info(String.format("[STRUCT] seed-chain: %d -> %d", seed, placementSeed));
         
         metadataStore.registerVillage(villageId, cultureId, origin, seed);
@@ -221,7 +223,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int depth = dims[2];
             int height = dims[1];
             
-            long buildingSeed = seed + i;
+            long buildingSeed = placementSeed + i;
             
             // R011b: Fetch fresh volume masks before each placement to ensure collision detection works
             List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
@@ -364,12 +366,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 mainBuildingEntrance = buildingEntrances.get(0);
             }
             
-            boolean pathSuccess = pathService.generatePathNetwork(
+                boolean pathSuccess = pathService.generatePathNetwork(
                     world, 
                     villageId, 
                     buildingEntrances,
                     mainBuildingEntrance,
-                    seed
+                    pathBaseSeed
             );
             
             if (pathSuccess) {
@@ -384,8 +386,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
         }
         
+        // Emit a parseable seed-chain summary for harness verification (T026d7)
+        LOGGER.info(String.format("[SEED] village=%d placement=%d path=%d", seed, placementSeed, pathBaseSeed));
+
         LOGGER.info(String.format("[STRUCT] village: id=%s buildings=%d",
-                villageId, placedBuildings.size()));
+            villageId, placedBuildings.size()));
 
         // Persist per-attempt rejection counters so harnesses can analyze placement rejections (T026d12)
         try {
