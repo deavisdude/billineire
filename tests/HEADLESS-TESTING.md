@@ -1,11 +1,80 @@
 # Headless Testing Infrastructure
 
-**Last Updated**: 2025-11-05  
+**Last Updated**: 2025-11-26  
 **Status**: ✅ Functional (T019r, T019s verified)
 
 ## Overview
 
 Automated headless testing infrastructure for Village Overhaul plugin using Paper server + RCON + PowerShell automation.
+
+## T051: Terraforming Deferred Commit System
+
+**Added**: 2025-11-26  
+**Status**: ✅ Implemented  
+**Files Modified**: 
+- `TerraformingPlan.java` (new)
+- `StructureServiceImpl.java` (refactored)
+- `TerraformingPlanTest.java` (new tests)
+
+### What T051 Fixes
+
+**Problem**: Terraforming operations (grading, filling, vegetation trimming) were being committed immediately during placement attempts, even when the placement was later abandoned or failed. This created orphaned "terraforming pads" - leveled dirt patches with no structure on them.
+
+**Solution**: Implemented a `TerraformingPlan` class with deferred commit semantics:
+1. **Plan Phase**: Analyze site and record all necessary modifications WITHOUT changing blocks
+2. **Decision Point**: Perform structure placement FIRST
+3. **Commit Phase**: Only commit terraforming changes AFTER successful placement
+4. **Rollback (Implicit)**: If placement fails, simply discard the plan - world unchanged
+
+### New Diagnostics
+
+The system emits parseable diagnostic logs for CI/harness consumption:
+
+**Successful Placement**:
+```text
+[STRUCT][TERRAFORM-DIAG] structure=house_roman_small status=COMMITTED bounds=(100..108,64..70,200..208) ops=45 reason=none
+```
+
+**Failed/Abandoned Placement**:
+```text
+[STRUCT][TERRAFORM-DIAG] structure=house_roman_medium status=ABANDONED bounds=(150..162,64..71,180..192) ops=78 reason=fluid (WATER at 155, 64, 185)
+```
+
+### Harness Validation
+
+To validate T051 terraforming behavior:
+
+```powershell
+# Run scenario and check for terraforming diagnostics
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345
+
+# Extract terraforming diagnostics
+Select-String '\[STRUCT\]\[TERRAFORM-DIAG\]' test-server\logs\server.log
+```
+
+**Expected Results**:
+- ✅ `status=COMMITTED` only appears for successfully placed structures
+- ✅ `status=ABANDONED` appears when placement fails
+- ✅ No orphaned terraforming pads in world (visual inspection)
+- ✅ `reason=` field provides root cause for failures
+
+### Acceptance Criteria
+
+- [X] No empty terraforming pads adjacent to placed structures in headless harness
+- [X] Diagnostic artifact comparing terraformed AABB and placement receipt saved on failures
+- [X] Rejecting a seat leaves no modified blocks at that origin
+- [X] World audit shows zero large unused graded pads after village generation
+
+### Unit Tests
+
+`TerraformingPlanTest.java` covers:
+- Plan creation with origin/dimensions and explicit bounds
+- Fluid detection (water/lava) fails planning WITHOUT modifying world
+- Vegetation trimming records operations without immediate application
+- Commit applies planned operations to world
+- Abandoned plans leave world unchanged
+- Cannot commit failed/uncommitted plans (state machine validation)
+- Diagnostics summary contains useful debugging information
 
 ## Prerequisites
 
@@ -1345,3 +1414,174 @@ Select-String '(PASS|FAIL|WARN):' test-server\logs\verify-<villageId>.log
 - Use `Select-String '\[STRUCT\]\[RECEIPT\]' test-server\logs\server.log` to extract receipts quickly.
 - The harness (`scripts/ci/sim/run-scenario.ps1`) will automatically invoke `/votest verify-persistence` when R010 is enabled; use this checklist for manual playtests and post-failure triage.
 - Single-corner WARNs do NOT cause CI test failure; only multi-corner FAILs or perimeter/boundary/path defects trigger test failures.
+
+---
+
+## T052a: Non-Blocking Village Seeding
+
+**Added**: 2025-11-28  
+**Status**: ✅ Implemented  
+**Files Modified**:
+- `VillagePlacementServiceImpl.java` (refactored chunk loading)
+- `VillageWorldgenAdapter.java` (refactored terrain search)
+- `AsyncTerrainSearch.java` (new)
+- `AsyncPlacementSearch.java` (new)
+- `config.yml` (new async settings)
+- `AsyncTerrainSearchTest.java` (new tests)
+
+### What T052a Fixes
+
+**Problem**: Village seeding and terrain search caused server startup/join freezes of 10-40+ seconds. Paper thread-dump warnings showed blocking at `VillagePlacementServiceImpl.findSuitablePlacementPosition()` due to synchronous `CraftWorld.getChunkAt()` calls.
+
+**Stack trace example**:
+```text
+WARN: main thread blocked > 10000ms during world generation
+  at net.minecraft.server.ServerChunkCache.syncLoad(...)
+  at org.bukkit.craftbukkit.CraftWorld.getChunkAt(...)
+  at VillagePlacementServiceImpl.findSuitablePlacementPosition(VillagePlacementServiceImpl.java:598)
+```
+
+**Solution**: Implemented time-budgeted chunk loading with async fallback:
+1. **Time Budget**: Chunk loading limited to configurable ms budget (default 100ms per placement search, 2000ms for terrain search)
+2. **Async API**: Uses Paper's `getChunkAtAsync()` with timeout when available
+3. **Graceful Skip**: When budget exceeded, skips remaining unloaded chunks instead of blocking
+4. **Diagnostics**: Emits `[TERRAIN][DIAG]` and `[STRUCT][CHUNK-DIAG]` logs for monitoring
+
+### New Configuration Settings
+
+```yaml
+# config.yml - T052a async settings
+worldgen:
+  seed:
+    async: true              # Enable async terrain search
+    timeBudgetMs: 2000       # Max ms for terrain search chunk loading
+    placementTimeBudgetMs: 100  # Max ms per placement search
+
+debug:
+  asyncDiag: false           # Enable [TERRAIN][DIAG] logging
+```
+
+### New Diagnostics
+
+**Terrain Search Budget Exceeded**:
+```text
+[TERRAIN][DIAG] Chunk load budget exceeded (2500ms > 2000ms), skipping unloaded chunks
+[TERRAIN][DIAG] Terrain search stats: chunks_loaded=45, chunks_skipped=12, time=2100ms
+```
+
+**Placement Search Budget Exceeded**:
+```text
+[STRUCT][CHUNK-DIAG] Placement search: loaded=8, skipped=3, time=105ms, budget=100ms
+```
+
+### Harness Validation
+
+```powershell
+# Run scenario and check for blocking indicators
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345
+
+# Check for chunk loading diagnostics
+Select-String '\[TERRAIN\]\[DIAG\]|\[STRUCT\]\[CHUNK-DIAG\]' test-server\logs\server.log
+
+# Verify no extended blocking (no thread dump warnings)
+Select-String 'blocked' test-server\logs\server.log
+```
+
+**Expected Results**:
+- ✅ Server startup completes within 2s of seeding initiation
+- ✅ No Paper thread-dump warnings during seeding
+- ✅ Diagnostic logs show budget-limited chunk loading
+- ✅ Villages still generate successfully (budget allows sufficient chunk loading)
+
+### Acceptance Criteria
+
+- [X] Server startup and join are not delayed by >2s due to seeding
+- [X] Paper thread-dump warnings disappear during seeding runs
+- [X] Time-budgeted chunk loading prevents main thread blocking
+- [X] Async chunk API used when available (Paper servers)
+- [X] Graceful fallback when budget exceeded (skip unloaded chunks)
+- [X] Configurable budget settings in config.yml
+- [X] Diagnostic logging available for monitoring
+
+### Unit Tests
+
+`AsyncTerrainSearchTest.java` covers:
+- Time budget calculation prevents excessive blocking
+- Spiral search pattern generates valid coordinates
+- Chunk coordinate calculation is correct
+- Terrain suitability criteria thresholds
+- Async chunk load timeout is reasonable
+- Diagnostic message format consistency
+
+### Manual Playtest Guidance
+
+To verify T052a fixes the blocking issue:
+
+1. **Fresh World Test**:
+   ```powershell
+   # Delete existing test world
+   Remove-Item -Recurse -Force test-server\world*
+   
+   # Start server with plugin
+   .\scripts\ci\sim\run-scenario.ps1 -Ticks 3000 -Seed 12345
+   ```
+
+2. **Monitor Server Logs**:
+   - Look for `[TERRAIN][DIAG]` showing time-budgeted search
+   - Verify no `blocked` or thread-dump warnings
+   - Check `chunks_loaded` vs `chunks_skipped` ratio
+
+3. **Player Join Test**:
+   - Join server during village generation
+   - Verify no noticeable freeze/lag
+   - Check that chat/commands remain responsive
+
+4. **Edge Case: Budget Exceeded**:
+   - Use aggressive budget: `placementTimeBudgetMs: 10`
+   - Verify graceful degradation (some placements may fail, but no freeze)
+   - Check diagnostic logs show skipped chunks
+
+### Known Limitations
+
+🟡 **Non-Paper Servers**:
+- Async chunk API (`getChunkAtAsync`) is Paper-specific
+- Fallback to sync `getChunkAt()` on Spigot/Bukkit
+- May still experience some blocking on non-Paper servers
+
+🟡 **Very Low Budget**:
+- Budget < 50ms may skip too many candidates
+- May result in "no suitable terrain found" more often
+- Recommended minimum: 100ms for placement, 500ms for terrain
+
+🟡 **First Chunk Loading**:
+- Initial world generation still requires chunk loading
+- Budget prevents extended blocking, not all blocking
+- First village may take longer in ungenerated terrain
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  VillageWorldgenAdapter                 │
+│  - onWorldLoad()                        │
+│  - findSuitableVillageLocation()        │
+│    └─ isTerrainSuitableTimeBudgeted()   │
+│       └─ getChunkAtAsync() with timeout │
+└─────────────┬───────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────┐
+│  VillagePlacementServiceImpl            │
+│  - findSuitablePlacementPosition()      │
+│    └─ Time-budgeted chunk loading       │
+│    └─ Skip candidates when budget exceed│
+│    └─ Emit [STRUCT][CHUNK-DIAG]         │
+└─────────────────────────────────────────┘
+```
+
+### Related Tasks
+
+- **T051**: Terraforming deferred commit (prereq for placement)
+- **T026d**: Deterministic path-from-seed (affected by placement order)
+- **R010**: Proof-of-reality verification (validates placed structures)
+

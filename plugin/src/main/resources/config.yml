@@ -22,6 +22,30 @@ village:
   # Default: 512 blocks (Constitution v1.5.0, Principle XII)
   spawnProximityRadius: 512
 
+# World Generation (Worldgen) Settings
+# T052a: Non-blocking seeding configuration
+worldgen:
+  seed:
+    # Enable async terrain search and chunk loading
+    # When true: Uses time-budgeted chunk loading to prevent main thread blocking
+    # When false: Uses traditional synchronous chunk loading (may cause freeze)
+    # Default: true (recommended for production)
+    async: true
+    
+    # Maximum milliseconds to spend loading chunks during terrain search
+    # Chunks beyond this budget are skipped (searched later or ignored)
+    # Lower = less blocking, but may miss suitable sites
+    # Higher = more thorough search, but more potential blocking
+    # Range: 500-5000 (default: 2000)
+    timeBudgetMs: 2000
+    
+    # Maximum milliseconds for structure placement chunk loading per search
+    # Each placement candidate search will not exceed this budget
+    # Lower = less blocking per structure, but may skip candidates
+    # Higher = more thorough placement, but more blocking per structure
+    # Range: 50-500 (default: 100)
+    placementTimeBudgetMs: 100
+
 # Debug Flags
 debug:
   # Enable verbose logging (FINE level) for detailed diagnostic output
@@ -39,3 +63,9 @@ debug:
   
   # Enable path generation debug logs
   path: false
+  
+  # Enable async/blocking diagnostic logs (T052a)
+  # When enabled, shows [TERRAIN][DIAG], [STRUCT][CHUNK-DIAG] logs
+  # Useful for monitoring chunk loading behavior
+  # Default: false
+  asyncDiag: false

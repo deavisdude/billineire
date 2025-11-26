@@ -852,8 +852,8 @@ Notes:
         - Queue ID derivation for prepareSimpleQueue inputs
     - Status: ✅ COMPLETE (2025-11-26)
 
-  - [ ] T026d18 [US2] Harness log sanitization & stable parsing
-    - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-path-determinism.ps1`
+  - [X] T026d18 [US2] Harness log sanitization & stable parsing
+    - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-path-determinism.ps1`, `scripts/ci/sim/log-utils.ps1`, `scripts/ci/sim/tests/test-log-sanitization.Tests.ps1`
     - Description: Normalize RCON/plugin output before parsing: strip color/control codes, remove non-ASCII characters, and normalize line endings so the harness reliably extracts village IDs, seed-chain lines, and path hashes regardless of environment. Update `Get-PathHashes()` and verification parsing to use sanitized input.
     - Acceptance: Harness parsing functions (`Get-PathHashes`, verification parsing) correctly extract hashes, seed-chain lines, and village IDs from sanitized logs; RCON color codes no longer cause "Could not parse verification summary" errors.
 
@@ -949,18 +949,6 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 
 ---
 
-## Phase 5: User Story 3 — Trade-Funded Village Projects (Priority: P1)
-
-**Goal**: Tie contributions to visible building upgrades after structures exist
-
-**Independent Test**: Complete trades to 100% a project; observe corresponding building upgrade
-
-- [ ] T027 [US3] Wire project completion → structure upgrade in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
-- [ ] T028 [P] [US3] Implement upgrade application (structure replace/expand) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureUpgradeApplier.java`
-- [ ] T029 [US3] Log upgrade completion with [STRUCT] in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
-
-**Checkpoint**: US3 independently verifiable
-
 ---
 
 ### Model and State Coverage (Target: 60%+)
@@ -1026,20 +1014,107 @@ Purpose: Increase test coverage from 6.7% to >70% on new code, focusing on core 
 
 Purpose: Resolve high-impact playtest defects: unused terraforming pads, treetop path placement, fluid veto inconsistencies, summary count mismatch, inflated rotated footprints, excessive reseat attempts, and classification performance gaps. Ordered by player visibility and world integrity impact.
 
-# Path reliability additions — move here from dedicated sprint (diagnostics-first, P1)
-- [ ] T050 [P1] Path Diagnostics & Zero-Placement Root Cause Lines
+## Startup & Terraforming Bugs (observed in latest functional test)
+
+Purpose: Document observed issues and add targeted tasks to investigate and fix them.
+
+- [X] T051a [P1] Fix unused terraforming pads and footprint misalignment
+  - Story: Phase 4.7 / Bugfix Sprint
+  - Description: Investigate why `TerraformingUtil` (and related site-prep code) is producing level patches that are not subsequently used for structure placement (see screenshots). Ensure terraforming operations are anchored to the structure placement receipt and: (1) only modify blocks within the final chosen placement AABB, (2) roll back or compact operations if the structure aborts, and (3) emit a diagnostic artifact showing terraformed region vs final receipt. Add guarding logic so terraforming does not create persistent pads that go unused.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `tests/HEADLESS-TESTING.md`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java` (new)
+  - Acceptance: No empty terraforming pads adjacent to placed structures in headless harness; diagnostic artifact comparing terraformed AABB and placement receipt saved on failures.
+  - Implementation (2025-11-26):
+    - ✅ Created `TerraformingPlan.java` class with deferred commit semantics (plan → decision → commit/abandon)
+    - ✅ Refactored `StructureServiceImpl.attemptSinglePlacementAndGetLocation()` to use TerraformingPlan
+    - ✅ Added `[STRUCT][TERRAFORM-DIAG]` diagnostic log output for CI/harness parsing
+    - ✅ Placement now succeeds BEFORE terraforming is committed (prevents orphaned pads)
+    - ✅ Failed/abandoned placements leave world unchanged (implicit rollback)
+    - ✅ Added unit tests in `TerraformingPlanTest.java` (deferred commit, fluid rejection, state machine)
+    - ✅ Updated `tests/HEADLESS-TESTING.md` with T051 documentation
+
+- [X] T052a [P0] Make village seeding and terrain search non-blocking (avoid startup freeze)
+  - Story: Phase 4.7 / Performance
+  - Description: The logs show `VillagePlacementServiceImpl.findSuitablePlacementPosition` calling `CraftWorld.getChunkAt` from a scheduled task and blocking the server thread (leading to long server stalls). Refactor seeding to ensure terrain search and candidate evaluation run asynchronously without performing blocking chunk access on the main thread. Implement safe main-thread work scheduling for necessary chunk reads/writes in small time-budgeted batches, add yield points, and fall back to a safe queued approach when chunk loading would block. Add configuration knobs (e.g., `worldgen.seed.async=true`, `worldgen.seed.timeBudgetMs`) and diagnostics that log when the server thread is blocked by seeding.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/core/TickEngine.java`, `plugin/src/main/resources/config.yml`, `tests/HEADLESS-TESTING.md`, `scripts/ci/sim/run-scenario.ps1`
+  - Acceptance: Server startup and join are not delayed by >2s due to seeding in the headless harness; Paper thread-dump warnings disappear during seeding runs; blocking-time metrics emitted when thresholds are exceeded.
+  - Implementation (2025-11-28):
+    - ✅ Created `AsyncTerrainSearch.java` for async terrain search with time-budgeted batching
+    - ✅ Created `AsyncPlacementSearch.java` for async placement position search
+    - ✅ Refactored `VillageWorldgenAdapter.findSuitableVillageLocation()` with time-budgeted chunk loading (2000ms budget)
+    - ✅ Refactored `VillageWorldgenAdapter.isTerrainSuitableTimeBudgeted()` to use Paper's `getChunkAtAsync()` with timeout
+    - ✅ Refactored `VillagePlacementServiceImpl.findSuitablePlacementPosition()` with time-budgeted chunk loading (100ms budget)
+    - ✅ Added config.yml settings: `worldgen.seed.async`, `worldgen.seed.timeBudgetMs`, `worldgen.seed.placementTimeBudgetMs`, `debug.asyncDiag`
+    - ✅ Added `[TERRAIN][DIAG]` and `[STRUCT][CHUNK-DIAG]` diagnostic log output
+    - ✅ Chunks are skipped when budget exceeded (prevents extended blocking)
+    - ✅ Uses Paper async chunk API with fallback to sync when needed
+    - ✅ Added unit tests in `AsyncTerrainSearchTest.java`
+    - ✅ Updated `tests/HEADLESS-TESTING.md` with T052a documentation
+
+### Follow-ups: Placement, Terraforming, and Path Emission (pending)
+
+These follow-up tasks were added after T052a verification — logs show frequent zero-placement events, missing/empty path emission for villages that finish seating, and terraforming operations committed where no building was ultimately placed. Add and prioritize the items below to investigate and fix root causes.
+
+- [ ] T057 [P0] Audit & fix `SiteValidator` false-positives
+  - Story: Placement failures (blocked/steep/foundation) occur often even when site appears clear in playtests; many candidates end-up counted as `chunkNotReady` or `blocked` despite full pre-load.
+  - Description: Audit `SiteValidator`, classification thresholds, and candidate gating to find why many sites are rejected. Add unit tests that reproduce the exact logged failure modes (blocked counts, foundationOk=false). Ensure validation distinguishes: (a) true solid obstructions, (b) transient chunk-not-ready cases, and (c) skipped terraform operations.
+  - Files: `plugin/src/main/java/.../worldgen/SiteValidator.java`, `VillagePlacementServiceImpl.java`, unit tests.
+  - Acceptance: Deterministic unit tests replicate previously failing seeds and demonstrate >50% reduction in false-positive `blocked`/`foundationOk=false` rejections.
+
+- [ ] T058 [P0] Terraforming commit atomicity & rollback
+  - Story: Logs show partial/skip-heavy `COMMIT` runs (many "changed from X to Y - skipping" lines), leaving inconsistent terrain/partial pads and sometimes terraforming where placement later aborts.
+  - Description: Make `TerraformingPlan` commit transactional: collect a pre-commit snapshot / journal of operations, apply via FAWE or a single atomic edit where possible, or apply chunked commits with guaranteed rollback on abort. Ensure no persistent terraforming occurs for abandoned seats.
+  - Files: `TerraformingPlan.java`, `TerraformingUtil.java`, `StructureServiceImpl.java` (commit path), FAWE/WorldEdit integration code.
+  - Acceptance: Headless run with previously-problematic seed shows no orphan terraformed pads after an abandoned placement; aborted attempts leave no world modifications.
+
+- [ ] T059 [P1] Reduce partial-commit skipping and external-modification races
+  - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.
+  - Description: Add pre-commit verification and small chunk-level locks or retries; if many ops are skipped, abort and roll back (do not commit a partial pad). Add metrics that count skipped vs applied ops and surface the ratio in diagnostics.
+  - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, metrics export.
+  - Acceptance: Partial-commit incidents reduced; diagnostic line includes applied/skipped counts per commit.
+
+- [ ] T060 [P0] Ensure `PathEmitter` writes are persisted and visible
+  - Story: Some villages show A* success and path-block counts in logs, but the in-world inspection shows no or incomplete path blocks.
+  - Description: Audit `PathEmitter` and FAWE/WorldEdit writes: ensure writes run on the correct thread context and are completed/committed before logging success. Add headless check that reads world blocks at expected path coords after path emission.
+  - Files: `PathEmitter.java`, `PathServiceImpl.java`, FAWE integration code, headless tests in `tests/HEADLESS-TESTING.md` and `scripts/ci/sim`.
+  - Acceptance: Headless integration asserts that for any logged `spawned=<N>` the world contains the same number of path blocks at expected coords.
+
+- [ ] T061 [P1] Reconcile placement receipts vs summary counts
+  - Story: Summary lines sometimes report `buildings=0` despite successful `Seat successful` lines earlier — finalize counting logic.
+  - Description: Ensure the village summary/`[STRUCT] village: id=.. buildings=N` is derived from authoritative persisted `PlacementReceipt` / `VolumeMask` store only after commit success. Add assertions that increment count only after commit+receipt persistence.
+  - Files: `VillagePlacementServiceImpl.java`, `VillageMetadataStore.java`, logging summary code.
+  - Acceptance: Summary counts match persisted receipts in headless runs and unit tests.
+
+- [ ] T062 [P1] Add per-structure commit diagnostics & snapshot artifacts
+  - Story: Triaging requires pre/post world snapshots and precise applied/skipped counts.
+  - Description: Emit `TERRAFORM-COMMIT` diagnostics including `appliedOps`, `skippedOps`, `opsTotal`, and create a small artifact (JSON) with the commit bounding-box and op counts for CI attachment.
+  - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, `scripts/ci/sim/run-scenario.ps1` artifact collection.
+  - Acceptance: For every committed terraform operation the harness collects a JSON artifact with applied/skipped/op totals.
+
+- [ ] T063 [P1] Headless integration: fixed-layout + path emission + terraform-safety
+  - Story: Add an end-to-end headless test that forces deterministic layout (fixed-layout), performs placement + path emission, and asserts: (a) no orphan terraforming pads for abandoned seats, (b) path blocks exist in world as logged, and (c) building summary equals persisted receipts.
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-fixed-layout-terraform-path.ps1`, `tests/HEADLESS-TESTING.md` updates.
+  - Acceptance: CI headless test passes on platform with FAWE available.
+
+Notes:
+- Start by reproducing the failures locally with the seeds from the logs (`-3086951202754440277`, `-3086950313696210270`, etc.) and attach the produced artifacts under `test-server/logs/`.
+- Prioritize `T058` and `T060` (terraform commit atomicity and path persistence) since they directly cause visible world churn and harness false-negatives.
+
+
+Notes:
+- Capture any placement rejections / terraforming artifacts under `test-server/logs/` for triage.
+- These tasks should include small unit tests and a headless integration that reproduces the failure patterns before and after the fix.
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java, scripts/ci/sim/run-scenario.ps1
   - Description: Emit single, parseable INFO lines on path failure and zero-placement (root-cause counters). Add `[PATH][DIAG]` and `ZERO-PLACEMENT` formats consumable by harness. Capture attempted vs. spawned path counts per village.
   - Acceptance:
     - Harness can parse `ZERO-PLACEMENT rootCause=... attempts=N` and `[PATH][DIAG] village=<uuid> attempted=<M> spawned=<S> failures=<F>`.
 
-- [ ] T051 [P1] SurfaceSolver / Entrance Validation Hardening
+- [ ] T051b [P1] SurfaceSolver / Entrance Validation Hardening
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java
   - Description: Ensure SurfaceSolver.nearestWalkable never returns a y inside any VolumeMask; add entrance validation that rejects entrances that cannot snap to a solid natural ground outside expanded VolumeMask. Log rejection reason.
   - Acceptance:
     - Entrances verified and persisted; rejected entrances counted and appear in diagnostics.
 
-- [ ] T052 [P1] PathEmitter Support & Vegetation Exclusion
+- [ ] T052b [P1] PathEmitter Support & Vegetation Exclusion
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java
   - Description: Enforce surface whitelist (grass/dirt/stone/sand/gravel/snow); refuse slab/stair emission when support missing; skip/reroute nodes on vegetation. Track `skippedVegetationNodes` and `unsupportedSurfaceNodes`.
   - Acceptance:
@@ -1223,6 +1298,20 @@ Prioritization: P1 (T015c, T021d, T020b, T014c) → P2 (T018c, T017c, T022b, T01
 **Checkpoint**: Pathfinding subsystem optimized with segment reuse, targeted invalidation, capped concurrency, and observable performance metrics; ready for NPC builder integration.
 
 ---
+
+## Phase 5: User Story 3 — Trade-Funded Village Projects (Priority: P1)
+
+**Goal**: Tie contributions to visible building upgrades after structures exist
+
+**Independent Test**: Complete trades to 100% a project; observe corresponding building upgrade
+
+- [ ] T027 [US3] Wire project completion → structure upgrade in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+- [ ] T028 [P] [US3] Implement upgrade application (structure replace/expand) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureUpgradeApplier.java`
+- [ ] T029 [US3] Log upgrade completion with [STRUCT] in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+
+**Checkpoint**: US3 independently verifiable
+
+
 
 ## Phase 6: User Story 4 — Guided Onboarding (Priority: P2)
 

@@ -60,6 +60,9 @@ function Invoke-ExeCapture($exe, $arguments) {
     }
 }
 
+# Load shared small utilities for log sanitization (no side-effects)
+. "$PSScriptRoot/log-utils.ps1"
+
 function Get-JavaMajor {
     param([string]$exe)
     $info = Invoke-ExeCapture $exe '-version'
@@ -568,13 +571,13 @@ while ($elapsed -lt $maxWaitSeconds) {
         if (Test-Path "$ServerDir/server.log") {
             Write-Host "Server log:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server.log" -Tail 50
-            $serverLogContent += Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+            $serverLogContent += Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
             $serverLogContent += "`n"
         }
         if (Test-Path "$ServerDir/server-error.log") {
             Write-Host "Server errors:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server-error.log" -Tail 50
-            $serverLogContent += Get-Content "$ServerDir/server-error.log" -Raw -ErrorAction SilentlyContinue
+            $serverLogContent += Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server-error.log')
             $serverLogContent += "`n"
         }
 
@@ -646,7 +649,7 @@ while ($elapsed -lt $maxWaitSeconds) {
     }
     
         if (Test-Path "$ServerDir/server.log") {
-        $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
         if ($logContent -match 'Done \([\d.]+s\)!') {
             $serverReady = $true
             Write-Host "OK Server started successfully" -ForegroundColor Green
@@ -711,12 +714,12 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
     foreach ($cmd in $AutoCommands) {
         Write-Host "  Sending RCON command: $cmd" -ForegroundColor DarkGray
         $rconResp = Send-RconCommand -Password $rconPassword -Command $cmd
-        if ($rconResp) { Write-Host "    RCON response: $(if ($rconResp.Length -gt 200) { $rconResp.Substring(0,200) + '...' } else { $rconResp })" -ForegroundColor Gray }
+        if ($rconResp) { $rconRespClean = Sanitize-Text $rconResp; Write-Host "    RCON response: $(if ($rconRespClean.Length -gt 200) { $rconRespClean.Substring(0,200) + '...' } else { $rconRespClean })" -ForegroundColor Gray }
 
         # Special-case: when create-village returns a village ID, automatically kick off structure+path generation
         if ($cmd -match '^votest (create-village|fixed-layout)\s+\S+') {
             # Try to extract UUID from response (support both create-village and fixed-layout formats)
-            if ($rconResp -match '([a-f0-9]{8}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{12})') {
+            if ($rconRespClean -match '([a-f0-9]{8}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{12})') {
                 $villageId = $Matches[1]
                 Write-Host "    Detected created village ID: $villageId - requesting generate-structures and generate-paths" -ForegroundColor Cyan
                 $genResp = Send-RconCommand -Password $rconPassword -Command "votest generate-structures $villageId"
@@ -724,8 +727,9 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
                 Start-Sleep -Seconds 1
                 $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
                 if ($pathsResp) {
-                    Write-Host "      generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray
-                    if ($pathsResp -match 'Path network generated successfully' -or $pathsResp -match 'Path network generation failed' -or $pathsResp -match 'Path network generated') {
+                    $pathsRespClean = Sanitize-Text $pathsResp
+                    Write-Host "      generate-paths response: $(if ($pathsRespClean.Length -gt 200) { $pathsRespClean.Substring(0,200) + '...' } else { $pathsRespClean })" -ForegroundColor Gray
+                    if ($pathsRespClean -match 'Path network generated successfully' -or $pathsRespClean -match 'Path network generation failed' -or $pathsRespClean -match 'Path network generated') {
                         Write-Host "      Detected path generation result in RCON response; requesting early stop" -ForegroundColor Cyan
                         $stopRequested = $true
                     }
@@ -757,7 +761,7 @@ while ($elapsed -lt $totalWaitSeconds) {
     
     # Check for village generation progress in logs
     if ((Test-Path "$ServerDir/server.log") -and !$villageGenDetected) {
-        $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
         if ($logContent -match 'Attempting to seed village' -or $logContent -match '\[STRUCT\]') {
             $villageGenDetected = $true
             Write-Host "  Village generation detected in logs" -ForegroundColor Green
@@ -766,7 +770,7 @@ while ($elapsed -lt $totalWaitSeconds) {
 
     # If caller requested an early stop on a specific log pattern, check for it and exit early when seen
     if ($StopWhen -and (Test-Path "$ServerDir/server.log")) {
-        $logContent2 = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
+        $logContent2 = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
         if ($logContent2 -match $StopWhen) {
             Write-Host "  StopWhen pattern detected in logs; exiting early." -ForegroundColor Cyan
             break
@@ -789,7 +793,7 @@ if (!$serverProcess.HasExited) {
     
     # Find village IDs from logs
     if (Test-Path "$ServerDir/server.log") {
-        $logContent = Get-Content "$ServerDir/server.log" -Raw
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
         $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
         $villageMatches = [regex]::Matches($logContent, $villagePattern)
         
@@ -807,7 +811,7 @@ if (!$serverProcess.HasExited) {
             foreach ($vId in $uniqueVillages.Keys) {
                 Write-Host "  Requesting path generation for village $vId" -ForegroundColor DarkGray
                 $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $vId"
-                if ($pathsResp) { Write-Host "    generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray }
+                if ($pathsResp) { $pathsResp = Sanitize-Text $pathsResp; Write-Host "    generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray }
                 Start-Sleep -Seconds 2
             }
             $verifiedVillages = 0
@@ -819,7 +823,10 @@ if (!$serverProcess.HasExited) {
                 # Run verify-persistence
                 $cmd = "votest verify-persistence $vId"
                 $response = Send-RconCommand -Password $rconPassword -Command $cmd
-                
+                $response = Sanitize-Text $response
+                # Remove any stray leading non-alphanumeric runes left from control-code sanitization (per-line)
+                $response = ($response -split "`n" | ForEach-Object { $_ -replace '^[^A-Za-z0-9]+','' }) -join "`n"
+
                 if ($response) {
                     # R011c: Parse concise summary format
                     # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
@@ -918,7 +925,7 @@ if (!$serverProcess.HasExited) {
     
     # Find village IDs from logs
     if (Test-Path "$ServerDir/server.log") {
-        $logContent = Get-Content "$ServerDir/server.log" -Raw
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
         $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
         $villageMatches = [regex]::Matches($logContent, $villagePattern)
         
@@ -940,6 +947,9 @@ if (!$serverProcess.HasExited) {
                 # Run verify-persistence
                 $cmd = "votest verify-persistence $vId"
                 $response = Send-RconCommand -Password $rconPassword -Command $cmd
+                # Sanitize and trim leading non-alphanumeric junk that can break summary parsing
+                $response = Sanitize-Text $response
+                $response = ($response -split "`n" | ForEach-Object { $_ -replace '^[^A-Za-z0-9]+','' }) -join "`n"
                 
                 if ($response) {
                     # R011c: Parse concise summary format
@@ -1013,7 +1023,7 @@ if (Test-Path "$ServerDir/server.log") {
     Write-Host "" 
     Write-Host "=== Structure Placement Validation ===" -ForegroundColor Cyan
     
-    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
     
     # Count structure placements
     $beginMatches = ([regex]::Matches($logContent, '\[STRUCT\] Begin placement')).Count
@@ -1514,7 +1524,7 @@ if (Test-Path "$ServerDir/server.log") {
 
 # Check for crashes in the log
 if (Test-Path "$ServerDir/server.log") {
-    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
     if ($logContent -match "(?i)(exception|error|crash)") {
         Write-Host "! Warnings/errors found in server log (this may be expected during early development)" -ForegroundColor Yellow
     }

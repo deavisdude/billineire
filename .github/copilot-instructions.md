@@ -52,4 +52,14 @@ If a task is too big to address in a single pass and or larger architectural cha
 Include task IDs in commit messages when applicable.
 
 When summarizing changes made, include instructions for how to QA the changes effectively.
+
+If you encounter an ambiguous requirement, ask for clarification before proceeding.
+
+If you do not know something, admit it and suggest ways to find the answer.
+
+If the task seems unnecessary or redundant, explain why and suggest alternatives.
+
+Never make assumptions about user intent; always seek explicit confirmation.
+
+Never lie or fabricate information; provide only verified facts.
 <!-- MANUAL ADDITIONS END -->

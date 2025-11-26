@@ -14,6 +14,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.world.WorldLoadEvent;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -127,6 +129,13 @@ public class VillageWorldgenAdapter implements Listener {
         
         int baseX = suitableLocation.getBlockX();
         int baseZ = suitableLocation.getBlockZ();
+        
+        // T052a: Pre-load chunks in the village area BEFORE switching to main thread
+        // This ensures the placement search has enough loaded chunks to work with
+        // without blocking the main thread with chunk loading calls
+        logger.info("Pre-loading chunks for village placement area...");
+        preloadVillageAreaChunks(world, baseX, baseZ, 256); // Load 256-block radius for placement search
+        
         int y = world.getHighestBlockYAt(baseX, baseZ);
 
         logger.info("Village placement selected: " + baseX + ", " + y + ", " + baseZ);
@@ -214,6 +223,7 @@ public class VillageWorldgenAdapter implements Listener {
     
     /**
      * Search for suitable flat terrain for village placement.
+     * T052a: Uses time-budgeted chunk loading to prevent main thread blocking.
      * 
      * @param world Target world
      * @param start Starting search location (typically spawn)
@@ -232,6 +242,11 @@ public class VillageWorldgenAdapter implements Listener {
         int locationsChecked = 0;
         long searchStartTime = System.currentTimeMillis();
         
+        // T052a: Time budget for chunk loading (ms) - prevents extended blocking
+        final long CHUNK_LOAD_BUDGET_MS = 2000; // Max 2 seconds of chunk loading for terrain search
+        int chunksLoaded = 0;
+        int chunksSkipped = 0;
+        
         // Spiral search pattern - increased max radius for more opportunities
         for (int radius = 16; radius <= Math.min(maxRadius, 768); radius += sampleInterval) {
             // Check 8 points around the circle at this radius
@@ -242,12 +257,36 @@ public class VillageWorldgenAdapter implements Listener {
                 
                 locationsChecked++;
                 
+                // T052a: Check time budget before chunk loading
+                long elapsed = System.currentTimeMillis() - searchStartTime;
+                if (elapsed > CHUNK_LOAD_BUDGET_MS) {
+                    // Budget exceeded - log diagnostic and skip remaining unloaded chunks
+                    if (chunksSkipped == 0) {
+                        logger.warning(String.format("[TERRAIN][DIAG] Chunk load budget exceeded (%dms > %dms), skipping unloaded chunks",
+                                elapsed, CHUNK_LOAD_BUDGET_MS));
+                    }
+                    
+                    int chunkX = x >> 4;
+                    int chunkZ = z >> 4;
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        chunksSkipped++;
+                        continue;
+                    }
+                }
+                
                 // Check if this location is suitable
-                if (isTerrainSuitable(world, x, z, checkRadius)) {
+                if (isTerrainSuitableTimeBudgeted(world, x, z, checkRadius, searchStartTime, CHUNK_LOAD_BUDGET_MS)) {
                     int y = world.getHighestBlockYAt(x, z);
                     long searchTime = System.currentTimeMillis() - searchStartTime;
                     logger.info("OK Found suitable terrain after checking " + locationsChecked + " locations in " + searchTime + "ms");
                     logger.info("   Location: distance=" + radius + " blocks, coords=(" + x + ", " + y + ", " + z + ")");
+                    
+                    // T052a: Emit diagnostic if significant chunk loading occurred
+                    if (chunksLoaded > 20 || chunksSkipped > 0) {
+                        logger.info(String.format("[TERRAIN][DIAG] Terrain search stats: chunks_loaded=%d, chunks_skipped=%d, time=%dms",
+                                chunksLoaded, chunksSkipped, searchTime));
+                    }
+                    
                     return new Location(world, x, y, z);
                 }
             }
@@ -261,29 +300,76 @@ public class VillageWorldgenAdapter implements Listener {
         
         long searchTime = System.currentTimeMillis() - searchStartTime;
         logger.warning("X No suitable terrain found after checking " + locationsChecked + " locations in " + searchTime + "ms");
+        
+        // T052a: Emit final diagnostic
+        if (chunksSkipped > 0) {
+            logger.warning(String.format("[TERRAIN][DIAG] Search completed with %d chunks skipped due to budget", chunksSkipped));
+        }
+        
         return null;
     }
     
     /**
      * Check if terrain at location is suitable for village placement.
+     * T052a: Uses time-budgeted chunk loading to prevent blocking.
      * 
      * @param world Target world
      * @param centerX Center X coordinate
      * @param centerZ Center Z coordinate
      * @param checkRadius Radius to check around center
+     * @param searchStartTime When the search started (for budget tracking)
+     * @param chunkLoadBudgetMs Maximum ms to spend on chunk loading
      * @return true if terrain is suitable
      */
-    private boolean isTerrainSuitable(World world, int centerX, int centerZ, int checkRadius) {
-        // CRITICAL: Force chunk loading before terrain checks (async terrain search needs loaded chunks!)
-        // Load a 3x3 chunk area around the center point to ensure terrain is accessible
+    private boolean isTerrainSuitableTimeBudgeted(World world, int centerX, int centerZ, int checkRadius,
+                                                   long searchStartTime, long chunkLoadBudgetMs) {
+        // T052a: Check time budget before forcing chunk loads
+        long elapsed = System.currentTimeMillis() - searchStartTime;
+        boolean budgetExceeded = elapsed > chunkLoadBudgetMs;
+        
+        // Load chunks for terrain check - with time budget
         int chunkX = centerX >> 4;
         int chunkZ = centerZ >> 4;
+        
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                world.getChunkAt(chunkX + dx, chunkZ + dz); // Force synchronous chunk load
+                int cx = chunkX + dx;
+                int cz = chunkZ + dz;
+                
+                if (!world.isChunkLoaded(cx, cz)) {
+                    if (budgetExceeded) {
+                        // Budget exceeded - return false to skip this location
+                        return false;
+                    }
+                    
+                    // Try async chunk load (Paper API) with timeout
+                    try {
+                        world.getChunkAtAsync(cx, cz).get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (Exception e) {
+                        // Async failed or timed out - try sync load if we still have budget
+                        long currentElapsed = System.currentTimeMillis() - searchStartTime;
+                        if (currentElapsed < chunkLoadBudgetMs) {
+                            try {
+                                world.getChunkAt(cx, cz);
+                            } catch (Exception ex) {
+                                return false; // Chunk load failed
+                            }
+                        } else {
+                            return false; // Budget exceeded
+                        }
+                    }
+                }
             }
         }
         
+        // Now do the actual terrain check (chunks are loaded)
+        return evaluateTerrainFast(world, centerX, centerZ, checkRadius);
+    }
+    
+    /**
+     * Fast terrain evaluation (assumes chunks are loaded).
+     */
+    private boolean evaluateTerrainFast(World world, int centerX, int centerZ, int checkRadius) {
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
         int waterBlocks = 0;
@@ -320,8 +406,61 @@ public class VillageWorldgenAdapter implements Listener {
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
-        // Skip ice check for speed - water check is sufficient
         return flatEnough && notTooWatery && goodHeight;
+    }
+    
+    /**
+     * T052a: Pre-load chunks in the village placement area.
+     * This runs in the async context BEFORE switching to main thread for placement,
+     * ensuring the placement search has loaded chunks to work with.
+     * Uses async chunk loading with CompletableFuture.allOf() to batch load efficiently.
+     * 
+     * @param world Target world
+     * @param centerX Village center X
+     * @param centerZ Village center Z  
+     * @param radius Radius in blocks to pre-load (will be converted to chunks)
+     */
+    private void preloadVillageAreaChunks(World world, int centerX, int centerZ, int radius) {
+        // Convert block radius to chunk radius (16 blocks per chunk)
+        int chunkRadius = (radius / 16) + 1;
+        int centerChunkX = centerX >> 4;
+        int centerChunkZ = centerZ >> 4;
+        
+        List<java.util.concurrent.CompletableFuture<org.bukkit.Chunk>> futures = new ArrayList<>();
+        int totalChunks = 0;
+        int alreadyLoaded = 0;
+        
+        for (int cx = centerChunkX - chunkRadius; cx <= centerChunkX + chunkRadius; cx++) {
+            for (int cz = centerChunkZ - chunkRadius; cz <= centerChunkZ + chunkRadius; cz++) {
+                totalChunks++;
+                if (world.isChunkLoaded(cx, cz)) {
+                    alreadyLoaded++;
+                    continue;
+                }
+                
+                // Use Paper's async chunk loading API
+                try {
+                    futures.add(world.getChunkAtAsync(cx, cz));
+                } catch (Exception e) {
+                    // Async not available, will be loaded on-demand
+                }
+            }
+        }
+        
+        // Wait for all async chunk loads to complete (we're in async context, so this is fine)
+        if (!futures.isEmpty()) {
+            try {
+                java.util.concurrent.CompletableFuture.allOf(
+                    futures.toArray(new java.util.concurrent.CompletableFuture[0])
+                ).join();
+                logger.info(String.format("Pre-loaded %d chunks for village area (%d were already loaded, %d total)",
+                        futures.size(), alreadyLoaded, totalChunks));
+            } catch (Exception e) {
+                logger.warning("Some chunks failed to pre-load: " + e.getMessage());
+            }
+        } else {
+            logger.info(String.format("All %d village area chunks already loaded", totalChunks));
+        }
     }
     
     /**

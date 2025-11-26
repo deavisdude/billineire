@@ -39,6 +39,8 @@ Write-Host "Testing path generation reproducibility and variance" -ForegroundCol
 Write-Host "Seed A: $SeedA (run twice for determinism)" -ForegroundColor White
 Write-Host "Seed B: $SeedB (run once for variance)" -ForegroundColor White
 Write-Host ""
+# Load shared sanitize helpers
+. "$PSScriptRoot/log-utils.ps1"
 
 # Function to extract path hashes from log file
 function Get-PathHashes {
@@ -48,28 +50,32 @@ function Get-PathHashes {
         Write-Host "X Log file not found: $logFile" -ForegroundColor Red
         return @()
     }
+    # Read and sanitize the log file
+    $clean = Read-And-Sanitize-LogFile $logFile
     
     # Accept either canonical determinism logs or A* success hash logs
-    $hashPattern = '\[PATH\] Determinism hash: ([a-f0-9]+) \(nodes=([0-9]+)\)|\[PATH\] A\* success: .* hash=([a-f0-9]+)'
-    $hashMatches = Select-String -Path $logFile -Pattern $hashPattern
+    # Allow uppercase hex too, and run against sanitized content
+    $hashPattern = '\[PATH\] Determinism hash: ([A-Fa-f0-9]+) \(nodes=([0-9]+)\)|\[PATH\] A\* success: .* hash=([A-Fa-f0-9]+)'
+    $hashMatches = [regex]::Matches($clean, $hashPattern)
     
     $hashes = @()
-    foreach ($match in $hashMatches) {
+    foreach ($m in $hashMatches) {
         # If the determinism pattern matched, group 1=hash, group 2=nodes
-        $g1 = $match.Matches[0].Groups[1].Value
+        $g1 = $m.Groups[1].Value
         if ($g1 -and $g1 -ne '') {
             $h = $g1
-            $n = [int]$match.Matches[0].Groups[2].Value
+            $n = [int]$m.Groups[2].Value
         } else {
             # Otherwise fallback to the A* success hash in group 3
-            $h = $match.Matches[0].Groups[3].Value
+            $h = $m.Groups[3].Value
             $n = 0
         }
 
+        $lineNum = "?"
         $hashes += @{
-            hash = $h
+            hash = $h.ToLower()
             nodes = $n
-            line = $match.LineNumber
+            line = $lineNum
         }
     }
     
@@ -83,9 +89,10 @@ function Get-ZeroPlacementSummary {
     if (-not (Test-Path $logFile)) {
         return $null
     }
+    $clean = Read-And-Sanitize-LogFile $logFile
 
     $pattern = 'ZERO-PLACEMENT\s+rootCause=([^\s]+)\s+attempts=([0-9]+)'
-    $match = Select-String -Path $logFile -Pattern $pattern -AllMatches
+    $match = [regex]::Matches($clean, $pattern)
     if (-not $match -or $match.Count -eq 0) { return $null }
 
     # Aggregate any matched rootCause lines

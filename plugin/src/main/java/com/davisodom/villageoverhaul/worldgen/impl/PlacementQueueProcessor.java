@@ -508,20 +508,17 @@ public class PlacementQueueProcessor {
             requiredChunks.add(chunkKey);
         }
         
-        // Verify all chunks are loaded
+        // T052a: Only check if chunks are loaded - DO NOT force-load on main thread
+        // Force-loading causes main thread blocking and Paper thread-dump warnings
         for (long chunkKey : requiredChunks) {
             int chunkX = (int) (chunkKey >> 32);
             int chunkZ = (int) chunkKey;
             
-            if (!world.isChunkGenerated(chunkX, chunkZ)) {
-                // Try to load synchronously
-                try {
-                    world.getChunkAt(chunkX, chunkZ);
-                } catch (Exception e) {
-                    LOGGER.warning(String.format("[STRUCT] Failed to load chunk (%d, %d): %s", 
-                            chunkX, chunkZ, e.getMessage()));
-                    return false;
-                }
+            // Check if chunk is generated AND loaded
+            if (!world.isChunkGenerated(chunkX, chunkZ) || !world.isChunkLoaded(chunkX, chunkZ)) {
+                LOGGER.warning(String.format("[STRUCT] Chunk not ready (%d, %d) - skipping placement batch", 
+                        chunkX, chunkZ));
+                return false;
             }
         }
         

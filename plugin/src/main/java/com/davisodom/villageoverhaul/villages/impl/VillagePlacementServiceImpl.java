@@ -565,6 +565,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * T026d1: Deterministic candidate ordering using buildingSeed for consistent spiral iteration.
      * T026d2: Stable candidate site ordering & filtering - candidates sorted by deterministic key,
      *         filters applied in fixed sequence.
+     * T052a: Time-budgeted chunk loading to prevent main thread blocking.
      */
         private Optional<Location> findSuitablePlacementPosition(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
@@ -573,6 +574,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Increase search radius and density: helps find more valid spots in constrained terrain
         final int maxRadius = 256;
         final int gridSize = 4;
+        
+        // T052a: Track chunks skipped due to not being loaded
+        // We ONLY work with already-loaded chunks to avoid blocking the main thread
+        int chunksSkipped = 0;
         
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
@@ -590,12 +595,18 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     int candidateX = origin.getBlockX() + dx;
                     int candidateZ = origin.getBlockZ() + dz;
                     
-                    // T026d4: Ensure chunk is loaded before querying surface height
-                    // This prevents non-deterministic behavior from async chunk loading
+                    // T052a: ONLY work with already-loaded chunks to avoid main thread blocking
+                    // Never call getChunkAt() or getChunkAtAsync().join() from the main thread
+                    // as both block the server thread and trigger Paper thread-dump warnings
                     int chunkX = candidateX >> 4;
                     int chunkZ = candidateZ >> 4;
-                    if (!world.isChunkGenerated(chunkX, chunkZ)) {
-                        world.getChunkAt(chunkX, chunkZ); // Sync load if needed
+                    
+                    // Check if chunk is already loaded - if not, skip this candidate
+                    // The terrain search phase (VillageWorldgenAdapter) should have loaded nearby chunks
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        chunksSkipped++;
+                        if (tracker != null) tracker.recordChunkNotReady();
+                        continue;
                     }
                     
                     // R009: Use SurfaceSolver to find ground level
@@ -609,6 +620,12 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             distanceSquared, dx, dz));
                 }
             }
+        }
+        
+        // T052a: Emit diagnostic if many chunks were skipped (indicates terrain search didn't load enough)
+        if (chunksSkipped > 20) {
+            LOGGER.warning(String.format("[STRUCT][CHUNK-DIAG] Placement search skipped %d unloaded chunks - consider expanding terrain search radius",
+                    chunksSkipped));
         }
         
         // T026d2: Sort candidates by deterministic key: distance, then X, then Z

@@ -3,6 +3,7 @@ package com.davisodom.villageoverhaul.worldgen.impl;
 import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.SiteValidator;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
+import com.davisodom.villageoverhaul.worldgen.TerraformingPlan;
 import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
 import com.sk89q.worldedit.WorldEdit;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
@@ -368,6 +369,7 @@ public class StructureServiceImpl implements StructureService {
      * Attempt single placement at given location with validation and collision detection.
      * R011b: Pre-placement collision check prevents wasted placements.
      * VillagePlacementServiceImpl handles candidate search - this method only validates and places.
+     * T051: Uses TerraformingPlan with deferred commits to prevent orphaned terraforming pads.
      * @return Optional containing the actual placed location, empty if validation/collision fails
      */
         private Optional<Location> attemptSinglePlacementAndGetLocation(
@@ -438,21 +440,27 @@ public class StructureServiceImpl implements StructureService {
         } else {
             LOGGER.info("[STRUCT] DIAGNOSTIC: No existing masks to check collision against (first structure)");
         }
-            
-        // Prepare site with terraforming using exact AABB BEFORE placement
-        boolean terraformed = TerraformingUtil.prepareSiteWithBounds(world, bounds);
         
-        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming result=%b", terraformed));
+        // T051: Use TerraformingPlan with deferred commits to prevent orphaned terraforming pads
+        // Plan terraforming operations without modifying the world yet
+        TerraformingPlan terraformPlan = TerraformingPlan.forBounds(world, bounds);
+        boolean planValid = terraformPlan.plan();
         
-        // CRITICAL: If terraforming fails (fluid detected), abort placement
-        if (!terraformed) {
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Terraforming failed (likely fluid detected during site prep)");
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: TerraformingPlan result=%b, diagnostics=%s", 
+                planValid, terraformPlan.getDiagnosticsSummary()));
+        
+        // CRITICAL: If terraforming plan fails (fluid detected), abort WITHOUT modifying world
+        if (!planValid) {
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming plan failed: %s - no blocks modified", 
+                    terraformPlan.getRejectionReason()));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+            // T051: Emit diagnostic artifact for failed terraforming plans
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false);
             return Optional.empty();
         }
-            
-        // Site prepared - perform actual placement
-        // After successful terraforming, placement MUST succeed (already committed to this site)
+        
+        // Plan is valid - now perform actual placement FIRST
+        // If placement fails, we haven't modified the world with terraforming
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
                 template.id, formatLocation(origin)));
         boolean placed = performActualPlacement(template, world, origin, seed, attemptDiagnostics);
@@ -460,17 +468,41 @@ public class StructureServiceImpl implements StructureService {
                 placed, template.id));
         
         if (!placed) {
-            // This should NEVER happen after successful validation and terraforming
-            // Log as ERROR since we've already modified the world
-            LOGGER.severe(String.format("[STRUCT] CRITICAL: Placement failed after terraforming for '%s' at %s - site orphaned!",
+            // Placement failed - do NOT commit terraforming changes
+            // This prevents orphaned terraforming pads
+            LOGGER.warning(String.format("[STRUCT] Placement failed for '%s' at %s - terraforming NOT committed (no orphaned pads)",
                     template.id, formatLocation(origin)));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("otherFailures", 1, Integer::sum);
+            // T051: Emit diagnostic artifact for abandoned terraforming
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false);
             return Optional.empty();
         }
+        
+        // T051: Placement succeeded - NOW commit terraforming changes
+        // This ensures terraforming only happens for successfully placed structures
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming for '%s' at %s",
+                template.id, formatLocation(origin)));
+        terraformPlan.commit();
+        
+        // T051: Emit diagnostic artifact showing successful terraforming aligned with placement
+        emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true);
         
         LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
                 template.id, formatLocation(origin), seed));
         return Optional.of(origin);
+    }
+    
+    /**
+     * T051: Emit diagnostic artifact comparing terraformed AABB and placement receipt.
+     * Logs a parseable summary that can be captured by the CI harness.
+     */
+    private void emitTerraformingDiagnostic(String structureId, int[] bounds, TerraformingPlan plan, boolean committed) {
+        String status = committed ? "COMMITTED" : "ABANDONED";
+        LOGGER.info(String.format("[STRUCT][TERRAFORM-DIAG] structure=%s status=%s bounds=(%d..%d,%d..%d,%d..%d) ops=%d reason=%s",
+                structureId, status,
+                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+                plan.getPlannedOperations().size(),
+                plan.getRejectionReason() != null ? plan.getRejectionReason() : "none"));
     }
     
     /**
@@ -1268,38 +1300,34 @@ public class StructureServiceImpl implements StructureService {
         int minChunkZ = (origin.getBlockZ()) >> 4;
         int maxChunkZ = (origin.getBlockZ() + depth - 1) >> 4;
         
-        int chunksToLoad = 0;
-        int chunksLoaded = 0;
+        int chunksToCheck = 0;
+        int chunksReady = 0;
         
-        // Check all chunks in the footprint
+        // T052a: Only check if chunks are loaded - DO NOT force-load on main thread
+        // Chunk loading should have happened in the async terrain search phase
+        // Force-loading here blocks the main thread and triggers Paper thread-dump warnings
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-                chunksToLoad++;
+                chunksToCheck++;
                 
-                // Check if chunk is generated (not just loaded in memory)
-                if (!world.isChunkGenerated(chunkX, chunkZ)) {
-                    LOGGER.fine(String.format("[STRUCT] Chunk not generated: (%d, %d)", chunkX, chunkZ));
-                    // Try to load synchronously
-                    try {
-                        world.getChunkAt(chunkX, chunkZ);
-                        chunksLoaded++;
-                    } catch (Exception e) {
-                        LOGGER.warning(String.format("[STRUCT] Failed to load chunk (%d, %d): %s", 
-                                chunkX, chunkZ, e.getMessage()));
-                        return false;
-                    }
+                // Check if chunk is generated AND loaded (available for block operations)
+                if (world.isChunkGenerated(chunkX, chunkZ) && world.isChunkLoaded(chunkX, chunkZ)) {
+                    chunksReady++;
                 } else {
-                    chunksLoaded++;
+                    // T052a: Do NOT call getChunkAt() here - it blocks the main thread
+                    LOGGER.fine(String.format("[STRUCT] Chunk not ready: (%d, %d) generated=%b loaded=%b", 
+                            chunkX, chunkZ, world.isChunkGenerated(chunkX, chunkZ), world.isChunkLoaded(chunkX, chunkZ)));
                 }
             }
         }
         
-        boolean allReady = (chunksLoaded == chunksToLoad);
+        boolean allReady = (chunksReady == chunksToCheck);
         
         if (allReady) {
-            LOGGER.fine(String.format("[STRUCT] Chunk readiness: %d/%d chunks ready", chunksLoaded, chunksToLoad));
+            LOGGER.fine(String.format("[STRUCT] Chunk readiness: %d/%d chunks ready", chunksReady, chunksToCheck));
         } else {
-            LOGGER.warning(String.format("[STRUCT] Chunk readiness FAIL: %d/%d chunks ready", chunksLoaded, chunksToLoad));
+            LOGGER.warning(String.format("[STRUCT] Chunk readiness FAIL: %d/%d chunks ready (pre-load terrain search may need larger radius)", 
+                    chunksReady, chunksToCheck));
         }
         
         return allReady;
