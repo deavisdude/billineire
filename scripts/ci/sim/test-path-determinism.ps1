@@ -76,6 +76,48 @@ function Get-PathHashes {
     return $hashes
 }
 
+# Function to parse ZERO-PLACEMENT summary lines and return per-category counts
+function Get-ZeroPlacementSummary {
+    param([string]$logFile)
+
+    if (-not (Test-Path $logFile)) {
+        return $null
+    }
+
+    $pattern = 'ZERO-PLACEMENT\s+rootCause=([^\s]+)\s+attempts=([0-9]+)'
+    $match = Select-String -Path $logFile -Pattern $pattern -AllMatches
+    if (-not $match -or $match.Count -eq 0) { return $null }
+
+    # Aggregate any matched rootCause lines
+    $agg = @{
+        attempts = 0
+        rootCause = @{}
+        rawLines = @()
+    }
+
+    foreach ($m in $match) {
+        foreach ($mm in $m.Matches) {
+            $rc = $mm.Groups[1].Value
+            $att = [int]$mm.Groups[2].Value
+            $agg.attempts += $att
+            $agg.rawLines += $m.Line
+
+            # rc looks like "fluid:123,steep:45,..."
+            $pairs = $rc -split ','
+            foreach ($p in $pairs) {
+                if ($p -match '^([^:]+):([0-9]+)$') {
+                    $k = $matches[1]
+                    $v = [int]$matches[2]
+                    if (-not $agg.rootCause.ContainsKey($k)) { $agg.rootCause[$k] = 0 }
+                    $agg.rootCause[$k] += $v
+                }
+            }
+        }
+    }
+
+    return $agg
+}
+
 # Function to compare hash sequences
 function Compare-HashSequences {
     param(
@@ -169,6 +211,9 @@ function Invoke-ScenarioWithRetries {
     $attempt = 0
     $currentTicks = $ticks
 
+    # Track aggregated zero-placement diagnostics across attempts
+    $aggZero = @{ attempts = 0; rootCause = @{}; lines = @() }
+
     while ($attempt -le $maxRetries) {
         $attempt++
         Write-Host "Running scenario (seed=$seed) attempt $attempt/$($maxRetries+1) with ticks=$currentTicks" -ForegroundColor Cyan
@@ -186,6 +231,15 @@ function Invoke-ScenarioWithRetries {
 
         Copy-Item "$serverDir/logs/latest.log" $outLog -Force
         $hashes = Get-PathHashes $outLog
+        $zero = Get-ZeroPlacementSummary $outLog
+        if ($zero) {
+            $aggZero.attempts = $aggZero.attempts + $zero.attempts
+            foreach ($k in $zero.rootCause.Keys) {
+                if (-not $aggZero.rootCause.ContainsKey($k)) { $aggZero.rootCause[$k] = 0 }
+                $aggZero.rootCause[$k] = $aggZero.rootCause[$k] + $zero.rootCause[$k]
+            }
+            $aggZero.lines += $zero.rawLines
+        }
         if ($hashes.Count -gt 0) {
             return @{ exitCode = 0; hashes = $hashes }
         }
@@ -195,10 +249,20 @@ function Invoke-ScenarioWithRetries {
         $currentTicks = [Math]::Max(6000, $currentTicks * 10)
     }
 
-    # Final attempt returned zero hashes
+    # Final attempt returned zero hashes (and possibly zero-placement diagnostics)
     Copy-Item "$serverDir/logs/latest.log" $outLog -Force
     $finalHashes = Get-PathHashes $outLog
-    return @{ exitCode = 0; hashes = $finalHashes }
+    $finalZero = Get-ZeroPlacementSummary $outLog
+    if ($finalZero) {
+        $aggZero.attempts = $aggZero.attempts + $finalZero.attempts
+        foreach ($k in $finalZero.rootCause.Keys) {
+            if (-not $aggZero.rootCause.ContainsKey($k)) { $aggZero.rootCause[$k] = 0 }
+            $aggZero.rootCause[$k] = $aggZero.rootCause[$k] + $finalZero.rootCause[$k]
+        }
+        $aggZero.lines += $finalZero.rawLines
+    }
+
+    return @{ exitCode = 0; hashes = $finalHashes; zeroPlacement = $aggZero }
 }
 
 
@@ -224,6 +288,22 @@ $result2 = Invoke-ScenarioWithRetries -ticks $Ticks -seed $SeedA -serverDir $Ser
 if ($result2 -is [int] -and $result2 -ne 0) { exit $result2 }
 $hashesRun2 = $result2.hashes
 Write-Host "Run 2 complete: $($hashesRun2.Count) path hashes captured" -ForegroundColor Green
+
+# If Run 2 produced no path hashes but recorded zero-placement diagnostics,
+# report an aggregated failure after retries and fail determinism explicitly.
+if (($hashesRun2.Count -eq 0) -and $result2.zeroPlacement -and $result2.zeroPlacement.rootCause.Keys.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'X Run 2 produced zero placements after retries - aggregated root-cause summary:' -ForegroundColor Red
+    foreach ($k in $result2.zeroPlacement.rootCause.Keys) {
+        Write-Host ("    {0}: {1}" -f $k, $result2.zeroPlacement.rootCause[$k]) -ForegroundColor Yellow
+    }
+    if ($result2.zeroPlacement.lines.Count -gt 0) {
+        Write-Host '    Example log lines:' -ForegroundColor Gray
+        $result2.zeroPlacement.lines | Select-Object -First 3 | ForEach-Object { Write-Host ("      {0}" -f $_) -ForegroundColor Gray }
+    }
+    Write-Host 'FAIL: Determinism test aborted due to persistent zero-placement on Run 2' -ForegroundColor Red
+    exit 2
+}
 
 # Run 3: Seed B (different seed - should differ from Seed A)
 Write-Host ""

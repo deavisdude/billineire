@@ -809,10 +809,13 @@ Notes:
       - ✅ Persist generated `PathNetwork` into `VillageMetadataStore` so harness/tests can inspect path results
       - ✅ Unit tests added to verify seed-chain derivation and path-base determinism
     - Notes: Prioritize this task now (move ahead of other T026d items) because it blocks final determinism acceptance.
-  - [ ] T026d8 [US2] Determinism regression headless test
+  - [X] T026d8 [US2] Determinism regression headless test
     - Files: `scripts/ci/sim/test-path-determinism.ps1`, `tests/HEADLESS-TESTING.md`
     - Description: Extend script: if Run 2 has zero placements, auto-retry up to 2 times; if still zero, mark FAIL with root-cause aggregation.
     - Acceptance: Test only FAILs determinism after retries and diagnostic root-cause summary recorded.
+    - Implementation (2025-11-26):
+      - ✅ `test-path-determinism.ps1` retries Run 2 up to 2 times when zero placements occur and aggregates `ZERO-PLACEMENT` diagnostics across attempts.
+      - ✅ Headless docs updated to describe retry/fail behavior and CI artifact expectations (`tests/HEADLESS-TESTING.md`).
   - [ ] T026d9 [US2] Placement pipeline unit tests (MockBukkit)
     - Files: `plugin/src/test/java/.../VillagePlacementServiceImplTest.java`, `StructureServiceImplTest.java`
     - Description: Add tests for ordering, retry sequence, and seed-chain determinism (mock terrain & chunks).

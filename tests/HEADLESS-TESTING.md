@@ -1141,22 +1141,11 @@ Select-String 'retryHash=' run3.log
 - To trigger retry hash logging, use seeds with constrained terrain (islands, dense forests, water-heavy areas)
 - Consider adding test-only config flag to force placement failures for validation
 
-### Future Enhancements
+### Enhancements implemented
 
-**Automated Retry Hash Validation** (proposed):
-```powershell
-# Extend test-path-determinism.ps1 to include retry hash checks
-.\scripts\ci\sim\test-retry-determinism.ps1 -Seed 99999
-# - Forces placement failures via constrained terrain config
-# - Runs twice with same seed, compares retry hashes
-# - Reports PASS/FAIL for retry sequence determinism
-```
+- `test-path-determinism.ps1` now implements retry logic for Run 2 and deterministic diagnostics (T026d8): if Run 2 produces zero placements it will retry up to 2 times; if zero placements persist the script fails with an aggregated `ZERO-PLACEMENT` root-cause summary captured from logs and surfaced to CI artifacts.
 
-**Structured Retry Diagnostics** (proposed):
-```text
-# Log detailed retry metrics for debugging
-[STRUCT][RETRY] seed=12345 candidates=1024 rejected=1024 reasons={collision:512,spacing:256,terrain:256} retryHash=a1b2c3d4...
-```
+**Notes:** the script still captures retry hashes and determinism hashes; future work could additionally validate retry-hash equality across runs.
 
 ---
 [PATH] Determinism hash: f6e5d4c3b2a1... (nodes=38)  ✅

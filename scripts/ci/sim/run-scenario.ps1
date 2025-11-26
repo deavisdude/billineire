@@ -387,6 +387,34 @@ world-settings:
 "@
 Set-Content -Path "$ServerDir/spigot.yml" -Value $spigotYml
 
+# T026d fix: Set level-seed in server.properties for deterministic world generation
+# This ensures the Minecraft world uses the same seed across runs (not just folder name)
+$serverPropsPath = Join-Path $ServerDir "server.properties"
+if (Test-Path $serverPropsPath) {
+    $propsContent = Get-Content -Path $serverPropsPath -Raw
+    # Replace existing level-seed line or append if not present
+    if ($propsContent -match '(?m)^level-seed=.*$') {
+        $propsContent = $propsContent -replace '(?m)^level-seed=.*$', "level-seed=$Seed"
+    } else {
+        $propsContent = $propsContent.TrimEnd() + "`nlevel-seed=$Seed`n"
+    }
+    Set-Content -Path $serverPropsPath -Value $propsContent -NoNewline
+    Write-Host "Set level-seed=$Seed in server.properties for deterministic world generation" -ForegroundColor Cyan
+} else {
+    # Create minimal server.properties if it doesn't exist
+    $minimalProps = @"
+enable-rcon=true
+rcon.password=APsodS0nk9Htj8Ov
+rcon.port=25575
+level-seed=$Seed
+online-mode=false
+spawn-monsters=false
+difficulty=peaceful
+"@
+    Set-Content -Path $serverPropsPath -Value $minimalProps
+    Write-Host "Created server.properties with level-seed=$Seed" -ForegroundColor Cyan
+}
+
 Write-Host "Starting Paper server for $Ticks ticks..." -ForegroundColor Yellow
 
 # Ensure no leftover server processes or locks are preventing world access
