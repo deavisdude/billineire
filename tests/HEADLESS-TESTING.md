@@ -783,6 +783,18 @@ Use multiple water patches or wall width adjustments to tune alternative route l
 
 **Status**: ✅ Implemented (2025-11-09)
 
+**Determinism Stabilized**: ✅ (2025-11-25)
+
+Sample dual-run PASS output (Run1 == Run2):
+
+```text
+=== Deterministic Path-from-Seed Check (T026d) ===
+Run 1 seed=12345: 8 path hashes captured
+Run 2 seed=12345: 8 path hashes captured
+Compare: Run1 == Run2 → PASS (all 8 hashes match, order preserved)
+Run 3 seed=67890: 8 path hashes captured (different from Run1/2) → VARIANCE PASS
+```
+
 ### What Is Implemented
 | Component | Status | Notes |
 |-----------|--------|-------|

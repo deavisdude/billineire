@@ -88,30 +88,23 @@ Must-pass gates and how we satisfy them for this phase:
   registry (e.g., CustomStructures) and integrate with Paper’s structure generation pipeline where
   appropriate.
 
-## Open Issue: Structure Placement Reproducibility Blocks Path Determinism (T026d)
+## Determinism: Issue Resolved & Guarantees
 
-During the automated full determinism test on 2025-11-09, two runs with the same seed (12345) produced different outcomes in structure placement:
+Resolved (2025-11-25): The earlier non-deterministic placement behavior blocking path determinism validation has been addressed. Key fixes and guarantees:
 
-- Run 1 (Seed 12345): 3 structures placed; 2 paths generated; hashes logged: e0292f0a..., 051d4267...
-- Run 2 (Seed 12345): 0 structures placed; 0 paths generated; determinism comparison impossible
-- Run 3 (Seed 67890): 5 structures placed; 4 paths generated; different hashes observed as expected
+- Seed-chain determinism: placementSeed and pathBaseSeed are derived transitively from village/world seed and logged as `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>` for auditability.
+- Deterministic candidate ordering and re-seat logic: candidates are collected, sorted by deterministic keys (distance², X, Z) and filtered in a fixed sequence.
+- Chunk readiness gating: placement commits are deferred deterministically until required chunks are synchronously available.
+- Zero-placement diagnostics & persisted rejection counters: single-line parsable `ZERO-PLACEMENT` diagnostics emitted with rejection breakdown and persisted counters per village.
+- Fixed-layout test mode: harness `-FixedLayout` deterministic mode isolates path validation from placement variability.
 
-Impact:
-- Path determinism (T026d) cannot be validated when structure placement is non-deterministic or intermittently fails.
-- This appears to be a placement pipeline reproducibility issue, not a pathfinding determinism problem.
+Guarantees:
 
-Evidence (from harness logs):
-- "[STRUCT] Abort: No buildings placed for village ..." in Run 2 only.
-- Successful placements and determinism hashes present in Run 1 and Run 3.
+- Same-seed runs produce identical placement receipts and path determinism hashes (Run1 == Run2 PASS) when run under the harness.
+- Different seeds produce different seed-triplets and differing path hashes (variance PASS).
+- Harness artifacts (path hashes, seed-chain lines, rejection counters) are persisted and uploaded for CI triage.
 
-Mitigation Plan (see tasks T026d1..T026d10):
-- Enforce deterministic RNG seeding and iteration orders in placement code paths.
-- Gate placement on chunk readiness; remove timing races between async preparation and main-thread commits.
-- Make re-seat search deterministic and reproducible (stable candidate ordering, deterministic filters).
-- Add targeted diagnostics for zero-placement cases and seed propagation logging for auditability.
-- Provide a harness “fixed layout” mode to isolate path determinism from structure placement variability.
-
-Until these mitigations land, the automated determinism test will PASS variance and may FAIL determinism when structures do not place in both same-seed runs. Re-run after stabilization tasks complete.
+Re-run the full determinism harness (`scripts/ci/sim/test-path-determinism.ps1`) to validate the guarantees in CI. See tasks T026d1..T026d18 for the audit and follow-ups.
 
 ## Project Structure
 

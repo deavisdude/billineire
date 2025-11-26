@@ -43,7 +43,42 @@ public class VillagePlacementServiceImplTest {
 
         assertNotEquals(r1, r3, "Different seed should usually produce a different ordering");
     }
-
+    
     // Candidate selection tests require a stable MockBukkit world and were flaky across CI
     // Focused deterministic ordering tests are provided elsewhere in the suite.
+
+    @Test
+    @DisplayName("placeBuilding produces deterministic building IDs for same seed")
+    public void testPlaceBuildingDeterministicId() throws Exception {
+    com.davisodom.villageoverhaul.worldgen.StructureService structureService = Mockito.mock(
+        com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+    com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = Mockito.mock(
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore.class);
+
+    CultureService cs = Mockito.mock(CultureService.class);
+
+    // Dimensions for the structure
+    Mockito.when(structureService.getStructureDimensions("house")).thenReturn(Optional.of(new int[]{7,6,7}));
+
+    World world = Mockito.mock(World.class);
+    Location loc = new Location(world, 10, 64, 20);
+
+    // Simulate placement result (actual location and rotation)
+    Mockito.when(structureService.placeStructureAndGetResult(Mockito.eq("house"), Mockito.eq(world), Mockito.eq(loc), Mockito.anyLong()))
+        .thenAnswer(inv -> Optional.of(new com.davisodom.villageoverhaul.worldgen.PlacementResult(loc, 0)));
+
+    VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(structureService, metadataStore, cs);
+
+    java.util.UUID villageId = java.util.UUID.randomUUID();
+    long seed = 987654321L;
+
+    Optional<com.davisodom.villageoverhaul.model.Building> b1 = svc.placeBuilding(world, loc, "house", villageId, seed);
+    Optional<com.davisodom.villageoverhaul.model.Building> b2 = svc.placeBuilding(world, loc, "house", villageId, seed);
+
+    assertTrue(b1.isPresent());
+    assertTrue(b2.isPresent());
+    assertEquals(b1.get().getBuildingId(), b2.get().getBuildingId(), "Same seed should produce deterministic building id");
+    }
+
 }

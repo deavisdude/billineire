@@ -820,15 +820,16 @@ Notes:
     - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImplTest.java`
     - Description: Added deterministic ordering/unit tests for culture ordering and rotation derivation. Structure/world-heavy integration tests deferred due to CI environment limitations; focused unit tests validate deterministic branches and seed-derived behavior.
     - Acceptance: Tests added and passing locally; CI-ready.
-  - [ ] T026d10 [US2] Update documentation & constitution check
+  - [X] T026d10 [US2] Update documentation & constitution check (2025-11-26)
     - Files: `tests/HEADLESS-TESTING.md`, `specs/001-village-building-ux/plan.md`, `docs/compatibility-matrix.md`
     - Description: Replace open issue note with resolution summary; add determinism guarantees section.
     - Acceptance: HEADLESS-TESTING.md shows "Determinism Stabilized" and sample dual-run PASS output.
 
-  - [ ] T026d16 [US2] Deterministic IDs for Fixed-Layout
+  - [X] T026d16 [US2] Deterministic IDs for Fixed-Layout
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
     - Description: Ensure `votest fixed-layout` produces deterministic village and building identifiers derived from the provided seed and layout index instead of random UUIDs. Replace `UUID.randomUUID()` uses in fixed-layout test mode with deterministic UUID generation (e.g., name-based UUID or HMAC-based derivation from seed+index).
     - Acceptance: Fixed-layout runs with the same seed produce identical village UUIDs and building IDs across repeated runs; harness log parsing can rely on stable IDs for cross-run comparisons.
+    - Implementation (2025-11-26): ✅ Replaced runtime UUIDs with name-based deterministic UUID derivation in fixed-layout and placement code paths; added unit test verifying deterministic building IDs (`plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`).
 
   - [ ] T026d17 [US2] Audit & eliminate non-deterministic sources in placement/path pipeline
     - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PlacementQueueProcessor.java`

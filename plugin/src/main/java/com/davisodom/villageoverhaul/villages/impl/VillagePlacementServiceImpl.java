@@ -22,6 +22,7 @@ import org.bukkit.plugin.Plugin;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
+import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
 
 /**
@@ -250,7 +251,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 metadataStore.addVolumeMask(villageId, placedMask);
                 surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
                 
+                // Deterministic building ID derived from village id + structure id + building seed
+                UUID deterministicBuildingId = UUID.nameUUIDFromBytes((villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
+
                 Building building = new Building.Builder()
+                    .buildingId(deterministicBuildingId)
                         .villageId(villageId)
                         .structureId(structureId)
                         .origin(new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ()))
@@ -450,7 +455,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         int[] dims = dimensions.get();
+        UUID deterministicBuildingId = UUID.nameUUIDFromBytes((villageId.toString() + ":" + structureId + ":" + seed).getBytes(StandardCharsets.UTF_8));
+
         Building building = new Building.Builder()
+            .buildingId(deterministicBuildingId)
                 .villageId(villageId)
                 .structureId(structureId)
                 .origin(placementResult.get().getActualLocation())

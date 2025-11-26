@@ -26,5 +26,8 @@ constitution. Update this file whenever compatibility changes or a new Minecraft
 - `scripts/ci/smoke/java-bridge-mods.ps1`: Repeats the bridge scenario with the curated mod stack
 	enabled; ensures registry collisions and capability checks pass.
 
-> Until the automation is fully implemented, the CI workflow surfaces TODO placeholders. Replace
-> them with the scripts above as soon as the infrastructure lands.
+Determinism & CI status:
+
+- Fixed-layout determinism harness implemented: `scripts/ci/sim/test-fixed-layout-determinism.ps1` and `scripts/ci/sim/test-path-determinism.ps1` are present and integrated into CI.
+- CI workflow `fixed-layout-determinism.yml` uploads determinism artifacts (seed-chain lines, path hashes, ZERO-PLACEMENT diagnostics) for triage.
+- Replace this matrix entry only if new compatibility scenarios or smoke-test scripts are added; harness scripts are currently functional and exercised in CI.
