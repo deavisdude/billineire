@@ -368,6 +368,7 @@ public class VillageWorldgenAdapter implements Listener {
     
     /**
      * Fast terrain evaluation (assumes chunks are loaded).
+     * T057d: Added dense water proximity check to prevent selecting water-adjacent sites.
      */
     private boolean evaluateTerrainFast(World world, int centerX, int centerZ, int checkRadius) {
         int minY = Integer.MAX_VALUE;
@@ -406,7 +407,84 @@ public class VillageWorldgenAdapter implements Listener {
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
+        // T057d: Dense water proximity check in the core placement area
+        // TerraformingPlan vetoes any water within margin of structure footprint
+        // Structures are typically 13-18 blocks, so check 25-block radius densely
+        if (flatEnough && notTooWatery && goodHeight) {
+            if (hasWaterInProximity(world, centerX, centerZ, 25)) {
+                return false;
+            }
+        }
+        
         return flatEnough && notTooWatery && goodHeight;
+    }
+    
+    /**
+     * T057d: Check for water blocks within proximity of center.
+     * Uses a denser sampling pattern to catch water that sparse checks miss.
+     * This prevents selecting sites where TerraformingPlan will veto due to nearby water.
+     * 
+     * @param world Target world
+     * @param centerX Center X coordinate
+     * @param centerZ Center Z coordinate
+     * @param radius Radius to check (should cover largest structure footprint + margin)
+     * @return true if water is found within proximity
+     */
+    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius) {
+        // Check in a cross pattern first (fast rejection)
+        for (int d = -radius; d <= radius; d += 4) {
+            // Check along X axis
+            int y1 = world.getHighestBlockYAt(centerX + d, centerZ);
+            if (world.getBlockAt(centerX + d, y1, centerZ).getType() == Material.WATER) {
+                return true;
+            }
+            // Check along Z axis
+            int y2 = world.getHighestBlockYAt(centerX, centerZ + d);
+            if (world.getBlockAt(centerX, y2, centerZ + d).getType() == Material.WATER) {
+                return true;
+            }
+        }
+        
+        // Check diagonals
+        for (int d = -radius; d <= radius; d += 6) {
+            int y1 = world.getHighestBlockYAt(centerX + d, centerZ + d);
+            if (world.getBlockAt(centerX + d, y1, centerZ + d).getType() == Material.WATER) {
+                return true;
+            }
+            int y2 = world.getHighestBlockYAt(centerX + d, centerZ - d);
+            if (world.getBlockAt(centerX + d, y2, centerZ - d).getType() == Material.WATER) {
+                return true;
+            }
+        }
+        
+        // Check perimeter of structure area (where TerraformingPlan margin check happens)
+        int structureRadius = 20; // Covers 18-block structure + 2-block margin
+        for (int x = -structureRadius; x <= structureRadius; x += 3) {
+            // Top edge
+            int y1 = world.getHighestBlockYAt(centerX + x, centerZ - structureRadius);
+            if (world.getBlockAt(centerX + x, y1, centerZ - structureRadius).getType() == Material.WATER) {
+                return true;
+            }
+            // Bottom edge
+            int y2 = world.getHighestBlockYAt(centerX + x, centerZ + structureRadius);
+            if (world.getBlockAt(centerX + x, y2, centerZ + structureRadius).getType() == Material.WATER) {
+                return true;
+            }
+        }
+        for (int z = -structureRadius; z <= structureRadius; z += 3) {
+            // Left edge
+            int y1 = world.getHighestBlockYAt(centerX - structureRadius, centerZ + z);
+            if (world.getBlockAt(centerX - structureRadius, y1, centerZ + z).getType() == Material.WATER) {
+                return true;
+            }
+            // Right edge
+            int y2 = world.getHighestBlockYAt(centerX + structureRadius, centerZ + z);
+            if (world.getBlockAt(centerX + structureRadius, y2, centerZ + z).getType() == Material.WATER) {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     /**

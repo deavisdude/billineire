@@ -117,7 +117,9 @@ public class SurfaceSolver {
             Block block = world.getBlockAt(x, y, z);
             Material type = block.getType();
             
-            if (type.isSolid() && !isVegetation(type)) {
+            // Skip vegetation (we want true ground, not tree tops)
+            // Skip frozen water (ice sits on water, foundation check would fail)
+            if (type.isSolid() && !isVegetation(type) && !isFrozenWater(type)) {
                 surfaceCache.put(key, y);
                 return y;
             }
@@ -139,6 +141,20 @@ public class SurfaceSolver {
                type == Material.LILAC ||
                type == Material.ROSE_BUSH ||
                type == Material.PEONY;
+    }
+    
+    /**
+     * Check if a material is a frozen water surface (ice variant).
+     * These blocks should be skipped when finding ground for structure placement
+     * because they're floating on water and the foundation check will fail.
+     */
+    private boolean isFrozenWater(Material type) {
+        // Skip all ice variants - they sit on top of water
+        // Building on ice would fail foundation check (water below)
+        return type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
     }
     
     private boolean isInAnyMask(int x, int y, int z) {

@@ -79,11 +79,14 @@ public interface StructureService {
      * @param seed Deterministic seed
      * @param villageId Village ID for receipt
      * @param existingMasks List of existing VolumeMasks to check for collisions (can be null/empty)
+     * @param minBuildingSpacing Minimum spacing in blocks between structures (from config)
+     * @param attemptDiagnostics Mutable map for placement diagnostics (can be null)
      * @return Optional PlacementReceipt with exact bounds and corner samples
      */
         Optional<PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int minBuildingSpacing,
             java.util.Map<String, Integer> attemptDiagnostics);
     
     /**

@@ -158,8 +158,9 @@ public class VillagePlacementServiceImplTest {
         Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
 
         // Return a placement receipt based on a deterministic increasing offset to ensure no overlaps
+        // Updated for T057f: placeStructureAndGetReceipt now takes minBuildingSpacing parameter
         final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(0);
-        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world), Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyMap()))
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world), Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
             .thenAnswer(inv -> {
                 String sid = inv.getArgument(0);
                 UUID vid = inv.getArgument(4);

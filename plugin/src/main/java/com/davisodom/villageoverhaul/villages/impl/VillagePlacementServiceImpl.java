@@ -243,8 +243,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             Location buildingLocation = placementLocation.get();
             
                 java.util.Map<String, Integer> attemptDiagnostics = new java.util.HashMap<>();
+                // T057f: Pass minBuildingSpacing from config to StructureService for collision checks
                 Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
-                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks, attemptDiagnostics);
+                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks, 
+                    minBuildingSpacing, attemptDiagnostics);
             
             if (receiptOpt.isPresent()) {
                 PlacementReceipt receipt = receiptOpt.get();
@@ -575,9 +577,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         final int maxRadius = 256;
         final int gridSize = 4;
         
-        // T052a: Track chunks skipped due to not being loaded
-        // We ONLY work with already-loaded chunks to avoid blocking the main thread
-        int chunksSkipped = 0;
+        // T057h: Track chunks that needed loading for diagnostics
+        int chunksLoaded = 0;
         
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
@@ -595,18 +596,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     int candidateX = origin.getBlockX() + dx;
                     int candidateZ = origin.getBlockZ() + dz;
                     
-                    // T052a: ONLY work with already-loaded chunks to avoid main thread blocking
-                    // Never call getChunkAt() or getChunkAtAsync().join() from the main thread
-                    // as both block the server thread and trigger Paper thread-dump warnings
                     int chunkX = candidateX >> 4;
                     int chunkZ = candidateZ >> 4;
                     
-                    // Check if chunk is already loaded - if not, skip this candidate
-                    // The terrain search phase (VillageWorldgenAdapter) should have loaded nearby chunks
+                    // T057h: Load chunks synchronously during candidate search
+                    // Village generation is already a blocking operation, so loading chunks
+                    // here doesn't add meaningful latency. This ensures we don't skip
+                    // candidates just because chunks weren't pre-loaded.
                     if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                        chunksSkipped++;
-                        if (tracker != null) tracker.recordChunkNotReady();
-                        continue;
+                        world.getChunkAt(chunkX, chunkZ); // Synchronously load chunk
+                        chunksLoaded++;
                     }
                     
                     // R009: Use SurfaceSolver to find ground level
@@ -622,10 +621,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
         }
         
-        // T052a: Emit diagnostic if many chunks were skipped (indicates terrain search didn't load enough)
-        if (chunksSkipped > 20) {
-            LOGGER.warning(String.format("[STRUCT][CHUNK-DIAG] Placement search skipped %d unloaded chunks - consider expanding terrain search radius",
-                    chunksSkipped));
+        // T057h: Log chunk loading stats for diagnostics
+        if (chunksLoaded > 0) {
+            LOGGER.info(String.format("[STRUCT][CHUNK-DIAG] Loaded %d chunks during candidate search", chunksLoaded));
         }
         
         // T026d2: Sort candidates by deterministic key: distance, then X, then Z

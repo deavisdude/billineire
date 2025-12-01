@@ -52,6 +52,20 @@ public class TerrainClassifier {
     }
     
     /**
+     * Frozen water materials that sit on top of water bodies.
+     * These should be treated similar to fluids for foundation purposes
+     * because the water below makes foundations unstable.
+     */
+    private static final Set<Material> FROZEN_WATER = new java.util.HashSet<>();
+    static {
+        String[] frozenNames = new String[]{"ICE", "PACKED_ICE", "BLUE_ICE", "FROSTED_ICE"};
+        for (String n : frozenNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) FROZEN_WATER.add(m);
+        }
+    }
+    
+    /**
      * Vegetation materials that can be trimmed/removed during terraforming.
      * These should NOT prevent structure placement - they'll be cleared.
      */
@@ -118,6 +132,12 @@ public class TerrainClassifier {
         
         // Check for fluids (highest priority rejection)
         if (FLUIDS.contains(material)) {
+            return Classification.FLUID;
+        }
+        
+        // Check for frozen water (ice on water - unstable foundation)
+        // Treat as FLUID since water is beneath
+        if (FROZEN_WATER.contains(material)) {
             return Classification.FLUID;
         }
         
@@ -215,6 +235,7 @@ public class TerrainClassifier {
     
     /**
      * Classification result with detailed counts for logging.
+     * T057: Enhanced with rejection reasons for diagnostics.
      */
     public static class ClassificationResult {
         public int acceptable = 0;
@@ -222,6 +243,9 @@ public class TerrainClassifier {
         public int steep = 0;
         public int blocked = 0;
         public int vegetation = 0;
+        
+        // T057: Detailed rejection reasons for SiteValidator diagnostics
+        private java.util.List<String> rejectionReasons = new java.util.ArrayList<>();
         
         /**
          * Increment counter for given classification.
@@ -258,6 +282,26 @@ public class TerrainClassifier {
          */
         public int getTotal() {
             return acceptable + fluid + steep + blocked + vegetation;
+        }
+        
+        /**
+         * Set detailed rejection reasons (called by SiteValidator).
+         * T057: Provides human-readable reasons for harness parsing.
+         * 
+         * @param reasons List of rejection reason strings
+         */
+        public void setRejectionReasons(java.util.List<String> reasons) {
+            this.rejectionReasons = reasons != null ? reasons : new java.util.ArrayList<>();
+        }
+        
+        /**
+         * Get detailed rejection reasons.
+         * T057: Returns list of strings like "solidity=0.45<0.60", "slope=0.80>0.60"
+         * 
+         * @return List of rejection reason strings (empty if validation passed)
+         */
+        public java.util.List<String> getRejectionReasons() {
+            return rejectionReasons;
         }
         
         /**

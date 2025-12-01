@@ -249,8 +249,9 @@ public class StructureServiceImpl implements StructureService {
         int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
         
         // Single placement attempt (no re-seating, no collision check for legacy path)
+        // Pass 0 for minBuildingSpacing since existingMasks is null anyway
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-            template, world, origin, seed, null, rotationDegrees, null);
+            template, world, origin, seed, null, 0, rotationDegrees, null);
         
         if (actualLocation.isPresent()) {
             PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
@@ -268,6 +269,7 @@ public class StructureServiceImpl implements StructureService {
         public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int minBuildingSpacing,
             java.util.Map<String, Integer> attemptDiagnostics) {
         StructureTemplate template = loadedStructures.get(structureId);
         
@@ -287,7 +289,7 @@ public class StructureServiceImpl implements StructureService {
         // VillagePlacementServiceImpl handles site search and candidate selection
         // This method only validates and places at the given origin
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-            template, world, origin, seed, existingMasks, rotationDegrees, attemptDiagnostics);
+            template, world, origin, seed, existingMasks, minBuildingSpacing, rotationDegrees, attemptDiagnostics);
         
         if (!actualLocation.isPresent()) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
@@ -370,17 +372,30 @@ public class StructureServiceImpl implements StructureService {
      * R011b: Pre-placement collision check prevents wasted placements.
      * VillagePlacementServiceImpl handles candidate search - this method only validates and places.
      * T051: Uses TerraformingPlan with deferred commits to prevent orphaned terraforming pads.
+     * @param minBuildingSpacing Minimum spacing in blocks between structures (from config)
      * @return Optional containing the actual placed location, empty if validation/collision fails
      */
         private Optional<Location> attemptSinglePlacementAndGetLocation(
             StructureTemplate template, World world, Location origin, long seed,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int minBuildingSpacing,
             int rotationDegrees, java.util.Map<String, Integer> attemptDiagnostics) {
         // Single placement attempt - no re-seating loop
         // Candidate search is handled by VillagePlacementServiceImpl
         LOGGER.info(String.format("[STRUCT] Placement attempt: structure='%s', location=%s, seed=%d",
             template.id, formatLocation(origin), seed));
         if (attemptDiagnostics != null) attemptDiagnostics.merge("placementAttempts", 1, Integer::sum);
+        
+        // T057g: Ensure all chunks covering structure footprint are loaded BEFORE validation
+        // This prevents false "blocked" rejections when blocks return AIR due to unloaded chunks
+        int width = template.dimensions[0];
+        int depth = template.dimensions[2];
+        if (!ensureFootprintChunksLoaded(world, origin, width, depth)) {
+            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Chunk loading failed for '%s' at %s - aborting placement",
+                    template.id, formatLocation(origin)));
+            if (attemptDiagnostics != null) attemptDiagnostics.merge("chunkNotReady", 1, Integer::sum);
+            return Optional.empty();
+        }
             
         // T020a: Validate foundation for fluids BEFORE attempting terraforming/placement
         // This prevents placing buildings on water/lava (Constitution v1.5.0 water avoidance)
@@ -425,9 +440,8 @@ public class StructureServiceImpl implements StructureService {
         
         // R011b: Check collision with existing masks BEFORE terraforming
         if (existingMasks != null && !existingMasks.isEmpty()) {
-            // Respect configured village spacing defaults (test-config default: 2)
-            // Hardcoding a high value here caused excessive rejection during placement.
-            int minBuildingSpacing = 1; // Use a slightly more permissive spacing to improve placement success
+            // T057f: Use spacing from config (passed from VillagePlacementServiceImpl) instead of hardcoded value
+            // The inclusive collision check (<=, >=) catches edge-touching; spacing ensures visual separation
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Checking collision against %d existing mask(s) with %d spacing",
                     existingMasks.size(), minBuildingSpacing));
             boolean hasCollision = checkAABBCollision(bounds, existingMasks, minBuildingSpacing);
@@ -459,8 +473,14 @@ public class StructureServiceImpl implements StructureService {
             return Optional.empty();
         }
         
-        // Plan is valid - now perform actual placement FIRST
-        // If placement fails, we haven't modified the world with terraforming
+        // T057e: Commit terraforming BEFORE structure placement
+        // Terraforming creates the foundation pad; structure is then placed on top
+        // This fixes empty pads caused by WorldEdit modifying blocks before terraforming commit
+        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming BEFORE placement for '%s' at %s",
+                template.id, formatLocation(origin)));
+        terraformPlan.commit();
+        
+        // Now perform structure placement on the prepared foundation
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
                 template.id, formatLocation(origin)));
         boolean placed = performActualPlacement(template, world, origin, seed, attemptDiagnostics);
@@ -468,21 +488,15 @@ public class StructureServiceImpl implements StructureService {
                 placed, template.id));
         
         if (!placed) {
-            // Placement failed - do NOT commit terraforming changes
-            // This prevents orphaned terraforming pads
-            LOGGER.warning(String.format("[STRUCT] Placement failed for '%s' at %s - terraforming NOT committed (no orphaned pads)",
+            // Placement failed after terraforming was committed
+            // This creates an orphaned pad, but is better than structures on uneven ground
+            LOGGER.warning(String.format("[STRUCT] Placement failed for '%s' at %s - terraforming already committed (orphaned pad possible)",
                     template.id, formatLocation(origin)));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("otherFailures", 1, Integer::sum);
-            // T051: Emit diagnostic artifact for abandoned terraforming
-            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false);
+            // T051: Emit diagnostic artifact for failed placement after terraforming
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true);
             return Optional.empty();
         }
-        
-        // T051: Placement succeeded - NOW commit terraforming changes
-        // This ensures terraforming only happens for successfully placed structures
-        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming for '%s' at %s",
-                template.id, formatLocation(origin)));
-        terraformPlan.commit();
         
         // T051: Emit diagnostic artifact showing successful terraforming aligned with placement
         emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true);
@@ -1338,6 +1352,63 @@ public class StructureServiceImpl implements StructureService {
     }
     
     /**
+    /**
+     * T057g: Ensure all chunks covering a structure's footprint are loaded.
+     * This prevents false "blocked" rejections when world.getBlockAt() returns AIR
+     * for blocks in unloaded chunks.
+     * 
+     * Called from main thread (via GenerateCommand) so synchronous chunk loading is safe.
+     * 
+     * @param world Target world
+     * @param origin Structure origin (southwest corner)
+     * @param width Structure width (X axis)
+     * @param depth Structure depth (Z axis)
+     * @return true if all required chunks are loaded/generated, false otherwise
+     */
+    private boolean ensureFootprintChunksLoaded(World world, Location origin, int width, int depth) {
+        int originX = origin.getBlockX();
+        int originZ = origin.getBlockZ();
+        
+        // Calculate chunk range needed to cover the structure footprint
+        int minChunkX = originX >> 4;
+        int maxChunkX = (originX + width - 1) >> 4;
+        int minChunkZ = originZ >> 4;
+        int maxChunkZ = (originZ + depth - 1) >> 4;
+        
+        // Count of chunks loaded/already loaded
+        int loaded = 0;
+        int total = 0;
+        
+        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                total++;
+                
+                // Check if already loaded
+                if (world.isChunkLoaded(cx, cz)) {
+                    loaded++;
+                    continue;
+                }
+                
+                // Try to load the chunk - this is safe from main thread
+                // Use getChunkAt which will generate if necessary
+                try {
+                    world.getChunkAt(cx, cz);
+                    loaded++;
+                    LOGGER.fine(String.format("[STRUCT][CHUNK] Loaded chunk (%d, %d) for structure footprint", cx, cz));
+                } catch (Exception e) {
+                    LOGGER.warning(String.format("[STRUCT][CHUNK] Failed to load chunk (%d, %d): %s", cx, cz, e.getMessage()));
+                    return false;
+                }
+            }
+        }
+        
+        LOGGER.fine(String.format("[STRUCT][CHUNK] Footprint chunks: %d/%d loaded for %dx%d structure at %s",
+                loaded, total, width, depth, formatLocation(origin)));
+        
+        return loaded == total;
+    }
+    
+    /**
      * Format a location for logging.
      */
     private String formatLocation(Location loc) {
@@ -1570,12 +1641,12 @@ public class StructureServiceImpl implements StructureService {
             // Expand existing mask with spacing buffer
             com.davisodom.villageoverhaul.model.VolumeMask expandedMask = mask.expand(spacingBuffer);
             
-            // Check AABB intersection
+            // Check AABB intersection using inclusive bounds (matching VillagePlacementServiceImpl)
             // Two AABBs intersect if they overlap on ALL three axes
-            // Consider strict overlap: touching at an axis boundary is allowed
-            boolean xOverlap = bounds[0] < expandedMask.getMaxX() && bounds[1] > expandedMask.getMinX();
-            boolean yOverlap = bounds[2] < expandedMask.getMaxY() && bounds[3] > expandedMask.getMinY();
-            boolean zOverlap = bounds[4] < expandedMask.getMaxZ() && bounds[5] > expandedMask.getMinZ();
+            // Use <= and >= to reject structures that share edges (prevents visual overlap)
+            boolean xOverlap = bounds[0] <= expandedMask.getMaxX() && bounds[1] >= expandedMask.getMinX();
+            boolean yOverlap = bounds[2] <= expandedMask.getMaxY() && bounds[3] >= expandedMask.getMinY();
+            boolean zOverlap = bounds[4] <= expandedMask.getMaxZ() && bounds[5] >= expandedMask.getMinZ();
             
             if (xOverlap && yOverlap && zOverlap) {
                 LOGGER.info(String.format("[STRUCT] COLLISION: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing) expanded=(%d..%d, %d..%d, %d..%d)",

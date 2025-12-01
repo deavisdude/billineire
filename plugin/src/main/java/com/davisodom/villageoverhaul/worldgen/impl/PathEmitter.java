@@ -46,6 +46,7 @@ public class PathEmitter {
      */
     public int emitPath(World world, List<Block> pathBlocks, String cultureId, List<VolumeMask> masks) {
         if (pathBlocks.isEmpty()) {
+            LOGGER.info("[PATH][EMIT] No path blocks to emit");
             return 0;
         }
         
@@ -53,7 +54,12 @@ public class PathEmitter {
         Material pathMaterial = getPathMaterial(cultureId);
         
         int blocksPlaced = 0;
+        int skippedMask = 0;
+        int skippedSupport = 0;
         List<Block> successfullyPlacedBlocks = new ArrayList<>();
+
+        LOGGER.info(String.format("[PATH][EMIT] Starting emission of %d path blocks with material %s", 
+                pathBlocks.size(), pathMaterial));
 
         for (Block pathBlock : pathBlocks) {
             int x = pathBlock.getX();
@@ -70,6 +76,7 @@ public class PathEmitter {
             
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {
+                skippedMask++;
                 continue;
             }
 
@@ -77,6 +84,7 @@ public class PathEmitter {
             Block foundation = world.getBlockAt(x, groundY - 1, z);
             if (!foundation.getType().isSolid()) {
                 // R008: Never place when support is missing
+                skippedSupport++;
                 continue;
             }
             
@@ -106,8 +114,8 @@ public class PathEmitter {
         // R008: Apply simple widening after emission
         blocksPlaced += widenPath(world, successfullyPlacedBlocks, pathMaterial, masks);
         
-        LOGGER.fine(String.format("[STRUCT] Path emitted: culture=%s, blocks=%d, material=%s",
-                cultureId, blocksPlaced, pathMaterial));
+        LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, skipped(mask)=%d, skipped(noSupport)=%d, culture=%s, material=%s",
+                blocksPlaced, skippedMask, skippedSupport, cultureId, pathMaterial));
         
         return blocksPlaced;
     }

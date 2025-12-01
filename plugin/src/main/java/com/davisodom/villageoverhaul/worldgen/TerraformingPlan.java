@@ -13,6 +13,7 @@ import java.util.logging.Logger;
  * Supports commit/rollback semantics to prevent orphaned terraforming pads.
  * 
  * T051: Fix unused terraforming pads and footprint misalignment
+ * T057: Relaxed terraforming limits to reduce false placement failures
  * 
  * Usage:
  * 1. Create plan with TerraformingPlan.forSite(world, origin, dimensions)
@@ -24,11 +25,16 @@ public class TerraformingPlan {
     
     private static final Logger LOGGER = Logger.getLogger(TerraformingPlan.class.getName());
     
-    // Maximum blocks to terraform in a single operation
-    private static final int MAX_TERRAFORM_BLOCKS = 300;
-    private static final int LARGE_STRUCTURE_THRESHOLD = 900; // 30x30
-    private static final int MAX_TERRAFORM_BLOCKS_LARGE = 3000;
-    private static final int MAX_VERTICAL_CHANGE = 3;
+    // T057: Maximum blocks to terraform - increased from 300 to 500 to reduce false rejections
+    // Playtest logs showed structures being rejected for exceeding limits by 1-2 blocks
+    private static final int MAX_TERRAFORM_BLOCKS = 500;
+    private static final int LARGE_STRUCTURE_THRESHOLD = 400; // 20x20 (lowered from 30x30)
+    private static final int MAX_TERRAFORM_BLOCKS_LARGE = 5000; // increased from 3000
+    private static final int MAX_VERTICAL_CHANGE = 4; // increased from 3
+    
+    // T057: Tolerance buffer for limit checks (allows small overages)
+    // This prevents rejection for being just 1-2 blocks over limit
+    private static final double LIMIT_TOLERANCE = 1.10; // 10% overage allowed
     
     private final World world;
     private final Location origin;
@@ -165,7 +171,8 @@ public class TerraformingPlan {
                 formatLocation(origin), width, depth, height, footprintArea, isLargeStructure));
         
         // Step 0: HARD VETO on ANY water/lava in footprint or surrounding area
-        int checkMargin = 2;
+        // T057d: Reduced margin from 2 to 1 since terrain search now has water proximity check
+        int checkMargin = 1;
         for (int x = -checkMargin; x < width + checkMargin; x++) {
             for (int z = -checkMargin; z < depth + checkMargin; z++) {
                 int checkX = origin.getBlockX() + x;
@@ -192,16 +199,22 @@ public class TerraformingPlan {
             LOGGER.fine(String.format("[STRUCT][PLAN] Large structure, skipping grading"));
             planFoundationFilling(targetY, maxBlocks);
         } else {
+            // T057: Give each phase its own budget instead of sharing one pool
+            // This prevents grading from starving the filling phase
+            // Each phase gets the full budget since they're different operation types
+            int gradeBudget = maxBlocks;
+            int fillBudget = maxBlocks;
+            
             // Step 2: Plan light grading
-            int gradeResult = planLightGrading(targetY, maxBlocks);
+            int gradeResult = planLightGrading(targetY, gradeBudget);
             if (gradeResult < 0) {
                 rejectionReason = "grading exceeded limits";
                 planSucceeded = false;
                 return false;
             }
             
-            // Step 3: Plan gap filling
-            int fillResult = planGapFilling(targetY, maxBlocks - gradeCount);
+            // Step 3: Plan gap filling (independent budget)
+            int fillResult = planGapFilling(targetY, fillBudget);
             if (fillResult < 0) {
                 rejectionReason = "filling exceeded limits";
                 planSucceeded = false;
@@ -334,6 +347,8 @@ public class TerraformingPlan {
     
     private int planLightGrading(int targetY, int maxBlocks) {
         int graded = 0;
+        // T057: Apply tolerance to limit - allow small overages
+        int hardLimit = (int) Math.ceil(maxBlocks * LIMIT_TOLERANCE);
         
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
@@ -355,9 +370,10 @@ public class TerraformingPlan {
                             graded++;
                             gradeCount++;
                             
-                            if (graded > maxBlocks) {
-                                LOGGER.warning(String.format("[STRUCT][PLAN] Grading exceeded limit: %d > %d", 
-                                        graded, maxBlocks));
+                            // T057: Use hard limit with tolerance instead of exact limit
+                            if (graded > hardLimit) {
+                                LOGGER.warning(String.format("[STRUCT][PLAN] Grading exceeded hard limit: %d > %d (soft=%d)", 
+                                        graded, hardLimit, maxBlocks));
                                 return -1;
                             }
                         }
@@ -366,12 +382,20 @@ public class TerraformingPlan {
             }
         }
         
+        // Log if we exceeded soft limit but stayed within tolerance
+        if (graded > maxBlocks) {
+            LOGGER.fine(String.format("[STRUCT][PLAN] Grading exceeded soft limit but within tolerance: %d > %d (hard=%d)",
+                    graded, maxBlocks, hardLimit));
+        }
+        
         return graded;
     }
     
     private int planGapFilling(int foundationY, int maxBlocks) {
         int filled = 0;
         int minFillY = foundationY - MAX_VERTICAL_CHANGE;
+        // T057: Apply tolerance to limit - allow small overages
+        int hardLimit = (int) Math.ceil(maxBlocks * LIMIT_TOLERANCE);
         
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
@@ -380,25 +404,12 @@ public class TerraformingPlan {
                 
                 int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
                 
-                // CRITICAL: Always solidify the foundation layer
-                Block foundationBlock = world.getBlockAt(blockX, foundationY, blockZ);
-                Material foundationMat = foundationBlock.getType();
+                // T057e: DO NOT fill at foundationY - the structure will be placed there by WorldEdit
+                // Only fill gaps BELOW the structure's foundation level (from surfaceY+1 to foundationY-1)
+                // This prevents terraforming from placing blocks that WorldEdit will immediately overwrite
                 
-                if (!isGoodFoundationMaterial(foundationMat)) {
-                    plannedOperations.add(new BlockOperation(
-                            blockX, foundationY, blockZ, foundationMat, Material.DIRT, BlockOperation.OperationType.FILL));
-                    filled++;
-                    fillCount++;
-                    
-                    if (filled > maxBlocks) {
-                        LOGGER.warning(String.format("[STRUCT][PLAN] Filling exceeded limit: %d > %d", 
-                                filled, maxBlocks));
-                        return -1;
-                    }
-                }
-                
-                // Fill gaps below foundation
-                if (surfaceY >= minFillY && surfaceY < foundationY) {
+                // Fill gaps below foundation (from ground surface up to one block below structure)
+                if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
                         Material mat = block.getType();
@@ -409,9 +420,10 @@ public class TerraformingPlan {
                             filled++;
                             fillCount++;
                             
-                            if (filled > maxBlocks) {
-                                LOGGER.warning(String.format("[STRUCT][PLAN] Filling exceeded limit: %d > %d", 
-                                        filled, maxBlocks));
+                            // T057: Use hard limit with tolerance instead of exact limit
+                            if (filled > hardLimit) {
+                                LOGGER.warning(String.format("[STRUCT][PLAN] Filling exceeded hard limit: %d > %d (soft=%d)", 
+                                        filled, hardLimit, maxBlocks));
                                 return -1;
                             }
                         }
@@ -420,26 +432,41 @@ public class TerraformingPlan {
             }
         }
         
+        // Log if we exceeded soft limit but stayed within tolerance
+        if (filled > maxBlocks) {
+            LOGGER.fine(String.format("[STRUCT][PLAN] Filling exceeded soft limit but within tolerance: %d > %d (hard=%d)",
+                    filled, maxBlocks, hardLimit));
+        }
+        
         return filled;
     }
     
     private void planFoundationFilling(int foundationY, int maxBlocks) {
-        // For large structures, only fill foundation gaps
+        // T057e: For large structures, fill gaps below foundation but NOT at foundation level
+        // The structure will place its own blocks at foundationY via WorldEdit
         int filled = 0;
+        int minFillY = foundationY - MAX_VERTICAL_CHANGE;
         
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
                 
-                Block foundationBlock = world.getBlockAt(blockX, foundationY, blockZ);
-                Material foundationMat = foundationBlock.getType();
+                int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
                 
-                if (!isGoodFoundationMaterial(foundationMat)) {
-                    plannedOperations.add(new BlockOperation(
-                            blockX, foundationY, blockZ, foundationMat, Material.DIRT, BlockOperation.OperationType.FILL));
-                    filled++;
-                    fillCount++;
+                // Only fill gaps below the foundation (not at foundation level)
+                if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
+                    for (int y = surfaceY + 1; y < foundationY; y++) {
+                        Block block = world.getBlockAt(blockX, y, blockZ);
+                        Material mat = block.getType();
+                        
+                        if (!mat.isSolid() && mat != Material.WATER) {
+                            plannedOperations.add(new BlockOperation(
+                                    blockX, y, blockZ, mat, Material.DIRT, BlockOperation.OperationType.FILL));
+                            filled++;
+                            fillCount++;
+                        }
+                    }
                 }
             }
         }

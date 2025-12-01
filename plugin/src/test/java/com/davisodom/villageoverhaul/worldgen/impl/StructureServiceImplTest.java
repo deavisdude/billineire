@@ -81,8 +81,9 @@ public class StructureServiceImplTest {
         long seed = 12345L;
         Map<String, Integer> diagnostics = new HashMap<>();
         java.util.UUID villageId = java.util.UUID.randomUUID();
+        // Pass 0 for minBuildingSpacing since no existing masks (null) to check against
         Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
-            svc.placeStructureAndGetReceipt("house_roman_small", world, origin, seed, villageId, null, diagnostics);
+            svc.placeStructureAndGetReceipt("house_roman_small", world, origin, seed, villageId, null, 0, diagnostics);
 
         assertTrue(receipt.isPresent(), "Placement should succeed on prepared FakeWorld");
 
@@ -142,8 +143,9 @@ public class StructureServiceImplTest {
         fake.setBlockType(originX + 1, originY + 1, originZ + 1, Material.WATER);
 
         Map<String, Integer> diagnostics = new HashMap<>();
+        // Pass 0 for minBuildingSpacing since no existing masks (null) to check against
         Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
-                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, null, null, diagnostics);
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, null, null, 0, diagnostics);
 
         assertFalse(receipt.isPresent(), "Receipt should be empty when terraform plan rejects site");
         assertTrue(diagnostics.getOrDefault("terrainInvalid", 0) > 0, "Diagnostics should report terrainInvalid on terraform failure");
