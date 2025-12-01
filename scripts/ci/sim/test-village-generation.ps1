@@ -32,6 +32,8 @@ param(
     [string]$Culture = "roman",
     [string]$VillageName = "TestVillage",
     [int]$MaxWaitSeconds = 60
+    , [int]$ExpectedStructures = 5
+    , [int]$PathConnectivityThreshold = 90
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,6 +151,7 @@ $structureCount = 0
 # Keep track of unique placement receipts we've already seen so we don't double-count
 $seenReceipts = @{}
 $pathsComplete = $false
+$pathsConnectivity = $null
 
 while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
     Start-Sleep -Seconds 1
@@ -185,6 +188,12 @@ while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
         # Check for path completion
         if ($line -match "\[STRUCT\] Path network complete") {
             $pathsComplete = $true
+            # Try to extract connectivity percentage if present in either format
+            if ($line -match "connectivity=([0-9]+(\.[0-9]+)?)%") {
+                $pathsConnectivity = [double]$Matches[1]
+            } elseif ($line -match "connectivity\s+([0-9]+(\.[0-9]+)?)%") {
+                $pathsConnectivity = [double]$Matches[1]
+            }
         }
         
         # Check for village placement complete
@@ -216,12 +225,12 @@ Write-Host "=== Generation Results ===" -ForegroundColor Cyan
 if ($generationComplete) {
     Write-Host "OK Generation completed in $([int]((Get-Date) - $generationStart).TotalSeconds) seconds" -ForegroundColor Green
     Write-Host "  Village ID: $villageId" -ForegroundColor Gray
-    Write-Host "  Structures placed: $structureCount" -ForegroundColor Gray
-    Write-Host "  Paths: $(if ($pathsComplete) {'Complete'} else {'Not detected'})" -ForegroundColor Gray
+    Write-Host "  Structures placed: $structureCount (expected: $ExpectedStructures)" -ForegroundColor Gray
+    Write-Host "  Paths: $(if ($pathsComplete) {'Complete' + (if ($pathsConnectivity -ne $null) { ' (connectivity=' + $pathsConnectivity + '%)' } else { '' }) } else {'Not detected'})" -ForegroundColor Gray
 } else {
     Write-Host "! Generation did not complete within ${MaxWaitSeconds}s timeout" -ForegroundColor Yellow
-    Write-Host "  Structures placed: $structureCount" -ForegroundColor Gray
-    Write-Host "  Paths: $(if ($pathsComplete) {'Complete'} else {'Not detected'})" -ForegroundColor Gray
+    Write-Host "  Structures placed: $structureCount (expected: $ExpectedStructures)" -ForegroundColor Gray
+    Write-Host "  Paths: $(if ($pathsComplete) {'Complete' + (if ($pathsConnectivity -ne $null) { ' (connectivity=' + $pathsConnectivity + '%)' } else { '' }) } else {'Not detected'})" -ForegroundColor Gray
 }
 
 # Run R010 validation if village was created
@@ -294,7 +303,7 @@ if ($villageId) {
 
 Write-Host ""
 Write-Host "=== Test Complete ===" -ForegroundColor Cyan
-if ($generationComplete -and $overlaps -eq 0 -and -not $r011bInconclusive) {
+if ($generationComplete -and $overlaps -eq 0 -and -not $r011bInconclusive -and $structureCount -ge $ExpectedStructures -and ($pathsConnectivity -eq $null -or $pathsConnectivity -ge $PathConnectivityThreshold)) {
     Write-Host "OK All checks passed" -ForegroundColor Green
     exit 0
 } elseif ($r011bInconclusive) {
@@ -302,5 +311,9 @@ if ($generationComplete -and $overlaps -eq 0 -and -not $r011bInconclusive) {
     exit 1
 } else {
     Write-Host "! Some checks failed or incomplete" -ForegroundColor Yellow
+    # Provide explicit failure reasons for CI
+    if ($structureCount -lt $ExpectedStructures) { Write-Host "  X Expected at least $ExpectedStructures structures but found $structureCount" -ForegroundColor Red }
+    if ($overlaps -gt 0) { Write-Host "  X Detected $overlaps overlapping structures" -ForegroundColor Red }
+    if ($pathsConnectivity -ne $null -and $pathsConnectivity -lt $PathConnectivityThreshold) { Write-Host "  X Path connectivity $pathsConnectivity% is below threshold $PathConnectivityThreshold%" -ForegroundColor Red }
     exit 1
 }

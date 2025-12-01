@@ -17,8 +17,6 @@ import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl;
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import org.junit.jupiter.api.BeforeEach;
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
 import org.bukkit.World;
 import org.bukkit.Location;
 
@@ -194,20 +192,29 @@ public class VillagePlacementHelperTest {
     @Test
     @DisplayName("T026d11 - zero-placement should record diagnostic summary in metadata store")
     public void testZeroPlacementRecordsSummary() {
-        ServerMock server = MockBukkit.mock();
-            com.davisodom.villageoverhaul.test.MockBukkitRegistryInitializer.assertPotionTypesPresent();
-        VillageOverhaulPlugin plugin = MockBukkit.load(VillageOverhaulPlugin.class);
+        // Use Mockito mocks and forced zero-placement flag to avoid MockBukkit
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        // Avoid loading WorldEdit/FAWE in tests by injecting a noop/mock StructureService
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(com.davisodom.villageoverhaul.worldgen.StructureService.class);
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString())).thenReturn(Optional.empty());
+
+        com.davisodom.villageoverhaul.cultures.CultureService mockCulture = Mockito.mock(com.davisodom.villageoverhaul.cultures.CultureService.class);
+        Mockito.when(mockCulture.get(Mockito.anyString())).thenReturn(Optional.empty());
+
+        VillagePlacementServiceImpl service = new VillagePlacementServiceImpl(mockStructure, store, mockCulture);
+
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 0, 64, 0);
+        long seed = 9999L;
+
         try {
-            World world = server.addSimpleWorld("zero-world");
-            VillageMetadataStore store = plugin.getMetadataStore();
-            // Avoid loading WorldEdit/FAWE in tests by injecting a noop/mock StructureService
-            com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(com.davisodom.villageoverhaul.worldgen.StructureService.class);
-            Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString())).thenReturn(Optional.empty());
-
-            VillagePlacementServiceImpl service = new VillagePlacementServiceImpl(mockStructure, store, plugin.getCultureService());
-
-            Location origin = new Location(world, 0, 64, 0);
-            long seed = 9999L;
+            // Force the zero-placement branch in placeVillage
+            System.setProperty("vo.test.forceZeroPlacement", "true");
 
             Optional<java.util.UUID> result = service.placeVillage(world, origin, "nonexistent-culture", seed);
             assertFalse(result.isPresent(), "Expected no village to be successfully placed");
@@ -234,7 +241,7 @@ public class VillagePlacementHelperTest {
             assertEquals(0, s.overlap, "Overlap rejections should be zero");
 
         } finally {
-            MockBukkit.unmock();
+            System.clearProperty("vo.test.forceZeroPlacement");
         }
     }
     

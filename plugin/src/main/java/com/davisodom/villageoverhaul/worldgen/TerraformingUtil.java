@@ -32,73 +32,79 @@ public class TerraformingUtil {
     private static final Set<Material> TRIMMABLE_VEGETATION = new HashSet<>();
     
     static {
+        // Helper to add by name when the constant may not exist in the runtime.
+        java.util.function.Consumer<String> addIfPresent = name -> {
+            Material m = Material.matchMaterial(name);
+            if (m != null) TRIMMABLE_VEGETATION.add(m);
+        };
+
         // Grass and ferns
-        TRIMMABLE_VEGETATION.add(Material.SHORT_GRASS);
-        TRIMMABLE_VEGETATION.add(Material.TALL_GRASS);
-        TRIMMABLE_VEGETATION.add(Material.FERN);
-        TRIMMABLE_VEGETATION.add(Material.LARGE_FERN);
-        TRIMMABLE_VEGETATION.add(Material.DEAD_BUSH);
+        addIfPresent.accept("SHORT_GRASS");
+        addIfPresent.accept("TALL_GRASS");
+        addIfPresent.accept("FERN");
+        addIfPresent.accept("LARGE_FERN");
+        addIfPresent.accept("DEAD_BUSH");
         
         // Flowers
-        TRIMMABLE_VEGETATION.add(Material.DANDELION);
-        TRIMMABLE_VEGETATION.add(Material.POPPY);
-        TRIMMABLE_VEGETATION.add(Material.AZURE_BLUET);
-        TRIMMABLE_VEGETATION.add(Material.ALLIUM);
-        TRIMMABLE_VEGETATION.add(Material.OXEYE_DAISY);
-        TRIMMABLE_VEGETATION.add(Material.CORNFLOWER);
-        TRIMMABLE_VEGETATION.add(Material.LILY_OF_THE_VALLEY);
-        TRIMMABLE_VEGETATION.add(Material.SUNFLOWER);
-        TRIMMABLE_VEGETATION.add(Material.LILAC);
-        TRIMMABLE_VEGETATION.add(Material.ROSE_BUSH);
-        TRIMMABLE_VEGETATION.add(Material.PEONY);
+        addIfPresent.accept("DANDELION");
+        addIfPresent.accept("POPPY");
+        addIfPresent.accept("AZURE_BLUET");
+        addIfPresent.accept("ALLIUM");
+        addIfPresent.accept("OXEYE_DAISY");
+        addIfPresent.accept("CORNFLOWER");
+        addIfPresent.accept("LILY_OF_THE_VALLEY");
+        addIfPresent.accept("SUNFLOWER");
+        addIfPresent.accept("LILAC");
+        addIfPresent.accept("ROSE_BUSH");
+        addIfPresent.accept("PEONY");
         
         // Other vegetation
-        TRIMMABLE_VEGETATION.add(Material.SUGAR_CANE);
-        TRIMMABLE_VEGETATION.add(Material.VINE);
-        TRIMMABLE_VEGETATION.add(Material.WEEPING_VINES);
-        TRIMMABLE_VEGETATION.add(Material.TWISTING_VINES);
-        TRIMMABLE_VEGETATION.add(Material.KELP);
-        TRIMMABLE_VEGETATION.add(Material.SEAGRASS);
-        TRIMMABLE_VEGETATION.add(Material.TALL_SEAGRASS);
+        addIfPresent.accept("SUGAR_CANE");
+        addIfPresent.accept("VINE");
+        addIfPresent.accept("WEEPING_VINES");
+        addIfPresent.accept("TWISTING_VINES");
+        addIfPresent.accept("KELP");
+        addIfPresent.accept("SEAGRASS");
+        addIfPresent.accept("TALL_SEAGRASS");
         
         // Tree logs (all wood types)
-        TRIMMABLE_VEGETATION.add(Material.OAK_LOG);
-        TRIMMABLE_VEGETATION.add(Material.SPRUCE_LOG);
-        TRIMMABLE_VEGETATION.add(Material.BIRCH_LOG);
-        TRIMMABLE_VEGETATION.add(Material.JUNGLE_LOG);
-        TRIMMABLE_VEGETATION.add(Material.ACACIA_LOG);
-        TRIMMABLE_VEGETATION.add(Material.DARK_OAK_LOG);
-        TRIMMABLE_VEGETATION.add(Material.MANGROVE_LOG);
-        TRIMMABLE_VEGETATION.add(Material.CHERRY_LOG);
+        addIfPresent.accept("OAK_LOG");
+        addIfPresent.accept("SPRUCE_LOG");
+        addIfPresent.accept("BIRCH_LOG");
+        addIfPresent.accept("JUNGLE_LOG");
+        addIfPresent.accept("ACACIA_LOG");
+        addIfPresent.accept("DARK_OAK_LOG");
+        addIfPresent.accept("MANGROVE_LOG");
+        addIfPresent.accept("CHERRY_LOG");
         
         // Tree leaves (all types)
-        TRIMMABLE_VEGETATION.add(Material.OAK_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.SPRUCE_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.BIRCH_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.JUNGLE_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.ACACIA_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.DARK_OAK_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.MANGROVE_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.CHERRY_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.AZALEA_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.FLOWERING_AZALEA_LEAVES);
+        addIfPresent.accept("OAK_LEAVES");
+        addIfPresent.accept("SPRUCE_LEAVES");
+        addIfPresent.accept("BIRCH_LEAVES");
+        addIfPresent.accept("JUNGLE_LEAVES");
+        addIfPresent.accept("ACACIA_LEAVES");
+        addIfPresent.accept("DARK_OAK_LEAVES");
+        addIfPresent.accept("MANGROVE_LEAVES");
+        addIfPresent.accept("CHERRY_LEAVES");
+        addIfPresent.accept("AZALEA_LEAVES");
+        addIfPresent.accept("FLOWERING_AZALEA_LEAVES");
         
         // Saplings
-        TRIMMABLE_VEGETATION.add(Material.OAK_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.SPRUCE_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.BIRCH_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.JUNGLE_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.ACACIA_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.DARK_OAK_SAPLING);
-        TRIMMABLE_VEGETATION.add(Material.MANGROVE_PROPAGULE);
-        TRIMMABLE_VEGETATION.add(Material.CHERRY_SAPLING);
+        addIfPresent.accept("OAK_SAPLING");
+        addIfPresent.accept("SPRUCE_SAPLING");
+        addIfPresent.accept("BIRCH_SAPLING");
+        addIfPresent.accept("JUNGLE_SAPLING");
+        addIfPresent.accept("ACACIA_SAPLING");
+        addIfPresent.accept("DARK_OAK_SAPLING");
+        addIfPresent.accept("MANGROVE_PROPAGULE");
+        addIfPresent.accept("CHERRY_SAPLING");
         
         // Mushrooms
-        TRIMMABLE_VEGETATION.add(Material.BROWN_MUSHROOM);
-        TRIMMABLE_VEGETATION.add(Material.RED_MUSHROOM);
-        TRIMMABLE_VEGETATION.add(Material.BROWN_MUSHROOM_BLOCK);
-        TRIMMABLE_VEGETATION.add(Material.RED_MUSHROOM_BLOCK);
-        TRIMMABLE_VEGETATION.add(Material.MUSHROOM_STEM);
+        addIfPresent.accept("BROWN_MUSHROOM");
+        addIfPresent.accept("RED_MUSHROOM");
+        addIfPresent.accept("BROWN_MUSHROOM_BLOCK");
+        addIfPresent.accept("RED_MUSHROOM_BLOCK");
+        addIfPresent.accept("MUSHROOM_STEM");
     }
     
     /**

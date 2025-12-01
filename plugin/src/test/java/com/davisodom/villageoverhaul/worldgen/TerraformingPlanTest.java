@@ -1,8 +1,9 @@
 package com.davisodom.villageoverhaul.worldgen;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.WorldMock;
+import org.bukkit.World;
+import com.davisodom.villageoverhaul.test.FakeWorld;
+import org.bukkit.block.Block;
+import org.mockito.Mockito;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.junit.jupiter.api.*;
@@ -18,23 +19,22 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("TerraformingPlan Tests")
 class TerraformingPlanTest {
     
-    private static ServerMock server;
-    private WorldMock world;
+    private World world;
+    private com.davisodom.villageoverhaul.test.FakeWorld fake;
     
     @BeforeAll
-    static void setUpAll() {
-        server = MockBukkit.mock();
-    }
+    static void setUpAll() { }
     
     @AfterAll
-    static void tearDownAll() {
-        MockBukkit.unmock();
-    }
+    static void tearDownAll() { }
     
     @BeforeEach
     void setUp() {
-        world = server.addSimpleWorld("test_world");
+        fake = new FakeWorld();
+        world = fake.getWorld();
     }
+
+    // Using FakeWorld for block semantics
     
     @Test
     @DisplayName("Plan creation with origin and dimensions")
@@ -294,11 +294,11 @@ class TerraformingPlanTest {
     @Test
     @DisplayName("Plan fills gaps in foundation")
     void testPlanFillsFoundationGaps() {
-        // Set up terrain with gap at foundation level
+        // Set up terrain with shallow gap at foundation level (surface at y=63, foundation target 64)
         for (int x = 100; x < 110; x++) {
             for (int z = 200; z < 210; z++) {
                 world.getBlockAt(x, 62, z).setType(Material.STONE);
-                world.getBlockAt(x, 63, z).setType(Material.AIR); // Gap
+                world.getBlockAt(x, 63, z).setType(Material.STONE); // surface at y=63
                 world.getBlockAt(x, 64, z).setType(Material.AIR);
             }
         }

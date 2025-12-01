@@ -4,9 +4,7 @@ import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.cultures.CultureService;
 import com.davisodom.villageoverhaul.model.PlacementReceipt;
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
+// Seed propagation determinism check uses plain Random, no MockBukkit required
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.junit.jupiter.api.DisplayName;

@@ -13,8 +13,14 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
+import org.bukkit.block.Block;
+import org.bukkit.Material;
+import com.davisodom.villageoverhaul.model.PlacementReceipt;
 
 public class VillagePlacementServiceImplTest {
 
@@ -31,6 +37,8 @@ public class VillagePlacementServiceImplTest {
                 Mockito.mock(com.davisodom.villageoverhaul.villages.VillageMetadataStore.class), cs);
 
         Method m = VillagePlacementServiceImpl.class.getDeclaredMethod("getCultureStructures", String.class, long.class);
+        assertNotNull(m, "Could not find findSuitablePlacementPosition method via reflection");
+        assertNotNull(m, "Could not find findSuitablePlacementPosition method via reflection");
         m.setAccessible(true);
 
         @SuppressWarnings("unchecked")
@@ -116,6 +124,268 @@ public class VillagePlacementServiceImplTest {
         
         assertNotEquals(expected, differentOrigin, "Different origin should produce different village UUID");
     }
+
+        @Test
+        @DisplayName("placeVillage places multiple structures and avoids overlaps")
+        public void testPlaceVillagePlacesMultipleBuildings_NoOverlap() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house","market","workshop","bath","temple");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture","Test", structures, null)));
+
+        // dimensions for every structure
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString())).thenReturn(Optional.of(new int[]{3,3,3}));
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        // Return a placement receipt based on a deterministic increasing offset to ensure no overlaps
+        final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(0);
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world), Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyMap()))
+            .thenAnswer(inv -> {
+                String sid = inv.getArgument(0);
+                UUID vid = inv.getArgument(4);
+                int idx = counter.getAndIncrement();
+                int w = 3, h = 3, d = 3;
+                int ox = idx * 10; // spread placements 10 blocks apart
+                int oz = idx * 10;
+
+                PlacementReceipt receipt = new PlacementReceipt.Builder()
+                    .structureId(sid)
+                    .villageId(vid)
+                    .world(world)
+                    .origin(ox, 64, oz)
+                    .rotation(0)
+                    .bounds(ox, ox + w - 1,
+                        64, 64 + h - 1,
+                        oz, oz + d - 1)
+                    .dimensions(w, h, d)
+                    .entrance(ox, 63, oz + 1)
+                    .foundationCorners(new PlacementReceipt.CornerSample[]{
+                        new PlacementReceipt.CornerSample(ox, 63, oz, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox + w - 1, 63, oz, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox + w - 1, 63, oz + d - 1, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox, 63, oz + d - 1, Material.DIRT)
+                    })
+                    .build();
+
+                return Optional.of(receipt);
+            });
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        Location origin = new Location(world, 0, 64, 0);
+        Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
+
+        assertTrue(villageOpt.isPresent(), "Village placement should succeed");
+
+        UUID vid = villageOpt.get();
+        List<com.davisodom.villageoverhaul.model.Building> buildings = store.getVillageBuildings(vid);
+        assertEquals(5, buildings.size(), "Expected five buildings to be placed");
+
+        // Ensure volume masks do not overlap
+        List<com.davisodom.villageoverhaul.model.VolumeMask> masks = store.getVolumeMasks(vid);
+        for (int i = 0; i < masks.size(); i++) {
+            for (int j = i+1; j < masks.size(); j++) {
+            com.davisodom.villageoverhaul.model.VolumeMask a = masks.get(i);
+            com.davisodom.villageoverhaul.model.VolumeMask b = masks.get(j);
+            boolean xOverlap = a.getMinX() <= b.getMaxX() && a.getMaxX() >= b.getMinX();
+            boolean zOverlap = a.getMinZ() <= b.getMaxZ() && a.getMaxZ() >= b.getMinZ();
+            assertFalse(xOverlap && zOverlap, "VolumeMasks should not overlap");
+            }
+        }
+        }
+
+    @Test
+    @DisplayName("Rotated AABB collision respects spacing buffer and rejects close candidates")
+    public void testRotatedAABBCollision_respectsSpacingBuffer() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageMetadataStore store = Mockito.mock(VillageMetadataStore.class);
+        CultureService cs = Mockito.mock(CultureService.class);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 10, 64, 10);
+
+        // Compute candidate AABB for a 3x3x3 structure with rotation=0
+        java.lang.reflect.Method mAABB = VillagePlacementServiceImpl.class.getDeclaredMethod("computeRotatedAABB",
+                org.bukkit.Location.class, int.class, int.class, int.class, int.class);
+        mAABB.setAccessible(true);
+
+        int[] candidate = (int[]) mAABB.invoke(svc, origin, 3, 3, 3, 0);
+
+        // Place a blocking mask just outside candidate (starts at X=14..16) and same Z range
+        java.util.UUID vid = java.util.UUID.randomUUID();
+        com.davisodom.villageoverhaul.model.VolumeMask blocking = new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+                .structureId("blocker")
+                .villageId(vid)
+                .bounds(14, 16, 63, 65, 10, 12)
+                .build();
+
+        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod("checkRotatedAABBCollision", int[].class, java.util.List.class, int.class);
+        mCollision.setAccessible(true);
+
+        // No buffer: should NOT collide (close but touching)
+        boolean collidesNoBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0);
+
+        // With spacing buffer=2 collisions should be detected
+        boolean collidesWithBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 2);
+
+        assertFalse(collidesNoBuffer, "Expected no collision when buffer=0 for adjacent mask");
+        assertTrue(collidesWithBuffer, "Expected collision when spacing buffer applied");
+    }
+
+    @Test
+    @DisplayName("checkRotatedAABBCollision detects full overlap with existing mask")
+    public void testRotatedAABBCollision_detectsOverlap() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageMetadataStore store = Mockito.mock(VillageMetadataStore.class);
+        CultureService cs = Mockito.mock(CultureService.class);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 20, 64, 20);
+
+        // Candidate AABB for 5x5x5 structure
+        java.lang.reflect.Method mAABB = VillagePlacementServiceImpl.class.getDeclaredMethod("computeRotatedAABB",
+                org.bukkit.Location.class, int.class, int.class, int.class, int.class);
+        mAABB.setAccessible(true);
+
+        int[] candidate = (int[]) mAABB.invoke(svc, origin, 5, 5, 5, 0);
+
+        // Create a blocking mask that is fully inside the candidate bounds
+        java.util.UUID vid = java.util.UUID.randomUUID();
+        com.davisodom.villageoverhaul.model.VolumeMask blocking = new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+                .structureId("blocker")
+                .villageId(vid)
+                .bounds(candidate[0] + 1, candidate[1] - 1, candidate[2], candidate[3], candidate[4] + 1, candidate[5] - 1)
+                .build();
+
+        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod("checkRotatedAABBCollision", int[].class, java.util.List.class, int.class);
+        mCollision.setAccessible(true);
+
+        boolean collides = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0);
+
+        assertTrue(collides, "Expected collision when existing mask intersects candidate AABB");
+    }
+
+        @Test
+        @DisplayName("findSuitablePlacementPosition returns empty when existing masks block area")
+        public void testFindSuitablePlacementPosition_ReturnsEmptyWhenAllCovered() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+        CultureService cs = Mockito.mock(CultureService.class);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        // Create a giant mask that covers the whole search area
+        UUID vid = UUID.randomUUID();
+        // Limit the mask to the solver's search radius to avoid excessive chunk indexing
+        // (previously -1000..1000 produced a very large index and triggered heavy JVM usage)
+        com.davisodom.villageoverhaul.model.VolumeMask blocking = new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+            .structureId("blocker")
+            .villageId(vid)
+            .bounds(-300, 300, 0, 256, -300, 300)
+            .build();
+
+        java.lang.reflect.Method m = null;
+        for (java.lang.reflect.Method mm : VillagePlacementServiceImpl.class.getDeclaredMethods()) {
+            if (mm.getName().equals("findSuitablePlacementPosition")) { m = mm; break; }
+        }
+        assertNotNull(m, "Could not find findSuitablePlacementPosition method via reflection");
+        m.setAccessible(true);
+
+        SurfaceSolver solver = new SurfaceSolver(world, List.of(blocking));
+
+        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, List.of(blocking), solver, null);
+
+        assertFalse(res.isPresent(), "Expected no placement when masks block the area");
+        }
+
+        @Test
+        @DisplayName("findSuitablePlacementPosition finds a valid location when chunks loaded and surface present")
+        public void testFindSuitablePlacementPosition_ReturnsValidLocation() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+        CultureService cs = Mockito.mock(CultureService.class);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block air = Mockito.mock(Block.class);
+        Mockito.when(air.getType()).thenReturn(Material.AIR);
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.eq(65), Mockito.anyInt())).thenReturn(air);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.eq(64), Mockito.anyInt())).thenReturn(dirt);
+
+        java.lang.reflect.Method m = null;
+        for (java.lang.reflect.Method mm : VillagePlacementServiceImpl.class.getDeclaredMethods()) {
+            if (mm.getName().equals("findSuitablePlacementPosition")) { m = mm; break; }
+        }
+        m.setAccessible(true);
+
+        SurfaceSolver solver = new SurfaceSolver(world, new ArrayList<>());
+
+        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, new ArrayList<>(), solver, null);
+
+        assertTrue(res.isPresent(), "Expected a valid placement location to be found");
+        Location loc = res.get();
+        assertNotNull(loc, "Location should not be null");
+        assertTrue(Math.abs(loc.getBlockX()) <= 256 && Math.abs(loc.getBlockZ()) <= 256, "Location should be within search radius");
+        }
 
     /**
      * T026d17: Verify that building UUID derivation is deterministic.

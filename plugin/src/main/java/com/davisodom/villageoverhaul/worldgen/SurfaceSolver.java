@@ -98,10 +98,14 @@ public class SurfaceSolver {
         // We scan down from there.
         
         int startY = world.getHighestBlockYAt(x, z) + 1;
+        // Cache world bounds locally to avoid repeated mocked calls and expensive stack-walks
+        int maxHeight = world.getMaxHeight();
+        int minHeight = world.getMinHeight();
+
         // Clamp to world bounds
-        startY = Math.min(startY, world.getMaxHeight());
-        
-        for (int y = startY; y >= world.getMinHeight(); y--) {
+        startY = Math.min(startY, maxHeight);
+
+        for (int y = startY; y >= minHeight; y--) {
             // 1. Check if (x,y,z) is inside any mask
             if (isInAnyMask(x, y, z)) {
                 continue; // Ignore structure blocks

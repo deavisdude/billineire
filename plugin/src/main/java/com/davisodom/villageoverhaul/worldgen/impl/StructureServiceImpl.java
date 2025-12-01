@@ -1089,10 +1089,14 @@ public class StructureServiceImpl implements StructureService {
      */
     private void checkFAWEAvailability() {
         try {
-            Class.forName("com.sk89q.worldedit.bukkit.WorldEditPlugin");
+            // Use Class.forName with initialize=false to avoid triggering static
+            // initializers in WorldEdit/FAWE classes (which may call Bukkit.server
+            // and fail in unit test environments). If the class is present, treat
+            // FAWE as available; otherwise it's not present.
+            Class.forName("com.sk89q.worldedit.bukkit.WorldEditPlugin", false, getClass().getClassLoader());
             faweAvailable = true;
             LOGGER.info("[STRUCT] FAWE detected and available");
-        } catch (ClassNotFoundException e) {
+        } catch (Throwable t) {
             faweAvailable = false;
             LOGGER.info("[STRUCT] FAWE not available, using Paper API fallback");
         }
@@ -1410,19 +1414,19 @@ public class StructureServiceImpl implements StructureService {
     // Vegetation materials for ground-finding
     private static final Set<Material> TRIMMABLE_VEGETATION = new HashSet<>();
     static {
-        TRIMMABLE_VEGETATION.add(Material.SHORT_GRASS);
-        TRIMMABLE_VEGETATION.add(Material.TALL_GRASS);
-        TRIMMABLE_VEGETATION.add(Material.FERN);
-        TRIMMABLE_VEGETATION.add(Material.LARGE_FERN);
-        TRIMMABLE_VEGETATION.add(Material.DEAD_BUSH);
-        TRIMMABLE_VEGETATION.add(Material.DANDELION);
-        TRIMMABLE_VEGETATION.add(Material.POPPY);
-        TRIMMABLE_VEGETATION.add(Material.OAK_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.BIRCH_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.SPRUCE_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.JUNGLE_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.ACACIA_LEAVES);
-        TRIMMABLE_VEGETATION.add(Material.DARK_OAK_LEAVES);
+        // Some server runtime environments (CI, older/newer Bukkit API versions)
+        // may not expose every Material enum constant. Use matchMaterial(String)
+        // to safely resolve by name and only add materials that exist.
+        String[] names = new String[]{
+                "SHORT_GRASS", "TALL_GRASS", "FERN", "LARGE_FERN", "DEAD_BUSH",
+                "DANDELION", "POPPY", "OAK_LEAVES", "BIRCH_LEAVES", "SPRUCE_LEAVES",
+                "JUNGLE_LEAVES", "ACACIA_LEAVES", "DARK_OAK_LEAVES"
+        };
+
+        for (String n : names) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) TRIMMABLE_VEGETATION.add(m);
+        }
     }
     
     /**

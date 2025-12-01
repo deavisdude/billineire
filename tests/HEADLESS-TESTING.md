@@ -1019,6 +1019,23 @@ Together they ensure:
 2. Cached paths are reused correctly (T026a)
 3. Cache invalidation triggers recalculation (T026a)
 
+## T027i: Headless Integration — End-to-End Village Generation
+
+This automated headless test verifies a full village generation workflow (structure seating + path emission) and checks footprint non-overlap.
+
+Script: scripts/ci/sim/test-village-generation.ps1
+
+Example run (expects 5 structures and ≥90% path connectivity when available):
+```powershell
+.\scripts\ci\sim\test-village-generation.ps1 -Seed 12345 -Culture roman -VillageName TestVillage -ExpectedStructures 5 -PathConnectivityThreshold 90
+```
+
+Acceptance criteria:
+- Server runs to completion and emits `Village placement complete`.
+- At least `ExpectedStructures` placement receipts are present.
+- No AABB overlaps among placement receipts (R011b acceptance).
+- If a connectivity metric is present in logs, paths connectivity ≥ `PathConnectivityThreshold`%.
+
 ### Quick Checklist
 
 ✅ **Automated Full Test** (recommended):

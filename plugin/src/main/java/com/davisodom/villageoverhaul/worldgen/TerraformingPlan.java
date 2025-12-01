@@ -452,7 +452,12 @@ public class TerraformingPlan {
     }
     
     private boolean isTrimmableVegetation(Material material) {
-        return material == Material.SHORT_GRASS ||
+        // Some runtime environments (MockBukkit or test harnesses) may not expose newer
+        // Material constants like SHORT_GRASS. Avoid direct enum reference to prevent
+        // NoSuchFieldError in such environments — check by name instead.
+        if ("SHORT_GRASS".equals(material.name())) return true;
+
+        return material == Material.TALL_GRASS ||
                material == Material.TALL_GRASS ||
                material == Material.FERN ||
                material == Material.LARGE_FERN ||

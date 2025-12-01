@@ -1,9 +1,6 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
-import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
+// No external server harness required for seed-determinism checks
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.junit.jupiter.api.DisplayName;

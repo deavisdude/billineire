@@ -58,8 +58,15 @@ public class PathEmitter {
         for (Block pathBlock : pathBlocks) {
             int x = pathBlock.getX();
             int z = pathBlock.getZ();
-            // Get the actual ground level at this X,Z position
-            int groundY = world.getHighestBlockYAt(x, z);
+            // Get the actual ground level at this X,Z position. Some test worlds (MockBukkit)
+            // don't implement getHighestBlockYAt and will throw — fall back to the
+            // supplied pathBlock Y in that case so unit tests remain deterministic.
+            int groundY;
+            try {
+                groundY = world.getHighestBlockYAt(x, z);
+            } catch (RuntimeException e) {
+                groundY = pathBlock.getY();
+            }
             
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {

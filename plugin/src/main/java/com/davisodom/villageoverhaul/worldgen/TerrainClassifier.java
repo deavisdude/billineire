@@ -4,7 +4,6 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
-import java.util.EnumSet;
 import java.util.Set;
 
 /**
@@ -43,69 +42,51 @@ public class TerrainClassifier {
     /**
      * Fluid materials that are never acceptable for building foundations.
      */
-    private static final Set<Material> FLUIDS = EnumSet.of(
-            Material.WATER,
-            Material.LAVA,
-            Material.BUBBLE_COLUMN
-    );
+    private static final Set<Material> FLUIDS = new java.util.HashSet<>();
+    static {
+        String[] fluidNames = new String[]{"WATER", "LAVA", "BUBBLE_COLUMN"};
+        for (String n : fluidNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) FLUIDS.add(m);
+        }
+    }
     
     /**
      * Vegetation materials that can be trimmed/removed during terraforming.
      * These should NOT prevent structure placement - they'll be cleared.
      */
-    private static final Set<Material> VEGETATION = EnumSet.of(
-            Material.OAK_LEAVES,
-            Material.SPRUCE_LEAVES,
-            Material.BIRCH_LEAVES,
-            Material.JUNGLE_LEAVES,
-            Material.ACACIA_LEAVES,
-            Material.DARK_OAK_LEAVES,
-            Material.MANGROVE_LEAVES,
-            Material.CHERRY_LEAVES,
-            Material.AZALEA_LEAVES,
-            Material.FLOWERING_AZALEA_LEAVES,
-            Material.OAK_LOG,
-            Material.SPRUCE_LOG,
-            Material.BIRCH_LOG,
-            Material.JUNGLE_LOG,
-            Material.ACACIA_LOG,
-            Material.DARK_OAK_LOG,
-            Material.MANGROVE_LOG,
-            Material.CHERRY_LOG,
-            Material.CRIMSON_STEM,
-            Material.WARPED_STEM,
-            Material.SHORT_GRASS,
-            Material.TALL_GRASS,
-            Material.FERN,
-            Material.LARGE_FERN,
-            Material.DEAD_BUSH,
-            Material.DANDELION,
-            Material.POPPY,
-            Material.BLUE_ORCHID,
-            Material.ALLIUM,
-            Material.AZURE_BLUET,
-            Material.RED_TULIP,
-            Material.ORANGE_TULIP,
-            Material.WHITE_TULIP,
-            Material.PINK_TULIP,
-            Material.OXEYE_DAISY,
-            Material.CORNFLOWER,
-            Material.LILY_OF_THE_VALLEY,
-            Material.SUNFLOWER,
-            Material.LILAC,
-            Material.ROSE_BUSH,
-            Material.PEONY
-    );
+    private static final Set<Material> VEGETATION = new java.util.HashSet<>();
+    static {
+        String[] vegetationNames = new String[]{
+            "OAK_LEAVES", "SPRUCE_LEAVES", "BIRCH_LEAVES", "JUNGLE_LEAVES",
+            "ACACIA_LEAVES", "DARK_OAK_LEAVES", "MANGROVE_LEAVES", "CHERRY_LEAVES",
+            "AZALEA_LEAVES", "FLOWERING_AZALEA_LEAVES", "OAK_LOG", "SPRUCE_LOG",
+            "BIRCH_LOG", "JUNGLE_LOG", "ACACIA_LOG", "DARK_OAK_LOG", "MANGROVE_LOG",
+            "CHERRY_LOG", "CRIMSON_STEM", "WARPED_STEM", "SHORT_GRASS", "TALL_GRASS",
+            "FERN", "LARGE_FERN", "DEAD_BUSH", "DANDELION", "POPPY", "BLUE_ORCHID",
+            "ALLIUM", "AZURE_BLUET", "RED_TULIP", "ORANGE_TULIP", "WHITE_TULIP",
+            "PINK_TULIP", "OXEYE_DAISY", "CORNFLOWER", "LILY_OF_THE_VALLEY",
+            "SUNFLOWER", "LILAC", "ROSE_BUSH", "PEONY"
+        };
+
+        for (String n : vegetationNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) VEGETATION.add(m);
+        }
+    }
     
     /**
      * Materials that cannot support structure foundations (unsupported).
      * AIR and VOID only - vegetation handled separately.
      */
-    private static final Set<Material> UNSUPPORTED = EnumSet.of(
-            Material.AIR,
-            Material.CAVE_AIR,
-            Material.VOID_AIR
-    );
+    private static final Set<Material> UNSUPPORTED = new java.util.HashSet<>();
+    static {
+        String[] unsupportedNames = new String[]{"AIR", "CAVE_AIR", "VOID_AIR"};
+        for (String n : unsupportedNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) UNSUPPORTED.add(m);
+        }
+    }
     
     /**
      * Maximum acceptable height delta within 3x3 area (blocks).
