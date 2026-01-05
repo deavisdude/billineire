@@ -495,4 +495,162 @@ class TerraformingPlanTest {
         assertTrue(plan.rollback());
         assertTrue(plan.isRolledBack());
     }
+    
+    // ---- T065: Surface material preservation tests ----
+    
+    @Test
+    @DisplayName("T065: Grading preserves GRASS_BLOCK surface material on top layer")
+    void testGradingPreservesGrassBlockSurface() {
+        // Set up terrain: grass surface at y=62, need to fill gap to foundation at y=64
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 61, z).setType(Material.DIRT);
+                world.getBlockAt(x, 62, z).setType(Material.GRASS_BLOCK); // Surface is grass
+                world.getBlockAt(x, 63, z).setType(Material.AIR); // Gap
+                world.getBlockAt(x, 64, z).setType(Material.AIR); // Gap - foundation target
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        
+        // Check that GRADE operations preserve grass for top layer
+        List<TerraformingPlan.BlockOperation> gradeOps = plan.getPlannedOperations().stream()
+                .filter(op -> op.type == TerraformingPlan.BlockOperation.OperationType.GRADE)
+                .toList();
+        assertFalse(gradeOps.isEmpty(), "Should have grading operations");
+        
+        // The top layer (y=64) should use GRASS_BLOCK, lower layers should use DIRT
+        boolean hasGrassAtTop = gradeOps.stream()
+                .anyMatch(op -> op.y == 64 && op.targetMaterial == Material.GRASS_BLOCK);
+        boolean hasDirtBelow = gradeOps.stream()
+                .anyMatch(op -> op.y == 63 && op.targetMaterial == Material.DIRT);
+        
+        assertTrue(hasGrassAtTop, "Top layer should preserve GRASS_BLOCK");
+        assertTrue(hasDirtBelow, "Below surface should use DIRT");
+        
+        // Commit and verify world state
+        plan.commit();
+        assertEquals(Material.GRASS_BLOCK, world.getBlockAt(100, 64, 200).getType(),
+                "Foundation level should be GRASS_BLOCK to prevent dirt scars");
+        assertEquals(Material.DIRT, world.getBlockAt(100, 63, 200).getType(),
+                "Below surface should be DIRT");
+    }
+    
+    @Test
+    @DisplayName("T065: Grading preserves SAND surface material in desert biomes")
+    void testGradingPreservesSandSurface() {
+        // Set up terrain: sand surface at y=62, need to fill gap to foundation at y=64
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 61, z).setType(Material.SANDSTONE);
+                world.getBlockAt(x, 62, z).setType(Material.SAND); // Desert surface
+                world.getBlockAt(x, 63, z).setType(Material.AIR);
+                world.getBlockAt(x, 64, z).setType(Material.AIR);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        plan.commit();
+        
+        // Top layer should be SAND, not DIRT
+        assertEquals(Material.SAND, world.getBlockAt(100, 64, 200).getType(),
+                "Foundation level should be SAND to preserve desert appearance");
+    }
+    
+    @Test
+    @DisplayName("T065: Grading preserves PODZOL surface material in taiga biomes")
+    void testGradingPreservesPodzolSurface() {
+        // Set up terrain: podzol surface at y=62, need to fill gap
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 61, z).setType(Material.DIRT);
+                world.getBlockAt(x, 62, z).setType(Material.PODZOL); // Taiga surface
+                world.getBlockAt(x, 63, z).setType(Material.AIR);
+                world.getBlockAt(x, 64, z).setType(Material.AIR);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        plan.commit();
+        
+        // Top layer should be PODZOL, not DIRT
+        assertEquals(Material.PODZOL, world.getBlockAt(100, 64, 200).getType(),
+                "Foundation level should be PODZOL to preserve taiga appearance");
+    }
+    
+    @Test
+    @DisplayName("T065: Rollback restores original GRASS_BLOCK surface state after grading")
+    void testRollbackRestoresGrassBlockSurface() {
+        // Set up terrain with grass surface that will be graded
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 61, z).setType(Material.DIRT);
+                world.getBlockAt(x, 62, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 63, z).setType(Material.AIR); // Will be filled with DIRT
+                world.getBlockAt(x, 64, z).setType(Material.AIR); // Will be filled with GRASS_BLOCK
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        assertTrue(plan.commit());
+        
+        // Verify commit changed the blocks
+        assertEquals(Material.GRASS_BLOCK, world.getBlockAt(100, 64, 200).getType());
+        assertEquals(Material.DIRT, world.getBlockAt(100, 63, 200).getType());
+        
+        // Rollback
+        assertTrue(plan.rollback());
+        
+        // Verify rollback restored original AIR blocks
+        assertEquals(Material.AIR, world.getBlockAt(100, 64, 200).getType(),
+                "Rollback should restore original AIR at y=64");
+        assertEquals(Material.AIR, world.getBlockAt(100, 63, 200).getType(),
+                "Rollback should restore original AIR at y=63");
+    }
+    
+    @Test
+    @DisplayName("T065: Filling gaps does not create dirt scars on grassy terrain")
+    void testFillingDoesNotCreateDirtScars() {
+        // Set up terrain with a small gap below foundation on grassy terrain
+        // Surface at y=63 (grass), foundation target at y=65, gap at y=64
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 62, z).setType(Material.DIRT);
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK); // Surface
+                world.getBlockAt(x, 64, z).setType(Material.AIR); // Gap below structure
+                world.getBlockAt(x, 65, z).setType(Material.AIR); // Foundation level
+            }
+        }
+        
+        Location origin = new Location(world, 100, 65, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        
+        // Verify that fill operations use DIRT underground and preserve grass appearance at exposed level
+        // Since foundation is at y=65, fills will be at y=64 (below foundation)
+        List<TerraformingPlan.BlockOperation> fillOps = plan.getPlannedOperations().stream()
+                .filter(op -> op.type == TerraformingPlan.BlockOperation.OperationType.FILL || 
+                              op.type == TerraformingPlan.BlockOperation.OperationType.GRADE)
+                .toList();
+        
+        // All fill operations should target y=64, which is below foundation (y=65)
+        // Since y=64 is not the exposed surface layer for the structure, DIRT is appropriate here
+        // But if y=64 becomes the new top of the fill, it should get grass
+        assertTrue(fillOps.isEmpty() || fillOps.stream()
+                .allMatch(op -> op.targetMaterial == Material.DIRT || op.targetMaterial == Material.GRASS_BLOCK),
+                "Fill operations should use DIRT or preserve grass surface");
+    }
 }

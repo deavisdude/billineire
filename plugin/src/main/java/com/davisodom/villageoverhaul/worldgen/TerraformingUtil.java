@@ -251,6 +251,7 @@ public class TerraformingUtil {
      * Fill gaps with custom limit.
      * CRITICAL FIX: Fill UP TO AND INCLUDING foundationY to ensure solid foundation corners.
      * CRITICAL FIX 2: Replace unsuitable foundation materials (SNOW, GRASS, etc.) with DIRT.
+     * T065: Preserve surface materials (grass stays grass) to prevent dirt scars.
      */
     private static int fillGapsWithLimit(World world, Location origin, int width, int depth, int foundationY, int maxBlocks) {
         int filledCount = 0;
@@ -266,6 +267,13 @@ public class TerraformingUtil {
                         origin.getBlockZ() + z
                 );
                 
+                // T065: Capture surface material for preservation
+                Material surfaceMat = world.getBlockAt(
+                        origin.getBlockX() + x,
+                        surfaceY,
+                        origin.getBlockZ() + z
+                ).getType();
+                
                 // CRITICAL: ALWAYS solidify the foundation layer, even if terrain is higher
                 // Check foundation block regardless of surface height
                 Block foundationBlock = world.getBlockAt(
@@ -274,9 +282,11 @@ public class TerraformingUtil {
                         origin.getBlockZ() + z
                 );
                 
-                // Replace unsuitable foundation materials with DIRT
+                // Replace unsuitable foundation materials with appropriate surface-preserving material
                 if (!isGoodFoundationMaterial(foundationBlock.getType())) {
-                    foundationBlock.setType(Material.DIRT);
+                    // T065: Use surface-appropriate material instead of always DIRT
+                    Material fillMaterial = determineFillMaterial(surfaceMat, foundationY, foundationY);
+                    foundationBlock.setType(fillMaterial);
                     filledCount++;
                     
                     if (filledCount > maxBlocks) {
@@ -288,6 +298,9 @@ public class TerraformingUtil {
                 
                 // Additionally, fill gaps BELOW foundation if terrain is lower
                 if (surfaceY >= minFillY && surfaceY < foundationY) {
+                    // Calculate the highest fill Y (the new exposed surface)
+                    int topFillY = foundationY - 1;
+                    
                     // Fill from surface UP TO (but not including) foundation level (already handled above)
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(
@@ -298,7 +311,9 @@ public class TerraformingUtil {
                         
                         // Fill if block is not solid (including AIR, SHORT_GRASS, etc.)
                         if (!block.getType().isSolid() && block.getType() != Material.WATER) {
-                            block.setType(Material.DIRT);
+                            // T065: Use surface-preserving material for top layer, DIRT for underground
+                            Material fillMaterial = determineFillMaterial(surfaceMat, y, topFillY);
+                            block.setType(fillMaterial);
                             filledCount++;
                             
                             // Safety check
@@ -344,6 +359,59 @@ public class TerraformingUtil {
                material == Material.RED_SAND;
         
         // Unsuitable: SNOW, SNOW_BLOCK, ICE, SHORT_GRASS, FLOWERS, LOGS, LEAVES, AIR, etc.
+    }
+    
+    /**
+     * T065: Determine the appropriate fill material to prevent "dirt scars".
+     * Preserves grass-like surfaces when the fill block will be the top exposed block.
+     * 
+     * @param surfaceMaterial The material at the original surface level
+     * @param fillY The Y level being filled
+     * @param topY The highest Y level that will be filled (the new surface)
+     * @return The appropriate material to use for filling
+     */
+    private static Material determineFillMaterial(Material surfaceMaterial, int fillY, int topY) {
+        // If this is NOT the top layer, always use DIRT (underground)
+        if (fillY < topY) {
+            return Material.DIRT;
+        }
+        
+        // For the top layer, preserve grass-family surfaces to prevent dirt scars
+        // GRASS_BLOCK -> GRASS_BLOCK (preserves the grassy appearance)
+        if (surfaceMaterial == Material.GRASS_BLOCK) {
+            return Material.GRASS_BLOCK;
+        }
+        
+        // PODZOL -> PODZOL (preserves taiga/mega spruce biome appearance)
+        if (surfaceMaterial == Material.PODZOL) {
+            return Material.PODZOL;
+        }
+        
+        // MYCELIUM -> MYCELIUM (preserves mushroom biome appearance)
+        if (surfaceMaterial == Material.MYCELIUM) {
+            return Material.MYCELIUM;
+        }
+        
+        // COARSE_DIRT stays COARSE_DIRT (preserves badlands/mesa appearance)
+        if (surfaceMaterial == Material.COARSE_DIRT) {
+            return Material.COARSE_DIRT;
+        }
+        
+        // Sand/red sand preservation for deserts and beaches
+        if (surfaceMaterial == Material.SAND) {
+            return Material.SAND;
+        }
+        if (surfaceMaterial == Material.RED_SAND) {
+            return Material.RED_SAND;
+        }
+        
+        // Gravel preservation
+        if (surfaceMaterial == Material.GRAVEL) {
+            return Material.GRAVEL;
+        }
+        
+        // Default to DIRT for all other cases
+        return Material.DIRT;
     }
     
     /**

@@ -485,13 +485,18 @@ public class TerraformingPlan {
                 
                 // Only fill gaps UPWARD - never dig down
                 if (yDiff < 0 && Math.abs(yDiff) <= MAX_VERTICAL_CHANGE) {
+                    // T065: Determine appropriate fill material based on surface context
+                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    
                     for (int y = surfaceY + 1; y <= targetY; y++) {
                         Block fillBlock = world.getBlockAt(blockX, y, blockZ);
                         Material mat = fillBlock.getType();
                         
                         if (!mat.isSolid()) {
+                            // T065: For the top block, use surface-appropriate material to prevent dirt scars
+                            Material fillMaterial = determineFillMaterial(surfaceMat, y, targetY);
                             plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, Material.DIRT, BlockOperation.OperationType.GRADE));
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.GRADE));
                             graded++;
                             gradeCount++;
                             
@@ -535,13 +540,18 @@ public class TerraformingPlan {
                 
                 // Fill gaps below foundation (from ground surface up to one block below structure)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
+                    // T065: Determine appropriate fill material based on surface context
+                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
                         Material mat = block.getType();
                         
                         if (!mat.isSolid() && mat != Material.WATER) {
+                            // T065: For the top block, use surface-appropriate material to prevent dirt scars
+                            Material fillMaterial = determineFillMaterial(surfaceMat, y, foundationY - 1);
                             plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, Material.DIRT, BlockOperation.OperationType.FILL));
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL));
                             filled++;
                             fillCount++;
                             
@@ -581,13 +591,18 @@ public class TerraformingPlan {
                 
                 // Only fill gaps below the foundation (not at foundation level)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
+                    // T065: Determine appropriate fill material based on surface context
+                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
                         Material mat = block.getType();
                         
                         if (!mat.isSolid() && mat != Material.WATER) {
+                            // T065: For the top block, use surface-appropriate material to prevent dirt scars
+                            Material fillMaterial = determineFillMaterial(surfaceMat, y, foundationY - 1);
                             plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, Material.DIRT, BlockOperation.OperationType.FILL));
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL));
                             filled++;
                             fillCount++;
                         }
@@ -601,6 +616,59 @@ public class TerraformingPlan {
                     filled, maxBlocks));
             // Continue anyway for large structures
         }
+    }
+    
+    /**
+     * T065: Determine the appropriate fill material to prevent "dirt scars".
+     * Preserves grass-like surfaces when the fill block will be the top exposed block.
+     * 
+     * @param surfaceMaterial The material at the original surface level
+     * @param fillY The Y level being filled
+     * @param topY The highest Y level that will be filled (the new surface)
+     * @return The appropriate material to use for filling
+     */
+    private Material determineFillMaterial(Material surfaceMaterial, int fillY, int topY) {
+        // If this is NOT the top layer, always use DIRT (underground)
+        if (fillY < topY) {
+            return Material.DIRT;
+        }
+        
+        // For the top layer, preserve grass-family surfaces to prevent dirt scars
+        // GRASS_BLOCK -> GRASS_BLOCK (preserves the grassy appearance)
+        if (surfaceMaterial == Material.GRASS_BLOCK) {
+            return Material.GRASS_BLOCK;
+        }
+        
+        // PODZOL -> PODZOL (preserves taiga/mega spruce biome appearance)
+        if (surfaceMaterial == Material.PODZOL) {
+            return Material.PODZOL;
+        }
+        
+        // MYCELIUM -> MYCELIUM (preserves mushroom biome appearance)
+        if (surfaceMaterial == Material.MYCELIUM) {
+            return Material.MYCELIUM;
+        }
+        
+        // COARSE_DIRT stays COARSE_DIRT (preserves badlands/mesa appearance)
+        if (surfaceMaterial == Material.COARSE_DIRT) {
+            return Material.COARSE_DIRT;
+        }
+        
+        // Sand/red sand preservation for deserts and beaches
+        if (surfaceMaterial == Material.SAND) {
+            return Material.SAND;
+        }
+        if (surfaceMaterial == Material.RED_SAND) {
+            return Material.RED_SAND;
+        }
+        
+        // Gravel preservation
+        if (surfaceMaterial == Material.GRAVEL) {
+            return Material.GRAVEL;
+        }
+        
+        // Default to DIRT for all other cases
+        return Material.DIRT;
     }
     
     private boolean isTrimmableVegetation(Material material) {

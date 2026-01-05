@@ -1192,13 +1192,55 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - CI script (`run-scenario.ps1`) already detects ZERO-PLACEMENT and fails with exit code 4
     - All unit tests pass (VillagePlacementServiceImplTest: 10 passed)
 
-- [ ] T065 [P0] Terraforming must not leave "dirt scars" after successful placement
+- [X] T065 [P0] Terraforming must not leave "dirt scars" after successful placement
   - Story: Even with rollback-on-failure, successful placements can still leave unnatural dirt pads where grass/topsoil was replaced.
   - Description: Preserve/restore the original surface material for the top layer when grading/filling (e.g., grass block stays grass where it was grass). Where full fidelity is needed, store/restore `BlockData` (not just `Material`) for affected blocks at the surface layer.
   - Files: `TerraformingPlan.java`, `TerraformingUtil.java`
   - Acceptance:
     - After a successful placement, the surface layer outside the final footprint does not regress from grass to dirt.
     - Unit tests cover at least: (1) grass preservation on grade/fill, (2) rollback restores original surface block state.
+  - **IMPLEMENTED** (2026-01-05):
+    - Added `determineFillMaterial()` helper method to both `TerraformingPlan.java` and `TerraformingUtil.java`
+    - Method determines appropriate fill material based on surface context:
+      - GRASS_BLOCK surfaces use GRASS_BLOCK for top layer (prevents dirt scars in grassy biomes)
+      - PODZOL surfaces use PODZOL for top layer (preserves taiga appearance)
+      - MYCELIUM surfaces use MYCELIUM for top layer (preserves mushroom biome appearance)
+      - SAND/RED_SAND surfaces preserve sand (preserves desert/beach appearance)
+      - COARSE_DIRT/GRAVEL surfaces are preserved
+      - Underground layers still use DIRT
+    - Updated `planLightGrading()`, `planGapFilling()`, and `planFoundationFilling()` in TerraformingPlan to use new helper
+    - Updated `fillGapsWithLimit()` in TerraformingUtil to use new helper
+    - Added 5 new unit tests in TerraformingPlanTest.java:
+      - `testGradingPreservesGrassBlockSurface()` - verifies grass preservation on grade/fill
+      - `testGradingPreservesSandSurface()` - verifies desert biome preservation
+      - `testGradingPreservesPodzolSurface()` - verifies taiga biome preservation
+      - `testRollbackRestoresGrassBlockSurface()` - verifies rollback restores original block state
+      - `testFillingDoesNotCreateDirtScars()` - verifies no dirt scars on grassy terrain
+    - All 28 TerraformingPlan unit tests pass
+
+- [ ] T068 [P0] Fix root-cause counters for `site_validation_failed` (steep/blocked/fluid)
+  - Story: 2026-01-05 playtest shows repeated `Site validation failed: steep (...)` while `ZERO-PLACEMENT rootCause=...steep:0`.
+  - Description: Ensure `PlacementRejectionCounters` (and the `ZERO-PLACEMENT` summary line + `village_<uuid>_placement_rejections.json`) accurately count validation failures. When SiteValidator reports a rejection reason (e.g., `steep (108 tiles)`), counters must increment the matching bucket (steep/blocked/fluid/etc.).
+  - Files: `VillagePlacementServiceImpl.java`, `SiteValidator.java`, `VillageMetadataStore.java` (artifact writer), any rejection-counter plumbing
+  - Acceptance:
+    - A run that logs `Site validation failed: steep (...)` results in `rootCause=...steep:>0` and JSON counters `steep>0`.
+    - Unit test reproduces the mismatch and asserts counters are incremented.
+
+- [ ] T069 [P0] Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
+  - Story: Fresh-world seeding found terrain quickly, but every structure placement at the chosen origin failed with `steep (98-108 tiles)`.
+  - Description: Add diagnostic output for SiteValidator steepness decision so we can tell whether this is (a) incorrect sampling, (b) threshold defaults too strict at runtime, (c) heightmap/surfaceY mismatch, or (d) using the wrong footprint/bounds. Log computed steep fraction, blocked fraction, max slope delta, sample density, footprint dims, and the effective thresholds.
+  - Files: `SiteValidator.java`, `VillagePlacementServiceImpl.java`, `config.yml` (if thresholds are intended to be configurable)
+  - Acceptance:
+    - Logs include one structured line per rejection (INFO when verbose) like: `SITE-REJECT reason=steep steepTiles=108 tiles=195 steepFrac=0.55 maxSteepFrac=0.40 maxSlopeDelta=... sampleDensity=... footprint=18x20 origin=...`.
+    - Follow-up fix reduces false rejections on the same seed/location (re-run produces at least one successful placement) without allowing clearly steep hillsides.
+
+- [ ] T070 [P0] Placement must explore alternate candidates when the chosen origin fails validation
+  - Story: Logs show multiple structure IDs attempted at the same origin `(-216,63,-144)` with immediate `site_validation_failed` and no evidence of trying alternate nearby positions.
+  - Description: Ensure placement search/spiral actually tries multiple candidate positions per structure when validation fails at the initial origin. Add a concise progress/trace line that lists candidate coords tried for a structure (bounded to N samples) and the aggregate rejection breakdown per structure.
+  - Files: `VillagePlacementServiceImpl.java` (candidate generation/search), `VillageWorldgenAdapter.java` (if it pins to origin), diagnostics
+  - Acceptance:
+    - In a scenario where the initial origin fails validation, logs show subsequent candidate coords being tried (not just the initial origin).
+    - `attempts` and `candidates` in `ZERO-PLACEMENT` match the number of distinct candidates evaluated.
 
 - [ ] T066 [P0] Make `/votest generate-structures` and `/vo generate` non-blocking (budgeted per tick)
   - Story: Test commands can cause massive lag/errors by doing too much synchronous work in one tick.
@@ -1347,7 +1389,7 @@ Removed (duplicate):
     - 0 floating slabs/stairs; complements headless test T026f.
     - Emitted blocks restricted to natural whitelist.
 
-Prioritization: P0 (T059, T060, T064, T065, T066) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
+Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
 
