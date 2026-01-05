@@ -46,16 +46,49 @@ public class TerraformingPlan {
     // Planned operations (not yet committed)
     private final List<BlockOperation> plannedOperations = new ArrayList<>();
     
+    // T058: Applied operations tracking for rollback support
+    private final List<AppliedOperation> appliedOperations = new ArrayList<>();
+    
     // State tracking
     private boolean planned = false;
     private boolean committed = false;
     private boolean planSucceeded = false;
+    private boolean rolledBack = false;
     private String rejectionReason = null;
+    
+    // T058: Commit diagnostics
+    private int appliedOpsCount = 0;
+    private int skippedOpsCount = 0;
     
     // Diagnostics
     private int trimCount = 0;
     private int gradeCount = 0;
     private int fillCount = 0;
+    
+    /**
+     * T058: Represents an operation that was actually applied to the world.
+     * Stores the actual original material at commit time (may differ from planned if world changed).
+     */
+    public static class AppliedOperation {
+        public final int x;
+        public final int y;
+        public final int z;
+        public final Material actualOriginalMaterial;
+        public final Material appliedMaterial;
+        
+        public AppliedOperation(int x, int y, int z, Material actualOriginal, Material applied) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.actualOriginalMaterial = actualOriginal;
+            this.appliedMaterial = applied;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("Applied(%d,%d,%d): %s -> %s", x, y, z, actualOriginalMaterial, appliedMaterial);
+        }
+    }
     
     /**
      * Represents a single block modification operation.
@@ -252,26 +285,116 @@ public class TerraformingPlan {
         LOGGER.info(String.format("[STRUCT][COMMIT] Committing %d terraforming operations at %s",
                 plannedOperations.size(), formatLocation(origin)));
         
-        int applied = 0;
+        // T058: Clear any previous applied operations and reset counters
+        appliedOperations.clear();
+        appliedOpsCount = 0;
+        skippedOpsCount = 0;
+        
         for (BlockOperation op : plannedOperations) {
             Block block = world.getBlockAt(op.x, op.y, op.z);
             
-            // Verify block hasn't changed since planning (concurrent modification detection)
+            // T058: Capture actual current material at commit time (for rollback)
             Material currentMaterial = block.getType();
+            
+            // Verify block hasn't changed since planning (concurrent modification detection)
             if (!currentMaterial.equals(op.originalMaterial)) {
                 LOGGER.warning(String.format("[STRUCT][COMMIT] Block at (%d,%d,%d) changed from %s to %s - skipping",
                         op.x, op.y, op.z, op.originalMaterial, currentMaterial));
+                skippedOpsCount++;
                 continue;
             }
             
+            // T058: Record the operation before applying so we can rollback if needed
+            appliedOperations.add(new AppliedOperation(op.x, op.y, op.z, currentMaterial, op.targetMaterial));
+            
             block.setType(op.targetMaterial);
-            applied++;
+            appliedOpsCount++;
         }
         
-        LOGGER.info(String.format("[STRUCT][COMMIT] Applied %d/%d operations",
-                applied, plannedOperations.size()));
+        // T058: Emit TERRAFORM-COMMIT diagnostic line with applied/skipped counts
+        LOGGER.info(String.format("[TERRAFORM-COMMIT] bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d",
+                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+                appliedOpsCount, skippedOpsCount, plannedOperations.size()));
         
         return true;
+    }
+    
+    /**
+     * T058: Rollback committed terraforming operations.
+     * Restores blocks to their state before commit() was called.
+     * Only works if commit() was called and rollback() hasn't been called yet.
+     * 
+     * @return true if rollback was successful
+     */
+    public boolean rollback() {
+        if (!committed) {
+            throw new IllegalStateException("Cannot rollback uncommitted plan");
+        }
+        if (rolledBack) {
+            throw new IllegalStateException("Plan already rolled back");
+        }
+        
+        LOGGER.info(String.format("[STRUCT][ROLLBACK] Rolling back %d applied operations at %s",
+                appliedOperations.size(), formatLocation(origin)));
+        
+        int reverted = 0;
+        int skipped = 0;
+        
+        // Rollback in reverse order to handle any potential dependencies
+        for (int i = appliedOperations.size() - 1; i >= 0; i--) {
+            AppliedOperation applied = appliedOperations.get(i);
+            Block block = world.getBlockAt(applied.x, applied.y, applied.z);
+            
+            // Verify block is still what we set it to (another modification may have occurred)
+            Material currentMaterial = block.getType();
+            if (!currentMaterial.equals(applied.appliedMaterial)) {
+                LOGGER.warning(String.format("[STRUCT][ROLLBACK] Block at (%d,%d,%d) changed from %s to %s since commit - skipping revert",
+                        applied.x, applied.y, applied.z, applied.appliedMaterial, currentMaterial));
+                skipped++;
+                continue;
+            }
+            
+            // Restore to the actual original material at commit time
+            block.setType(applied.actualOriginalMaterial);
+            reverted++;
+        }
+        
+        rolledBack = true;
+        
+        LOGGER.info(String.format("[TERRAFORM-ROLLBACK] bounds=(%d..%d,%d..%d,%d..%d) revertedOps=%d skippedOps=%d totalApplied=%d",
+                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+                reverted, skipped, appliedOperations.size()));
+        
+        return reverted > 0 || appliedOperations.isEmpty();
+    }
+    
+    /**
+     * T058: Check if this plan has been rolled back.
+     */
+    public boolean isRolledBack() {
+        return rolledBack;
+    }
+    
+    /**
+     * T058: Get the number of operations that were actually applied during commit.
+     */
+    public int getAppliedOpsCount() {
+        return appliedOpsCount;
+    }
+    
+    /**
+     * T058: Get the number of operations that were skipped during commit.
+     */
+    public int getSkippedOpsCount() {
+        return skippedOpsCount;
+    }
+    
+    /**
+     * T058: Get the list of operations that were applied during commit.
+     * Useful for diagnostics and potential partial rollbacks.
+     */
+    public List<AppliedOperation> getAppliedOperations() {
+        return Collections.unmodifiableList(appliedOperations);
     }
     
     /**
@@ -305,12 +428,14 @@ public class TerraformingPlan {
     
     /**
      * Get diagnostics summary.
+     * T058: Now includes applied/skipped counts and rollback status.
      */
     public String getDiagnosticsSummary() {
-        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, success=%s, reason=%s}",
+        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, applied=%d, skipped=%d, success=%s, committed=%s, rolledBack=%s, reason=%s}",
                 bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
                 plannedOperations.size(), trimCount, gradeCount, fillCount,
-                planSucceeded, rejectionReason);
+                appliedOpsCount, skippedOpsCount,
+                planSucceeded, committed, rolledBack, rejectionReason);
     }
     
     /**

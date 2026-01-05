@@ -468,8 +468,8 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming plan failed: %s - no blocks modified", 
                     terraformPlan.getRejectionReason()));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
-            // T051: Emit diagnostic artifact for failed terraforming plans
-            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false);
+            // T051: Emit diagnostic artifact for failed terraforming plans (not committed, not rolled back)
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false, false);
             return Optional.empty();
         }
         
@@ -488,18 +488,21 @@ public class StructureServiceImpl implements StructureService {
                 placed, template.id));
         
         if (!placed) {
-            // Placement failed after terraforming was committed
-            // This creates an orphaned pad, but is better than structures on uneven ground
-            LOGGER.warning(String.format("[STRUCT] Placement failed for '%s' at %s - terraforming already committed (orphaned pad possible)",
+            // T058: Rollback terraforming to prevent orphaned pads when placement fails
+            LOGGER.warning(String.format("[STRUCT] Placement failed for '%s' at %s - rolling back terraforming",
                     template.id, formatLocation(origin)));
+            boolean rollbackSuccess = terraformPlan.rollback();
+            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming rollback %s for '%s'",
+                    rollbackSuccess ? "succeeded" : "failed", template.id));
+            
             if (attemptDiagnostics != null) attemptDiagnostics.merge("otherFailures", 1, Integer::sum);
-            // T051: Emit diagnostic artifact for failed placement after terraforming
-            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true);
+            // T058: Emit diagnostic artifact for failed placement with rollback status
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true, true);
             return Optional.empty();
         }
         
         // T051: Emit diagnostic artifact showing successful terraforming aligned with placement
-        emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true);
+        emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true, false);
         
         LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
                 template.id, formatLocation(origin), seed));
@@ -507,15 +510,29 @@ public class StructureServiceImpl implements StructureService {
     }
     
     /**
-     * T051: Emit diagnostic artifact comparing terraformed AABB and placement receipt.
+     * T051/T058: Emit diagnostic artifact comparing terraformed AABB and placement receipt.
      * Logs a parseable summary that can be captured by the CI harness.
+     * @param structureId The structure being placed
+     * @param bounds AABB bounds [minX, maxX, minY, maxY, minZ, maxZ]
+     * @param plan The terraforming plan
+     * @param committed Whether the plan was committed
+     * @param rolledBack Whether the plan was rolled back after commit
      */
-    private void emitTerraformingDiagnostic(String structureId, int[] bounds, TerraformingPlan plan, boolean committed) {
-        String status = committed ? "COMMITTED" : "ABANDONED";
-        LOGGER.info(String.format("[STRUCT][TERRAFORM-DIAG] structure=%s status=%s bounds=(%d..%d,%d..%d,%d..%d) ops=%d reason=%s",
+    private void emitTerraformingDiagnostic(String structureId, int[] bounds, TerraformingPlan plan, boolean committed, boolean rolledBack) {
+        String status;
+        if (rolledBack) {
+            status = "ROLLED_BACK";
+        } else if (committed) {
+            status = "COMMITTED";
+        } else {
+            status = "ABANDONED";
+        }
+        
+        // T058: Enhanced diagnostics with applied/skipped counts
+        LOGGER.info(String.format("[STRUCT][TERRAFORM-DIAG] structure=%s status=%s bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d reason=%s",
                 structureId, status,
                 bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
-                plan.getPlannedOperations().size(),
+                plan.getAppliedOpsCount(), plan.getSkippedOpsCount(), plan.getPlannedOperations().size(),
                 plan.getRejectionReason() != null ? plan.getRejectionReason() : "none"));
     }
     

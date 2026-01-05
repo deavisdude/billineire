@@ -308,16 +308,191 @@ class TerraformingPlanTest {
         
         assertTrue(plan.plan());
         
-        // Should have fill operations
+        // Should have grade operations to fill the gap from surface (y=63) to foundation (y=64)
+        // GRADE operations fill gaps upward to reach the target foundation level
         List<TerraformingPlan.BlockOperation> operations = plan.getPlannedOperations();
-        boolean hasFillOps = operations.stream()
-                .anyMatch(op -> op.type == TerraformingPlan.BlockOperation.OperationType.FILL);
-        assertTrue(hasFillOps);
+        boolean hasGradeOps = operations.stream()
+                .anyMatch(op -> op.type == TerraformingPlan.BlockOperation.OperationType.GRADE);
+        assertTrue(hasGradeOps);
         
         // Commit and verify
         plan.commit();
         
         // Foundation level should now be solid (DIRT)
         assertEquals(Material.DIRT, world.getBlockAt(100, 64, 200).getType());
+    }
+    
+    // ---- T058: Rollback and atomicity tests ----
+    
+    @Test
+    @DisplayName("T058: Rollback reverts committed vegetation trimming")
+    void testRollbackRevertsVegetationTrimming() {
+        // Set up terrain with vegetation
+        for (int x = 100; x < 110; x++) {
+            for (int z = 200; z < 210; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.TALL_GRASS);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 10, 10, 5);
+        
+        assertTrue(plan.plan());
+        
+        // Commit
+        assertTrue(plan.commit());
+        assertEquals(Material.AIR, world.getBlockAt(100, 64, 200).getType());
+        
+        // Rollback
+        assertTrue(plan.rollback());
+        assertTrue(plan.isRolledBack());
+        
+        // Vegetation should be restored
+        assertEquals(Material.TALL_GRASS, world.getBlockAt(100, 64, 200).getType());
+    }
+    
+    @Test
+    @DisplayName("T058: Rollback cannot be called before commit")
+    void testCannotRollbackBeforeCommit() {
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 10, 10, 5);
+        
+        plan.plan();
+        
+        assertThrows(IllegalStateException.class, plan::rollback);
+    }
+    
+    @Test
+    @DisplayName("T058: Cannot rollback twice")
+    void testCannotRollbackTwice() {
+        // Set up terrain with vegetation
+        for (int x = 100; x < 110; x++) {
+            for (int z = 200; z < 210; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.TALL_GRASS);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 10, 10, 5);
+        
+        assertTrue(plan.plan());
+        assertTrue(plan.commit());
+        assertTrue(plan.rollback());
+        
+        assertThrows(IllegalStateException.class, plan::rollback);
+    }
+    
+    @Test
+    @DisplayName("T058: Applied and skipped ops counts are tracked")
+    void testAppliedAndSkippedOpsCounts() {
+        // Set up terrain with vegetation
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.TALL_GRASS);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        
+        int totalPlanned = plan.getPlannedOperations().size();
+        assertTrue(totalPlanned > 0);
+        
+        // Before commit, counts should be 0
+        assertEquals(0, plan.getAppliedOpsCount());
+        assertEquals(0, plan.getSkippedOpsCount());
+        
+        // Commit
+        assertTrue(plan.commit());
+        
+        // All ops should be applied, none skipped (no concurrent modifications in test)
+        assertEquals(totalPlanned, plan.getAppliedOpsCount());
+        assertEquals(0, plan.getSkippedOpsCount());
+    }
+    
+    @Test
+    @DisplayName("T058: Applied operations are tracked for rollback")
+    void testAppliedOperationsTrackedForRollback() {
+        // Set up terrain with vegetation
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.TALL_GRASS);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        assertTrue(plan.commit());
+        
+        // Applied operations should be tracked
+        List<TerraformingPlan.AppliedOperation> appliedOps = plan.getAppliedOperations();
+        assertFalse(appliedOps.isEmpty());
+        assertEquals(plan.getAppliedOpsCount(), appliedOps.size());
+        
+        // Each applied operation should record the actual original material
+        TerraformingPlan.AppliedOperation firstOp = appliedOps.get(0);
+        assertNotNull(firstOp.actualOriginalMaterial);
+        assertNotNull(firstOp.appliedMaterial);
+    }
+    
+    @Test
+    @DisplayName("T058: Diagnostics summary includes applied/skipped counts")
+    void testDiagnosticsSummaryIncludesAppliedSkipped() {
+        // Set up terrain with vegetation
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.TALL_GRASS);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        plan.plan();
+        plan.commit();
+        
+        String diagnostics = plan.getDiagnosticsSummary();
+        assertTrue(diagnostics.contains("applied="));
+        assertTrue(diagnostics.contains("skipped="));
+        assertTrue(diagnostics.contains("committed=true"));
+        assertTrue(diagnostics.contains("rolledBack=false"));
+    }
+    
+    @Test
+    @DisplayName("T058: Empty plan commit and rollback succeeds")
+    void testEmptyPlanCommitAndRollback() {
+        // Set up flat terrain at foundation level - no gaps, no vegetation to trim
+        // Surface at y=64 (same as foundation) means no grading needed
+        for (int x = 100; x < 105; x++) {
+            for (int z = 200; z < 205; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.STONE);
+                world.getBlockAt(x, 64, z).setType(Material.STONE); // Surface at foundation level
+                world.getBlockAt(x, 65, z).setType(Material.AIR);
+            }
+        }
+        
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 5, 5, 5);
+        
+        assertTrue(plan.plan());
+        
+        // Empty plan (nothing to do since surface is already at foundation level)
+        assertEquals(0, plan.getPlannedOperations().size());
+        
+        // Commit and rollback should succeed for empty plan
+        assertTrue(plan.commit());
+        assertEquals(0, plan.getAppliedOpsCount());
+        
+        assertTrue(plan.rollback());
+        assertTrue(plan.isRolledBack());
     }
 }

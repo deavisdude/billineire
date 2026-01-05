@@ -1157,17 +1157,67 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Reduced TerraformingPlan checkMargin from 2 to 1
     - All unit tests pass
 
-- [ ] T058 [P0] Terraforming commit atomicity & rollback
+- [X] T058 [P0] Terraforming commit atomicity & rollback
   - Story: Logs show partial/skip-heavy `COMMIT` runs (many "changed from X to Y - skipping" lines), leaving inconsistent terrain/partial pads and sometimes terraforming where placement later aborts.
   - Description: Make `TerraformingPlan` commit transactional: collect a pre-commit snapshot / journal of operations, apply via FAWE or a single atomic edit where possible, or apply chunked commits with guaranteed rollback on abort. Ensure no persistent terraforming occurs for abandoned seats.
   - Files: `TerraformingPlan.java`, `TerraformingUtil.java`, `StructureServiceImpl.java` (commit path), FAWE/WorldEdit integration code.
   - Acceptance: Headless run with previously-problematic seed shows no orphan terraformed pads after an abandoned placement; aborted attempts leave no world modifications.
+  - **Completed**: 2026-01-05
+    - Added `AppliedOperation` class to track operations that were actually applied to the world
+    - Added `rollback()` method to `TerraformingPlan` that reverts committed changes using stored original materials
+    - Added `appliedOpsCount` and `skippedOpsCount` metrics tracked during commit
+    - Commit now emits `[TERRAFORM-COMMIT]` diagnostic line with `appliedOps`, `skippedOps`, `opsTotal`
+    - Rollback emits `[TERRAFORM-ROLLBACK]` diagnostic line with `revertedOps`, `skippedOps`, `totalApplied`
+    - Updated `StructureServiceImpl.attemptSinglePlacementAndGetLocation()` to call `rollback()` when placement fails after terraforming commit
+    - Updated `emitTerraformingDiagnostic()` to include rollback status and applied/skipped counts
+    - Added 7 new unit tests for rollback behavior in `TerraformingPlanTest.java`
+    - All 22 TerraformingPlan unit tests pass
 
-- [ ] T059 [P1] Reduce partial-commit skipping and external-modification races
+#### Stability sprint (P0): Zero-placement, marker fallback, and command safety
+
+- [ ] T064 [P0] Zero-placement must be loud + actionable (no silent marker-only success)
+  - Story: "Roma I" / spawn villages can end up with zero placed structures, and the system falls back to a marker pillar (stone + torch), which looks like success but provides no actionable root-cause.
+  - Description: Ensure the single-line `ZERO-PLACEMENT ...` diagnostic is correct and complete (root-cause counters must reflect real rejection reasons), and treat zero-placement as a failure result for `/vo generate` and test commands unless an explicit `--allow-marker` / config opt-in is enabled.
+  - Files: `VillageWorldgenAdapter.java`, `GenerateCommand.java`, `VillagePlacementServiceImpl.java`, `scripts/ci/sim/run-scenario.ps1`
+  - Acceptance:
+    - Default behavior: zero-placement returns a failure to the caller and does not place a marker pillar.
+    - Logs include one INFO line: `ZERO-PLACEMENT village=<uuid> culture=<c> seed=<seed> seedChain=<a:b> attempts=<n> candidates=<m> placed=0 rootCause=fluid:<n>,steep:<n>,blocked:<n>,spacing:<n>,overlap:<n>,chunkNotReady:<n>`.
+    - Root-cause counters match observed rejections (e.g., site validation logs for `blocked (159 tiles)` must reflect in `rootCause=...blocked:...` instead of all zeros).
+    - Harness parses the line and correlates it with `village_<uuid>_placement_rejections.json`.
+  - Evidence (2026-01-05 playtest): `ZERO-PLACEMENT ... rootCause=fluid:0,steep:0,blocked:0...` emitted even though every attempt logged `Site validation failed: steep (2 tiles), blocked (159 tiles)`; marker pillar still placed.
+
+- [ ] T065 [P0] Terraforming must not leave "dirt scars" after successful placement
+  - Story: Even with rollback-on-failure, successful placements can still leave unnatural dirt pads where grass/topsoil was replaced.
+  - Description: Preserve/restore the original surface material for the top layer when grading/filling (e.g., grass block stays grass where it was grass). Where full fidelity is needed, store/restore `BlockData` (not just `Material`) for affected blocks at the surface layer.
+  - Files: `TerraformingPlan.java`, `TerraformingUtil.java`
+  - Acceptance:
+    - After a successful placement, the surface layer outside the final footprint does not regress from grass to dirt.
+    - Unit tests cover at least: (1) grass preservation on grade/fill, (2) rollback restores original surface block state.
+
+- [ ] T066 [P0] Make `/votest generate-structures` and `/vo generate` non-blocking (budgeted per tick)
+  - Story: Test commands can cause massive lag/errors by doing too much synchronous work in one tick.
+  - Description: Route command-driven generation through a tick-budgeted queue (cap placements/terraform commits per tick; enforce chunk-ready gating). Eliminate synchronous chunk loads from the server thread in placement search.
+  - Files: `TestCommands.java`, `GenerateCommand.java`, `VillagePlacementServiceImpl.java`, placement queue/tick engine classes
+  - Acceptance:
+    - Running the command does not freeze the server; work is spread across ticks.
+    - Logs include periodic progress: `GEN-PROGRESS placed=<n> attempts=<m> elapsedMs=<t>`.
+    - No main-thread stack traces show blocking chunk waits inside `VillagePlacementServiceImpl.findSuitablePlacementPosition` (observed 2026-01-05: server hung with `CraftWorld.getChunkAt` in that method).
+
+- [ ] T067 [P0] Terrain search must not immediately fall back to spawn on a new world
+  - Story: Initial async seeding failed to find terrain due to chunk-load budget overruns and fell back to spawn, producing a zero-placement village (Roma I).
+  - Description: Convert terrain search into an incremental, resumable search across ticks (or a longer initial budget) so a fresh world can actually generate required chunks. Only fall back to spawn when explicitly configured, and emit a single summary line with `checked`, `skippedChunks`, `elapsedMs`, and the chosen fallback reason.
+  - Files: `AsyncTerrainSearch.java` (or equivalent terrain search), village seeding scheduler
+  - Acceptance:
+    - On a new world, seeding continues searching instead of falling back after a single budget overrun.
+    - Logs include one summary line for the search result and, if fallback is used, the reason is explicit (e.g., `fallback=spawn (noSuitableTerrainAfterBudget)`), plus counts.
+
+- [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.
   - Description: Add pre-commit verification and small chunk-level locks or retries; if many ops are skipped, abort and roll back (do not commit a partial pad). Add metrics that count skipped vs applied ops and surface the ratio in diagnostics.
   - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, metrics export.
-  - Acceptance: Partial-commit incidents reduced; diagnostic line includes applied/skipped counts per commit.
+  - Acceptance:
+    - Partial-commit incidents reduced; diagnostic line includes applied/skipped counts per commit.
+    - TerraformingPlan guarantees at most one operation per (x,y,z); detect and reject/merge duplicate-target ops (prevents self-conflicting expectations like `expected AIR but found DIRT` within a single commit run).
 
 - [ ] T060 [P0] Ensure `PathEmitter` writes are persisted and visible
   - Story: Some villages show A* success and path-block counts in logs, but the in-world inspection shows no or incomplete path blocks.
@@ -1176,10 +1226,11 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance: Headless integration asserts that for any logged `spawned=<N>` the world contains the same number of path blocks at expected coords.
 
 - [ ] T061 [P1] Reconcile placement receipts vs summary counts
-  - Story: Summary lines sometimes report `buildings=0` despite successful `Seat successful` lines earlier — finalize counting logic.
+  - Story: Summary lines sometimes report `buildings=0` despite successful `Seat successful` lines earlier; command output can also contradict the in-plugin summary.
   - Description: Ensure the village summary/`[STRUCT] village: id=.. buildings=N` is derived from authoritative persisted `PlacementReceipt` / `VolumeMask` store only after commit success. Add assertions that increment count only after commit+receipt persistence.
   - Files: `VillagePlacementServiceImpl.java`, `VillageMetadataStore.java`, logging summary code.
   - Acceptance: Summary counts match persisted receipts in headless runs and unit tests.
+  - Evidence (2026-01-05 playtest): plugin logged `[STRUCT] village: ... buildings=1` but then `/vo generate` reported `Successfully generated village 'test' with 0 buildings`.
 
 - [ ] T062 [P1] Add per-structure commit diagnostics & snapshot artifacts
   - Story: Triaging requires pre/post world snapshots and precise applied/skipped counts.
@@ -1193,17 +1244,8 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance: CI headless test passes on platform with FAWE available.
 
 Notes:
-- Start by reproducing the failures locally with the seeds from the logs (`-3086951202754440277`, `-3086950313696210270`, etc.) and attach the produced artifacts under `test-server/logs/`.
-- Prioritize `T058` and `T060` (terraform commit atomicity and path persistence) since they directly cause visible world churn and harness false-negatives.
-
-
-Notes:
-- Capture any placement rejections / terraforming artifacts under `test-server/logs/` for triage.
-- These tasks should include small unit tests and a headless integration that reproduces the failure patterns before and after the fix.
-  - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java, scripts/ci/sim/run-scenario.ps1
-  - Description: Emit single, parseable INFO lines on path failure and zero-placement (root-cause counters). Add `[PATH][DIAG]` and `ZERO-PLACEMENT` formats consumable by harness. Capture attempted vs. spawned path counts per village.
-  - Acceptance:
-    - Harness can parse `ZERO-PLACEMENT rootCause=... attempts=N` and `[PATH][DIAG] village=<uuid> attempted=<M> spawned=<S> failures=<F>`.
+- Repro first using known-bad seeds from logs and capture artifacts under `test-server/logs/`.
+- Keep diagnostics parseable (single-line INFO) so `scripts/ci/sim` can fail fast on `ZERO-PLACEMENT` and path emission mismatches.
 
 - [ ] T051b [P1] SurfaceSolver / Entrance Validation Hardening
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java
@@ -1241,13 +1283,9 @@ Notes:
   - Acceptance:
     - Playtest steps reproduce failing/successful cases quickly and enable rapid iteration.
 
-- [ ] T015c [P1] [US1] Deferred terraform commit / rollback
-  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-  - Description: Generate a TerraformingPlan (lists of trim/grade/fill operations) during seat validation; apply only after a seat is chosen as final. Maintain a per-attempt journal so abandoned seats can be rolled back (revert block states) to eliminate stray flattened dirt platforms.
-  - Acceptance:
-    - Rejecting a seat leaves no modified blocks at that origin (visual + log check).
-    - Each successful building logs `appliedTerraformPlan`; aborted attempts log `terraformRollback applied`.
-    - World audit shows zero large unused graded pads after village generation.
+
+Removed (superseded):
+- T015c (Deferred terraform commit / rollback) is superseded by T058 (commit journaling + rollback) and the P0 stability follow-ups (T059, T065).
 
 - [ ] T021d [P1] [US2] Path ground detection excluding vegetation
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
@@ -1271,12 +1309,9 @@ Notes:
     - No dirt caps appear atop tree leaves near structures in verification run.
     - Log shows `skippedCanopyColumns=K` when applicable.
 
-- [ ] T018c [P2] [US1] Correct final summary building count
-  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-  - Description: Derive success summary from authoritative footprint registry; warn if internal counters differ (`summaryCountMismatch`).
-  - Acceptance:
-    - Summary line always matches number of tracked footprints.
-    - Mismatch test triggers single WARN and auto-corrects output.
+
+Removed (duplicate):
+- T018c (Correct final summary building count) duplicates T061.
 
 - [ ] T017c [P2] [US1] Normalize rotated footprint dimensions
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
@@ -1306,7 +1341,7 @@ Notes:
     - 0 floating slabs/stairs; complements headless test T026f.
     - Emitted blocks restricted to natural whitelist.
 
-Prioritization: P1 (T015c, T021d, T020b, T014c) → P2 (T018c, T017c, T022b, T012m) → P3 (T012n).
+Prioritization: P0 (T059, T060, T064, T065, T066) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
 
