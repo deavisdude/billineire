@@ -106,6 +106,21 @@ public class VillageWorldgenAdapter implements Listener {
         });
     }
 
+    private void maybePlaceMarkerPillar(World world, int x, int y, int z, String reason) {
+        if (plugin.isMarkerFallbackAllowed()) {
+            placeMarkerPillar(world, x, y, z, reason);
+        } else {
+            logger.warning(String.format("[WORLDGEN] Marker fallback suppressed (%s); enable worldgen.allowMarkerFallback to place one", reason));
+        }
+    }
+
+    private void placeMarkerPillar(World world, int x, int y, int z, String reason) {
+        logger.warning(String.format("[WORLDGEN] Marker fallback triggered: %s", reason));
+        safeSet(world, x, y, z, Material.STONE);
+        safeSet(world, x, y + 1, z, Material.STONE);
+        safeSet(world, x, y + 2, z, Material.TORCH);
+    }
+
     private void trySeed(World world) {
         if (world == null) {
             logger.warning("trySeed called with null world");
@@ -182,12 +197,7 @@ public class VillageWorldgenAdapter implements Listener {
                 } catch (Exception ex) {
                     logger.severe("X Failed to initialize fallback placement service: " + ex.getMessage());
                     ex.printStackTrace();
-                    
-                    // Ultimate fallback: just place marker pillar
-                    logger.warning("X Placing marker pillar only for village '" + villageName + "'");
-                    safeSet(world, baseX, finalY, baseZ, Material.STONE);
-                    safeSet(world, baseX, finalY + 1, baseZ, Material.STONE);
-                    safeSet(world, baseX, finalY + 2, baseZ, Material.TORCH);
+                    maybePlaceMarkerPillar(world, baseX, finalY, baseZ, "fallback placement service unavailable");
                     return;
                 }
             }
@@ -204,11 +214,8 @@ public class VillageWorldgenAdapter implements Listener {
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
                         + world.getName() + " @ (" + baseX + "," + (finalY + 1) + "," + baseZ + ")");
             } else {
-                logger.warning("X Failed to place structures for village '" + villageName + "', placing marker pillar");
-                // Fallback: Create a tiny marker pillar (stone + torch) to indicate village center
-                safeSet(world, baseX, finalY, baseZ, Material.STONE);
-                safeSet(world, baseX, finalY + 1, baseZ, Material.STONE);
-                safeSet(world, baseX, finalY + 2, baseZ, Material.TORCH);
+                logger.warning("X Failed to place structures for village '" + villageName + "'");
+                maybePlaceMarkerPillar(world, baseX, finalY, baseZ, "zero structure placements");
             }
             
             // Generate initial projects for the village

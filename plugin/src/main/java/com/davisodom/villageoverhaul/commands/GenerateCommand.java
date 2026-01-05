@@ -48,33 +48,50 @@ public class GenerateCommand {
     public boolean execute(CommandSender sender, String[] args) {
         // Parse arguments
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /vo generate <culture> <name> [seed]");
-            sender.sendMessage("§7Example: /vo generate roman 'New Rome' 12345");
+            sender.sendMessage("§cUsage: /vo generate <culture> <name> [seed] [--allow-marker]");
+            sender.sendMessage("§7Example: /vo generate roman 'New Rome' 12345 --allow-marker");
             return true;
         }
         
         String cultureId = args[0];
         String villageName = args[1];
         
-        // Optional seed argument (make final for lambda capture)
-        final Long seedArg;
-        if (args.length >= 3) {
-            try {
-                seedArg = Long.parseLong(args[2]);
-            } catch (NumberFormatException e) {
-                sender.sendMessage("§cInvalid seed: " + args[2]);
+        // Optional seed argument + --allow-marker flag
+        Long parsedSeed = null;
+        boolean allowMarkerFlag = false;
+        for (int i = 2; i < args.length; i++) {
+            String extra = args[i];
+            if ("--allow-marker".equalsIgnoreCase(extra)) {
+                allowMarkerFlag = true;
+                continue;
+            }
+            if (parsedSeed == null) {
+                try {
+                    parsedSeed = Long.parseLong(extra);
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("§cInvalid seed: " + extra);
+                    return true;
+                }
+            } else {
+                sender.sendMessage("§cUnexpected argument: " + extra);
                 return true;
             }
-        } else {
-            seedArg = null;
         }
-        
-    // Immediate feedback to user
-    sender.sendMessage("§aOK Village generation command received");
+        final Long seedArg = parsedSeed;
+
+        // Immediate feedback to user
+        sender.sendMessage("§aOK Village generation command received");
         sender.sendMessage("§7  Culture: §f" + cultureId);
         sender.sendMessage("§7  Name: §f" + villageName);
         if (seedArg != null) {
             sender.sendMessage("§7  Seed: §f" + seedArg);
+        }
+
+        final boolean allowMarkerFallback = allowMarkerFlag || plugin.isMarkerFallbackAllowed();
+        if (allowMarkerFallback) {
+            sender.sendMessage("§7Marker fallback is enabled for this run.");
+        } else {
+            sender.sendMessage("§7Marker fallback suppressed. Enable worldgen.allowMarkerFallback or add --allow-marker to place a pillar on failure.");
         }
         
         // Validate culture exists
@@ -194,13 +211,15 @@ public class GenerateCommand {
                     } else {
                         sender.sendMessage("§cX Failed to place structures for village '" + villageName + "'");
                         sender.sendMessage("§7Check server logs for details.");
-                        
-                        // Place marker pillar as fallback
-                        world.getBlockAt(baseX, baseY, baseZ).setType(Material.STONE, false);
-                        world.getBlockAt(baseX, baseY + 1, baseZ).setType(Material.STONE, false);
-                        world.getBlockAt(baseX, baseY + 2, baseZ).setType(Material.TORCH, false);
-                        
-                        sender.sendMessage("§7Placed marker pillar at village center.");
+
+                        if (allowMarkerFallback) {
+                            world.getBlockAt(baseX, baseY, baseZ).setType(Material.STONE, false);
+                            world.getBlockAt(baseX, baseY + 1, baseZ).setType(Material.STONE, false);
+                            world.getBlockAt(baseX, baseY + 2, baseZ).setType(Material.TORCH, false);
+                            sender.sendMessage("§7Placed marker pillar at village center.");
+                        } else {
+                            sender.sendMessage("§7Marker fallback suppressed; no pillar placed. Set worldgen.allowMarkerFallback or rerun with --allow-marker.");
+                        }
                         
                         logger.warning("[STRUCT] Failed to place structures for village '" + villageName + "' " +
                             "(ID: " + villageId + "), placed marker pillar");

@@ -45,6 +45,11 @@ worldgen:
     # Higher = more thorough placement, but more blocking per structure
     # Range: 50-500 (default: 100)
     placementTimeBudgetMs: 100
+        
+  # Allow fallback marker pillar placement when zero-placement occurs
+  # Default: false (zero-placement is treated as a failure and no pillar is placed)
+  # Set to true to allow marker fallback without needing --allow-marker
+  allowMarkerFallback: false
 
 # Debug Flags
 debug:

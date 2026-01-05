@@ -44,6 +44,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private int minBuildingSpacing;
     private int minVillageSpacing;
     private int spawnProximityRadius;
+    private boolean allowMarkerFallback;
     
     // Core services (Phase 2)
     private TickEngine tickEngine;
@@ -78,9 +79,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
         minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
+        allowMarkerFallback = getConfig().getBoolean("worldgen.allowMarkerFallback", false);
         
         // Configure debug logging if enabled
         getConfig().addDefault("debug.verbose", false);
+        getConfig().addDefault("worldgen.allowMarkerFallback", false);
         saveConfig();
         
         boolean verboseLogging = getConfig().getBoolean("debug.verbose", false);
@@ -91,7 +94,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         
     logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
                 ", minVillageSpacing=" + minVillageSpacing + 
-                ", spawnProximityRadius=" + spawnProximityRadius + ")");
+                ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback + ")");
         
         // Initialize foundational services
         initializeFoundation();
@@ -277,6 +280,8 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public VillageMetadataStore getMetadataStore() { return metadataStore; }
 
     public VillageWorldgenAdapter getWorldgenAdapter() { return worldgenAdapter; }
+
+    public boolean isMarkerFallbackAllowed() { return allowMarkerFallback; }
     
     public ProjectService getProjectService() { return projectService; }
     

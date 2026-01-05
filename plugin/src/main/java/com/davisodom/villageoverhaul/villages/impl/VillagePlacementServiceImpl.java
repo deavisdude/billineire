@@ -193,13 +193,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record forced zero-placement summary: %s", e.getMessage()));
                 }
 
-                String diag = String.format("ZERO-PLACEMENT village=%s rootCause=fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d attempts=%d placed=0 seedChain=%d:%d candidates=%d",
+                String diag = String.format("ZERO-PLACEMENT village=%s rootCause=fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d,chunkNotReady:%d attempts=%d placed=0 seedChain=%d:%d candidates=%d",
                         villageId,
                         rejectionTracker.fluidRejections,
                         rejectionTracker.steepRejections,
                         rejectionTracker.blockedRejections,
                         rejectionTracker.spacingRejections,
                         rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
                         rejectionTracker.totalAttempts,
                         seed, placementSeed,
                         rejectionTracker.totalAttempts);
@@ -290,13 +291,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         if (placedBuildings.isEmpty()) {
             // Emit structured zero-placement diagnostic for harness parsing (T026d11)
             // Format required by harness: ZERO-PLACEMENT village=<id> rootCause=fluid:<n>,steep:<n>,blocked:<n>,spacing:<n>,overlap:<n> attempts=<n> placed=0 seedChain=<vSeed>:<pSeed> candidates=<n>
-            String diag = String.format("ZERO-PLACEMENT village=%s rootCause=fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d attempts=%d placed=0 seedChain=%d:%d candidates=%d",
+                String diag = String.format("ZERO-PLACEMENT village=%s rootCause=fluid:%d,steep:%d,blocked:%d,spacing:%d,overlap:%d,chunkNotReady:%d attempts=%d placed=0 seedChain=%d:%d candidates=%d",
                     villageId,
                     rejectionTracker.fluidRejections,
                     rejectionTracker.steepRejections,
                     rejectionTracker.blockedRejections,
                     rejectionTracker.spacingRejections,
                     rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
                     rejectionTracker.totalAttempts,
                     seed, placementSeed,
                     rejectionTracker.totalAttempts);
