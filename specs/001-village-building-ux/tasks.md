@@ -1218,13 +1218,17 @@ These follow-up tasks were added after T052a verification — logs show frequent
       - `testFillingDoesNotCreateDirtScars()` - verifies no dirt scars on grassy terrain
     - All 28 TerraformingPlan unit tests pass
 
-- [ ] T068 [P0] Fix root-cause counters for `site_validation_failed` (steep/blocked/fluid)
+- [X] T068 [P0] Fix root-cause counters for `site_validation_failed` (steep/blocked/fluid)
   - Story: 2026-01-05 playtest shows repeated `Site validation failed: steep (...)` while `ZERO-PLACEMENT rootCause=...steep:0`.
   - Description: Ensure `PlacementRejectionCounters` (and the `ZERO-PLACEMENT` summary line + `village_<uuid>_placement_rejections.json`) accurately count validation failures. When SiteValidator reports a rejection reason (e.g., `steep (108 tiles)`), counters must increment the matching bucket (steep/blocked/fluid/etc.).
   - Files: `VillagePlacementServiceImpl.java`, `SiteValidator.java`, `VillageMetadataStore.java` (artifact writer), any rejection-counter plumbing
   - Acceptance:
     - A run that logs `Site validation failed: steep (...)` results in `rootCause=...steep:>0` and JSON counters `steep>0`.
     - Unit test reproduces the mismatch and asserts counters are incremented.
+  - Implementation (2026-01-15):
+    - ✅ Capture `fluid`, `steep`, and `blocked` counts from SiteValidator failures in `StructureServiceImpl` diagnostics.
+    - ✅ Aggregate those diagnostics into `PlacementRejectionCounters` in `VillagePlacementServiceImpl`.
+    - ✅ Added unit test `testSiteValidationFailureCounters` to assert counters persist in zero-placement runs.
 
 - [ ] T069 [P0] Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
   - Story: Fresh-world seeding found terrain quickly, but every structure placement at the chosen origin failed with `steep (98-108 tiles)`.
@@ -1233,6 +1237,19 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance:
     - Logs include one structured line per rejection (INFO when verbose) like: `SITE-REJECT reason=steep steepTiles=108 tiles=195 steepFrac=0.55 maxSteepFrac=0.40 maxSlopeDelta=... sampleDensity=... footprint=18x20 origin=...`.
     - Follow-up fix reduces false rejections on the same seed/location (re-run produces at least one successful placement) without allowing clearly steep hillsides.
+  - Root Cause Analysis (2026-01-15):
+    - Logs show structures failing with high `blocked` counts (77-285 tiles) rather than `steep`
+    - First structure at `(112,134,-16)` succeeds; subsequent structures try `(112,147,-16)` (Y jumps 13 blocks!)
+    - SurfaceSolver returns Y=147 for candidate positions because terrain search fell back to spawn on a mountain
+    - "Blocked" means solid terrain exists at or above the placement Y level (mountain terrain above Y=147)
+    - The issue is NOT steepness thresholds but rather:
+      1. Terrain search falls back to unsuitable spawn location (mountain peak)
+      2. SurfaceSolver finds mountain peak Y (147) instead of lower ground
+      3. Site validation correctly rejects placements where there's rock above
+  - Implementation Notes:
+    - Add diagnostic line: `[SITE-REJECT] structure=%s origin=(%d,%d,%d) steep=%d blocked=%d fluid=%d total=%d thresholds=(steep:%.2f, blocked:%.2f)`
+    - May need to adjust SurfaceSolver to prefer lower Y values when multiple candidates exist
+    - Consider adding a max-Y check in terrain search to avoid mountain peaks
 
 - [ ] T070 [P0] Placement must explore alternate candidates when the chosen origin fails validation
   - Story: Logs show multiple structure IDs attempted at the same origin `(-216,63,-144)` with immediate `site_validation_failed` and no evidence of trying alternate nearby positions.
@@ -1241,6 +1258,30 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance:
     - In a scenario where the initial origin fails validation, logs show subsequent candidate coords being tried (not just the initial origin).
     - `attempts` and `candidates` in `ZERO-PLACEMENT` match the number of distinct candidates evaluated.
+  - Root Cause Analysis (2026-01-15):
+    - Current code flow in `VillagePlacementServiceImpl.placeVillage()`:
+      1. `findSuitablePlacementPosition()` returns a single candidate location
+      2. `structureService.placeStructureAndGetReceipt()` validates and places at that location
+      3. If placement fails (site_validation_failed), code skips to NEXT structure, NOT next candidate!
+    - The spiral search in `findSuitablePlacementPosition()` only filters for AABB collision with existing masks
+    - It does NOT pre-validate terrain (steep/blocked) - that's done in StructureService
+    - When StructureService rejects the location, we lose all other candidates and move on
+  - Implementation:
+    - Wrap the placement attempt in a retry loop (max 10-20 candidates per structure)
+    - Return a List<Location> or Iterator<Location> from `findSuitablePlacementPosition()`
+    - OR: Move the retry loop inside the for-structure loop:
+      ```java
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
+          Optional<Location> pos = findNextSuitablePosition(..., attempt);
+          if (!pos.isPresent()) break;
+          Optional<Receipt> receipt = structureService.placeStructureAndGetReceipt(...);
+          if (receipt.isPresent()) {
+              // success, break inner loop
+          }
+          // else: try next candidate
+      }
+      ```
+    - Track total candidates tried per structure for diagnostics
 
 - [ ] T066 [P0] Make `/votest generate-structures` and `/vo generate` non-blocking (budgeted per tick)
   - Story: Test commands can cause massive lag/errors by doing too much synchronous work in one tick.
@@ -1258,6 +1299,19 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance:
     - On a new world, seeding continues searching instead of falling back after a single budget overrun.
     - Logs include one summary line for the search result and, if fallback is used, the reason is explicit (e.g., `fallback=spawn (noSuitableTerrainAfterBudget)`), plus counts.
+  - Root Cause Analysis (2026-01-15):
+    - Test log shows: `Chunk load budget exceeded (2233ms > 2000ms), skipping unloaded chunks`
+    - Only checked 168 locations in 2234ms before timing out
+    - 145 chunks were skipped due to budget, leaving insufficient candidates evaluated
+    - Spawn location `(96, 136, -32)` is at Y=136 (high elevation - likely a mountain)
+    - Fallback chose `(112, 142, -16)` which is even higher (Y=142)
+    - The 2000ms budget is too aggressive for fresh-world chunk generation
+  - Implementation Notes:
+    - Increase terrain search budget to 10000ms (10s) for fresh worlds
+    - OR: Make budget configurable via config.yml
+    - Consider async chunk pre-generation before terrain search starts
+    - Add check for spawn Y-level: if spawn is above sea level + 30 blocks, search for lower terrain first
+    - Add structured log: `[TERRAIN][RESULT] found=(true/false) checked=N skippedChunks=M elapsedMs=T fallback=(none/spawn) chosenY=Y`
 
 - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.

@@ -419,8 +419,10 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Site validation failed: %s", rejectionReason));
             if (attemptDiagnostics != null) {
                 attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
-                if (siteValidation.classificationResult != null && siteValidation.classificationResult.fluid > 0) {
-                    attemptDiagnostics.merge("water", siteValidation.classificationResult.fluid, Integer::sum);
+                if (siteValidation.classificationResult != null) {
+                    attemptDiagnostics.merge("fluid", siteValidation.classificationResult.fluid, Integer::sum);
+                    attemptDiagnostics.merge("steep", siteValidation.classificationResult.steep, Integer::sum);
+                    attemptDiagnostics.merge("blocked", siteValidation.classificationResult.blocked, Integer::sum);
                 }
             }
             return Optional.empty();

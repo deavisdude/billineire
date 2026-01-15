@@ -216,6 +216,72 @@ public class VillagePlacementServiceImplTest {
         }
 
     @Test
+    @DisplayName("T068 - site validation failures increment steep/blocked/fluid counters")
+    public void testSiteValidationFailureCounters() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house_roman_small");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", structures, null)));
+
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
+            .thenReturn(Optional.of(new int[]{3, 3, 3}));
+
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(
+                Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+                Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
+            .thenAnswer(inv -> {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Integer> diagnostics = (java.util.Map<String, Integer>) inv.getArgument(7);
+                diagnostics.put("placementAttempts", 1);
+                diagnostics.put("terrainInvalid", 1);
+                diagnostics.put("fluid", 1);
+                diagnostics.put("steep", 5);
+                diagnostics.put("blocked", 2);
+                return Optional.empty();
+            });
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        Location origin = new Location(world, 0, 64, 0);
+        long seed = 777L;
+
+        Optional<UUID> result = svc.placeVillage(world, origin, "test-culture", seed);
+        assertTrue(result.isEmpty(), "Placement should fail to force zero-placement counters");
+
+        UUID villageId = UUID.nameUUIDFromBytes((seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ())
+            .getBytes(StandardCharsets.UTF_8));
+
+        Optional<VillageMetadataStore.PlacementRejectionCounters> countersOpt = store.getPlacementRejectionCounters(villageId);
+        assertTrue(countersOpt.isPresent(), "Expected rejection counters to be recorded");
+
+        VillageMetadataStore.PlacementRejectionCounters counters = countersOpt.get();
+        assertEquals(1, counters.fluid, "Fluid rejection count should be recorded");
+        assertEquals(5, counters.steep, "Steep rejection count should be recorded");
+        assertEquals(2, counters.blocked, "Blocked rejection count should be recorded");
+        assertTrue(counters.attempts > 0, "Attempts should be greater than zero");
+    }
+
+    @Test
     @DisplayName("Rotated AABB collision respects spacing buffer and rejects close candidates")
     public void testRotatedAABBCollision_respectsSpacingBuffer() throws Exception {
         com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(

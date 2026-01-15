@@ -283,7 +283,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
                     rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
                     rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
-                    rejectionTracker.fluidRejections += attemptDiagnostics.getOrDefault("water", 0);
+                    int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
+                    rejectionTracker.fluidRejections += fluidCount;
+                    rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
+                    rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
                 }
             }
         }
