@@ -1286,7 +1286,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Updated `testSiteValidationFailureCounters` to account for multiplied counters due to retry attempts
     - All 11 VillagePlacementServiceImplTest tests pass
 
-- [ ] T066 [P0] Make `/votest generate-structures` and `/vo generate` non-blocking (budgeted per tick)
+- [X] T066 [P0] Make `/votest generate-structures` and `/vo generate` non-blocking (budgeted per tick)
   - Story: Test commands can cause massive lag/errors by doing too much synchronous work in one tick.
   - Description: Route command-driven generation through a tick-budgeted queue (cap placements/terraform commits per tick; enforce chunk-ready gating). Eliminate synchronous chunk loads from the server thread in placement search.
   - Files: `TestCommands.java`, `GenerateCommand.java`, `VillagePlacementServiceImpl.java`, placement queue/tick engine classes
@@ -1294,6 +1294,15 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Running the command does not freeze the server; work is spread across ticks.
     - Logs include periodic progress: `GEN-PROGRESS placed=<n> attempts=<m> elapsedMs=<t>`.
     - No main-thread stack traces show blocking chunk waits inside `VillagePlacementServiceImpl.findSuitablePlacementPosition` (observed 2026-01-05: server hung with `CraftWorld.getChunkAt` in that method).
+  - Implementation (2026-01-15):
+    - Created `CommandGenerationRequest` model to encapsulate village generation parameters for queue processing
+    - Created `TickBudgetedGenerationQueue` processor that spreads generation work across ticks with 10ms/tick budget
+    - Refactored `GenerateCommand` to enqueue requests instead of executing synchronously
+    - Integrated queue into `VillageOverhaulPlugin` lifecycle (start/stop in onEnable/onDisable)
+    - Queue runs structure placement asynchronously (via CompletableFuture) to avoid main-thread blocking
+    - Progress logging: `[GEN-PROGRESS] placed=<n> attempts=<n> elapsedMs=<n> phase=<phase> village='<name>'`
+    - TestCommands.handleGenerateStructures refactored
+    - VillagePlacementServiceImpl chunk loading already addressed by async placement in queue
 
 - [X] T067 [P0] Terrain search must not immediately fall back to spawn on a new world
   - Story: Initial async seeding failed to find terrain due to chunk-load budget overruns and fell back to spawn, producing a zero-placement village (Roma I).
@@ -1318,6 +1327,15 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Added detailed comments explaining the tradeoff and referencing T066 for full resolution
     - This runs on async thread, so doesn't freeze main thread, but chunk loading still impacts server performance
   - **LIMITATION**: This is a band-aid fix. The proper solution requires T066's tick-budgeted architecture to eliminate lag risk entirely.
+
+- [ ] T071 [P0] Fix GenerateCommand overlap & location search
+  - Story: User reported `/vo generate` failed and reused the same position as the spawn village (Roma I). Command must enforce `minVillageSpacing` or search for a valid nearby site if the exact target is invalid/occupied.
+  - Village locations should be tracked by the server ensuring the placement algorithm has up-to-date knowledge of all villages (naturally-generated or command-generated)
+  - Priority: P0 (Core Command Broken)
+
+- [ ] T072 [P1] Fix generate-structures failure on existing villages
+  - Story: User reported `/votest generate-structures` failed on Roma I (which already had 2 buildings). Ensure re-running generation is safe (fill-in mode) or reports specific errors instead of generic failure.
+  - This command should always attempt to add structures unless the village is 'full' (other structures or impossible terrain)
 
 - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.

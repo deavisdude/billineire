@@ -3,6 +3,7 @@ package com.davisodom.villageoverhaul;
 import com.davisodom.villageoverhaul.admin.AdminHttpServer;
 import com.davisodom.villageoverhaul.commands.ProjectCommands;
 import com.davisodom.villageoverhaul.commands.TestCommands;
+import com.davisodom.villageoverhaul.commands.TickBudgetedGenerationQueue;
 import com.davisodom.villageoverhaul.commands.VillageCommands;
 import com.davisodom.villageoverhaul.core.TickEngine;
 import com.davisodom.villageoverhaul.cultures.CultureService;
@@ -67,6 +68,9 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private VillagerAppearanceAdapter villagerAppearanceAdapter;
     private VillagerInteractionController villagerInteractionController;
     
+    // T066: Non-blocking command generation queue
+    private TickBudgetedGenerationQueue generationQueue;
+    
     @Override
     public void onEnable() {
         instance = this;
@@ -104,6 +108,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
             tickEngine.start();
         }
         
+        // T066: Start non-blocking generation queue
+        if (generationQueue != null) {
+            generationQueue.start();
+        }
+        
         logger.info("Village Overhaul enabled successfully!");
     }
     
@@ -114,6 +123,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Despawn all custom villagers
         if (customVillagerService != null) {
             customVillagerService.despawnAll();
+        }
+        
+        // T066: Stop generation queue
+        if (generationQueue != null) {
+            generationQueue.stop();
         }
         
         // Graceful shutdown
@@ -213,6 +227,10 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // In test/CI contexts, worlds may already be loaded: attempt immediate seed
         worldgenAdapter.seedIfPossible();
         
+        // T066: Initialize non-blocking generation queue
+        generationQueue = new TickBudgetedGenerationQueue(this, metadataStore);
+        logger.info("OK Generation queue initialized");
+        
         // Register commands
         ProjectCommands projectCommands = new ProjectCommands(this);
         PluginCommand voCmd = getCommand("vo");
@@ -294,6 +312,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     public VillagerAppearanceAdapter getVillagerAppearanceAdapter() { return villagerAppearanceAdapter; }
     
     public VillagerInteractionController getVillagerInteractionController() { return villagerInteractionController; }
+    
+    /**
+     * Get the non-blocking generation queue (T066)
+     * @return Generation queue
+     */
+    public TickBudgetedGenerationQueue getGenerationQueue() { return generationQueue; }
     
     /**
      * Get configured minimum building spacing

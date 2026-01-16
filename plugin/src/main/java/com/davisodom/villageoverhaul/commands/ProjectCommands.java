@@ -37,7 +37,8 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         this.plugin = plugin;
         this.projectService = plugin.getProjectService();
         this.villageService = plugin.getVillageService();
-        this.generateCommand = new GenerateCommand(plugin);
+        // T066: Pass generation queue to GenerateCommand
+        this.generateCommand = new GenerateCommand(plugin, plugin.getGenerationQueue());
     }
     
     @Override

@@ -34,10 +34,12 @@ public class GenerateCommand {
     
     private final VillageOverhaulPlugin plugin;
     private final Logger logger;
+    private final TickBudgetedGenerationQueue generationQueue;
     
-    public GenerateCommand(VillageOverhaulPlugin plugin) {
+    public GenerateCommand(VillageOverhaulPlugin plugin, TickBudgetedGenerationQueue generationQueue) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
+        this.generationQueue = generationQueue;
     }
     
     /**
@@ -140,100 +142,14 @@ public class GenerateCommand {
             }
         }
         
-        // Search for suitable terrain (async to avoid blocking)
-        final Location finalSearchOrigin = searchOrigin;
-        final World finalWorld = world;
-        final int minVillageSpacing = plugin.getMinVillageSpacing();
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            Location suitableLocation = findSuitableVillageLocation(finalWorld, finalSearchOrigin, 
-                    isFirstVillage ? spawnProximityRadius : 512, metadataStore, minVillageSpacing);
-            
-            if (suitableLocation == null) {
-                sender.sendMessage(Component.text("No suitable terrain found. Try a different location.", NamedTextColor.RED));
-                return;
-            }
-            
-            int baseX = suitableLocation.getBlockX();
-            int baseZ = suitableLocation.getBlockZ();
-            int baseY = world.getHighestBlockYAt(baseX, baseZ);
-            
-            sender.sendMessage(Component.text("Found suitable terrain at (" + baseX + ", " + baseY + ", " + baseZ + ")", NamedTextColor.GREEN));
-            
-            // Calculate seed (use provided seed or generate from world + location)
-            final long villageSeed = seedArg != null ? seedArg : 
-                world.getSeed() ^ (((long)baseX << 32) | (baseZ & 0xFFFFFFFFL));
-            
-            // Return to main thread for village creation and structure placement
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                try {
-                    // Create village in VillageService
-                    Village village = plugin.getVillageService().createVillage(
-                        cultureId, 
-                        villageName, 
-                        world.getName(), 
-                        baseX, 
-                        baseY + 1, 
-                        baseZ
-                    );
-                    
-                    UUID villageId = village.getId();
-                    
-                    // Set up placement service with shared metadata store (T012l)
-                    VillagePlacementService placementService = new VillagePlacementServiceImpl(
-                        plugin, metadataStore, plugin.getCultureService());
-                    
-                    // Log start
-                    // Note: Village registration now happens INSIDE placeVillage() after spacing validation
-                    logger.info("[STRUCT] User-triggered village generation: '" + villageName + "' (culture=" + 
-                        cultureId + ", seed=" + villageSeed + ")");
-                    sender.sendMessage(Component.text("Generating village '" + villageName + "' (ID: " + villageId + ")...", NamedTextColor.GRAY));
-                    
-                    // Place structures
-                    Location villageOrigin = new Location(world, baseX, baseY, baseZ);
-                    Optional<UUID> placedVillageId = placementService.placeVillage(
-                        world, villageOrigin, cultureId, villageSeed);
-                    
-                    // Report results
-                    if (placedVillageId.isPresent()) {
-                        int buildingCount = metadataStore.getVillageBuildings(villageId).size();
-                        
-                        sender.sendMessage(Component.text("OK Village '" + villageName + "' generated successfully!", NamedTextColor.GREEN));
-                        sender.sendMessage(Component.text("  Culture: " + cultureId, NamedTextColor.GRAY));
-                        sender.sendMessage(Component.text("  Location: " + baseX + ", " + baseY + ", " + baseZ, NamedTextColor.GRAY));
-                        sender.sendMessage(Component.text("  Buildings: " + buildingCount, NamedTextColor.GRAY));
-                        sender.sendMessage(Component.text("  Seed: " + villageSeed, NamedTextColor.GRAY));
-                        
-                        logger.info("[STRUCT] Successfully generated village '" + villageName + "' with " + 
-                            buildingCount + " buildings");
-                        
-                        // TODO: When US2 is complete, invoke path network generation here
-                        // For now, report that paths are not yet available
-                        sender.sendMessage(Component.text("  Paths: Not yet available (US2 in progress)", NamedTextColor.GRAY));
-                        
-                    } else {
-                        sender.sendMessage(Component.text("X Failed to place structures for village '" + villageName + "'", NamedTextColor.RED));
-                        sender.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
-
-                        if (allowMarkerFallback) {
-                            world.getBlockAt(baseX, baseY, baseZ).setType(Material.STONE, false);
-                            world.getBlockAt(baseX, baseY + 1, baseZ).setType(Material.STONE, false);
-                            world.getBlockAt(baseX, baseY + 2, baseZ).setType(Material.TORCH, false);
-                            sender.sendMessage(Component.text("Placed marker pillar at village center.", NamedTextColor.GRAY));
-                        } else {
-                            sender.sendMessage(Component.text("Marker fallback suppressed; no pillar placed. Set worldgen.allowMarkerFallback or rerun with --allow-marker.", NamedTextColor.GRAY));
-                        }
-                        
-                        logger.warning("[STRUCT] Failed to place structures for village '" + villageName + "' " +
-                            "(ID: " + villageId + "), placed marker pillar");
-                    }
-                    
-                } catch (Exception e) {
-                    sender.sendMessage(Component.text("Error generating village: " + e.getMessage(), NamedTextColor.RED));
-                    logger.severe("[STRUCT] Error during village generation: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            });
-        });
+        // T066: Enqueue generation request instead of executing synchronously
+        CommandGenerationRequest request = new CommandGenerationRequest(
+                sender, cultureId, villageName, seedArg, searchOrigin);
+        
+        generationQueue.enqueue(request);
+        
+        logger.info(String.format("[STRUCT] User-triggered village generation: '%s' (culture=%s, queued)", 
+                villageName, cultureId));
         
         return true;
     }

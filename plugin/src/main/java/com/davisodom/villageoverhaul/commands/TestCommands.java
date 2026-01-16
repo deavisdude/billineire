@@ -191,25 +191,41 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         
-        // TODO: Integrate with VillagePlacementService
-        // For now, log the request
-        plugin.getLogger().info(String.format("[STRUCT] Begin structure generation for village %s", villageId));
+        // Load village from service
+        com.davisodom.villageoverhaul.villages.VillageService villageService = plugin.getVillageService();
+        Optional<com.davisodom.villageoverhaul.villages.Village> villageOpt = villageService.getVillage(villageId);
         
-        sender.sendMessage("§aStructure generation initiated for village: " + villageId);
-        sender.sendMessage("§7Check logs for [STRUCT] markers for placement details");
+        if (!villageOpt.isPresent()) {
+            sender.sendMessage("§cVillage not found: " + villageId);
+            return true;
+        }
         
-        // TODO: Implement actual structure generation via VillagePlacementService
-        // Expected flow:
-        // 1. Load village metadata (culture, location)
-        // 2. Get structure set from culture definition
-        // 3. For each structure in set:
-        //    - Find suitable placement location
-        //    - Validate site with SiteValidator
-        //    - Attempt placement via StructureService (with re-seating)
-        //    - Log [STRUCT] begin/seat/re-seat/abort
-        // 4. Persist placed buildings to VillageMetadataStore
+        com.davisodom.villageoverhaul.villages.Village village = villageOpt.get();
         
-        plugin.getLogger().info(String.format("[STRUCT] Structure generation complete for village %s (placeholder)", villageId));
+        // Get world
+        org.bukkit.World world = plugin.getServer().getWorld(village.getWorldName());
+        if (world == null) {
+            sender.sendMessage("§cWorld not found: " + village.getWorldName());
+            return true;
+        }
+        
+        // Construct origin location from village coordinates
+        Location origin = new Location(world, village.getX(), village.getY(), village.getZ());
+        
+        // Create generation request
+        CommandGenerationRequest request = new CommandGenerationRequest(
+            sender,
+            village.getCultureId(),
+            village.getName(),
+            null, // No seed override for regeneration
+            origin
+        );
+        
+        // Enqueue request for tick-budgeted processing
+        plugin.getGenerationQueue().enqueue(request);
+        
+        sender.sendMessage("§aStructure generation enqueued for village: " + village.getName());
+        sender.sendMessage("§7Generation will occur over multiple ticks - watch for [GEN-PROGRESS] logs");
         
         return true;
     }
@@ -291,7 +307,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         
-        // Get world
+        // Get world from village origin
         org.bukkit.World world = village.getOrigin().getWorld();
         if (world == null) {
             sender.sendMessage("§cWorld not found for village");
