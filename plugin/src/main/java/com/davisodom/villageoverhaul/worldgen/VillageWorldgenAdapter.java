@@ -249,8 +249,15 @@ public class VillageWorldgenAdapter implements Listener {
         int locationsChecked = 0;
         long searchStartTime = System.currentTimeMillis();
         
-        // T052a: Time budget for chunk loading (ms) - prevents extended blocking
-        final long CHUNK_LOAD_BUDGET_MS = 2000; // Max 2 seconds of chunk loading for terrain search
+        // T052a/T067: Time budget for chunk loading (ms) - prevents extended blocking
+        // Increased from 2000ms to 10000ms (10 seconds) to improve spawn village success rate.
+        // This method runs async, so it doesn't directly block the main thread, but aggressive
+        // chunk loading can still cause lag spikes. T066 will address this properly with 
+        // tick-budgeted placement. For now, 10s is a compromise between success rate and 
+        // acceptable lag impact. The 2s budget was too restrictive (only 168 locations checked
+        // with 145 chunks skipped), causing terrain search to fail and fall back to unsuitable
+        // spawn locations. Command placement has no budget limit, hence its success.
+        final long CHUNK_LOAD_BUDGET_MS = 10000; // Max 10 seconds of chunk loading for terrain search
         int chunksLoaded = 0;
         int chunksSkipped = 0;
         

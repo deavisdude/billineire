@@ -213,8 +213,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.fine("Unable to read system properties for vo.test.forceZeroPlacement: " + se.getMessage());
         }
 
+        // T070: Maximum number of candidate positions to try per structure before giving up
+        // This ensures we don't silently move to the next structure when terrain validation fails
+        final int maxCandidatesPerStructure = 20;
+        
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
+        // T070: Retry with alternate candidates when terrain validation fails at initial position
         for (int i = 0; i < structureIds.size(); i++) {
             String structureId = structureIds.get(i);
             
@@ -233,61 +238,84 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // R011b: Fetch fresh volume masks before each placement to ensure collision detection works
             List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
             
-                Optional<Location> placementLocation = findSuitablePlacementPosition(
-                    world, origin, width, depth, height, buildingSeed,
-                    existingMasks, surfaceSolver, rejectionTracker);
+            // T070: Get ALL non-overlapping candidate positions (sorted by distance)
+            List<CandidateSite> candidatePositions = findCandidatePositions(
+                world, origin, width, depth, height, buildingSeed,
+                existingMasks, surfaceSolver, rejectionTracker);
             
-            if (!placementLocation.isPresent()) {
+            if (candidatePositions.isEmpty()) {
+                LOGGER.info(String.format("[STRUCT][T070] No collision-free candidates for %s, skipping structure", structureId));
                 continue;
             }
             
-            Location buildingLocation = placementLocation.get();
+            // T070: Try candidates one by one until terrain validation succeeds
+            boolean placed = false;
+            int candidatesTried = 0;
+            int candidatesToTry = Math.min(candidatePositions.size(), maxCandidatesPerStructure);
             
+            for (int candidateIdx = 0; candidateIdx < candidatesToTry && !placed; candidateIdx++) {
+                CandidateSite candidate = candidatePositions.get(candidateIdx);
+                candidatesTried++;
+                
+                Location buildingLocation = new Location(world, candidate.x, candidate.y, candidate.z);
+                
                 java.util.Map<String, Integer> attemptDiagnostics = new java.util.HashMap<>();
                 // T057f: Pass minBuildingSpacing from config to StructureService for collision checks
                 Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
                     structureId, world, buildingLocation, buildingSeed, villageId, existingMasks, 
                     minBuildingSpacing, attemptDiagnostics);
             
-            if (receiptOpt.isPresent()) {
-                PlacementReceipt receipt = receiptOpt.get();
-                metadataStore.addPlacementReceipt(villageId, receipt);
-                
-                VolumeMask placedMask = VolumeMask.fromReceipt(receipt);
-                metadataStore.addVolumeMask(villageId, placedMask);
-                surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
-                
-                // Deterministic building ID derived from village id + structure id + building seed
-                UUID deterministicBuildingId = UUID.nameUUIDFromBytes((villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
+                if (receiptOpt.isPresent()) {
+                    PlacementReceipt receipt = receiptOpt.get();
+                    metadataStore.addPlacementReceipt(villageId, receipt);
+                    
+                    VolumeMask placedMask = VolumeMask.fromReceipt(receipt);
+                    metadataStore.addVolumeMask(villageId, placedMask);
+                    surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
+                    
+                    // Deterministic building ID derived from village id + structure id + building seed
+                    UUID deterministicBuildingId = UUID.nameUUIDFromBytes((villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
 
-                Building building = new Building.Builder()
-                    .buildingId(deterministicBuildingId)
-                        .villageId(villageId)
-                        .structureId(structureId)
-                        .origin(new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ()))
-                        .dimensions(receipt.getEffectiveWidth(), receipt.getHeight(), receipt.getEffectiveDepth())
-                        .build();
-                
-                placedBuildings.add(building);
-                
-                LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d°", 
-                        structureId,
-                        receipt.getMinX(), receipt.getMaxX(),
-                        receipt.getMinY(), receipt.getMaxY(),
-                        receipt.getMinZ(), receipt.getMaxZ(),
-                        receipt.getRotation()));
-            } else {
-                // Aggregate diagnostics from failed attempt
-                if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
-                    rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
-                    rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
-                    rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
-                    rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
-                    int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
-                    rejectionTracker.fluidRejections += fluidCount;
-                    rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
-                    rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
+                    Building building = new Building.Builder()
+                        .buildingId(deterministicBuildingId)
+                            .villageId(villageId)
+                            .structureId(structureId)
+                            .origin(new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ()))
+                            .dimensions(receipt.getEffectiveWidth(), receipt.getHeight(), receipt.getEffectiveDepth())
+                            .build();
+                    
+                    placedBuildings.add(building);
+                    placed = true;
+                    
+                    LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d° candidatesTried=%d", 
+                            structureId,
+                            receipt.getMinX(), receipt.getMaxX(),
+                            receipt.getMinY(), receipt.getMaxY(),
+                            receipt.getMinZ(), receipt.getMaxZ(),
+                            receipt.getRotation(),
+                            candidatesTried));
+                } else {
+                    // Aggregate diagnostics from failed attempt
+                    if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
+                        rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
+                        rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
+                        rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
+                        rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
+                        int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
+                        rejectionTracker.fluidRejections += fluidCount;
+                        rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
+                        rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
+                    }
+                    // T070: Log candidate rejection and continue to next candidate
+                    LOGGER.fine(String.format("[STRUCT][T070] Candidate %d/%d rejected for %s at (%d,%d,%d)", 
+                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z));
                 }
+            }
+            
+            // T070: Log summary of candidate search for this structure
+            if (!placed) {
+                LOGGER.info(String.format("[STRUCT][T070] Failed to place %s after trying %d/%d candidates", 
+                        structureId, candidatesTried, candidatePositions.size()));
             }
         }
         
@@ -573,8 +601,41 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * T026d2: Stable candidate site ordering & filtering - candidates sorted by deterministic key,
      *         filters applied in fixed sequence.
      * T052a: Time-budgeted chunk loading to prevent main thread blocking.
+     * @deprecated Use findCandidatePositions for T070 multi-candidate retry support
      */
+        @Deprecated
         private Optional<Location> findSuitablePlacementPosition(
+            World world, Location origin, int width, int depth, int height, long buildingSeed,
+            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker) {
+        
+        List<CandidateSite> candidates = findCandidatePositions(world, origin, width, depth, height, 
+                buildingSeed, existingMasks, surfaceSolver, tracker);
+        
+        if (candidates.isEmpty()) {
+            return Optional.empty();
+        }
+        
+        CandidateSite first = candidates.get(0);
+        return Optional.of(new Location(world, first.x, first.y, first.z));
+    }
+    
+    /**
+     * T070: Find ALL collision-free candidate positions for structure placement.
+     * Returns a sorted list of candidates that pass collision checks (no overlap with existing masks).
+     * Terrain validation (steep/blocked/fluid) is NOT done here - that's done by StructureService.
+     * The caller should iterate through candidates and retry placement if terrain validation fails.
+     * 
+     * Uses spiral search pattern from origin.
+     * R009: Uses SurfaceSolver for ground finding and VolumeMasks for overlap checks.
+     * R011b: Uses rotation-aware collision detection with deterministic rotation.
+     * T026d1: Deterministic candidate ordering using buildingSeed for consistent spiral iteration.
+     * T026d2: Stable candidate site ordering & filtering - candidates sorted by deterministic key,
+     *         filters applied in fixed sequence.
+     * T052a: Time-budgeted chunk loading to prevent main thread blocking.
+     * 
+     * @return Sorted list of collision-free candidate sites (may be empty if no valid positions found)
+     */
+    private List<CandidateSite> findCandidatePositions(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
             List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker) {
         
@@ -650,6 +711,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         Random rotRandom = new Random(buildingSeed);
         int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
         
+        // T070: Collect all collision-free candidates instead of returning first one
+        List<CandidateSite> validCandidates = new ArrayList<>();
+        
         // T026d2: Apply filters in fixed sequence to each candidate
         // Fixed sequence: 1) Collision check, 2) Spacing relaxation (if needed)
         int collisionRejections = 0;
@@ -670,7 +734,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 if (half != minBuildingSpacing) {
                     boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half);
                     if (!overlapsHalf) {
-                        LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->%d for candidate (%d,%d)", 
+                        LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->%d for candidate (%d,%d)", 
                                 minBuildingSpacing, half, candidate.dx, candidate.dz));
                         overlaps = false;
                     }
@@ -681,7 +745,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 // Final attempt without spacing
                 boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0);
                 if (!overlapsZero) {
-                    LOGGER.fine(String.format("[STRUCT] findSuitable: relaxing spacing %d->0 for candidate (%d,%d)", 
+                    LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->0 for candidate (%d,%d)", 
                             minBuildingSpacing, candidate.dx, candidate.dz));
                     overlaps = false;
                 }
@@ -693,22 +757,30 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 continue;
             }
             
-            // Found valid spot - log deterministic candidate sequence info
-                LOGGER.fine(String.format("[STRUCT] findSuitable: Found candidate at offset=(%d,%d) " +
-                    "pos=(%d,%d,%d) dist²=%d checked=%d rejected=%d seed=%d", 
-                    candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z,
-                    candidate.distanceSquared, (tracker != null ? tracker.totalAttempts : 0), collisionRejections, buildingSeed));
-                // note: candidatesChecked replaced with tracker.totalAttempts
-            return Optional.of(new Location(world, candidate.x, candidate.y, candidate.z));
+            // T070: Add valid candidate to list instead of returning immediately
+            validCandidates.add(candidate);
+            
+            // Log deterministic candidate sequence info
+            LOGGER.fine(String.format("[STRUCT] findCandidates: Valid candidate at offset=(%d,%d) " +
+                "pos=(%d,%d,%d) dist²=%d validCount=%d rejected=%d seed=%d", 
+                candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z,
+                candidate.distanceSquared, validCandidates.size(), collisionRejections, buildingSeed));
         }
         
-        // T026d3: Log retry sequence hash for determinism verification
-        String retryHash = computeRetrySequenceHash(allCandidates);
+        // T070: Log summary of candidate search
+        if (validCandidates.isEmpty()) {
+            // T026d3: Log retry sequence hash for determinism verification
+            String retryHash = computeRetrySequenceHash(allCandidates);
+            
+            LOGGER.warning(String.format("[STRUCT] findCandidates: No collision-free candidates found within radius=%d " +
+                "checked=%d rejected=%d seed=%d retryHash=%s",
+                maxRadius, tracker != null ? tracker.totalAttempts : 0, collisionRejections, buildingSeed, retryHash));
+        } else {
+            LOGGER.info(String.format("[STRUCT][T070] Found %d collision-free candidates (checked=%d, rejected=%d, seed=%d)",
+                validCandidates.size(), allCandidates.size(), collisionRejections, buildingSeed));
+        }
         
-        LOGGER.warning(String.format("[STRUCT] findSuitable: No valid placement found within radius=%d " +
-            "checked=%d rejected=%d seed=%d retryHash=%s",
-            maxRadius, tracker != null ? tracker.totalAttempts : 0, collisionRejections, buildingSeed, retryHash));
-        return Optional.empty();
+        return validCandidates;
     }
     
     /**

@@ -235,10 +235,15 @@ public class VillagePlacementServiceImplTest {
         Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
             .thenReturn(Optional.of(new int[]{3, 3, 3}));
 
+        // T070: With multi-candidate retry, the mock will be called multiple times (up to 20)
+        // Track call count to verify retry behavior
+        java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        
         Mockito.when(mockStructure.placeStructureAndGetReceipt(
                 Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
                 Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
             .thenAnswer(inv -> {
+                callCount.incrementAndGet();
                 @SuppressWarnings("unchecked")
                 java.util.Map<String, Integer> diagnostics = (java.util.Map<String, Integer>) inv.getArgument(7);
                 diagnostics.put("placementAttempts", 1);
@@ -268,6 +273,9 @@ public class VillagePlacementServiceImplTest {
         Optional<UUID> result = svc.placeVillage(world, origin, "test-culture", seed);
         assertTrue(result.isEmpty(), "Placement should fail to force zero-placement counters");
 
+        // T070: Verify that retry behavior was invoked (multiple placement attempts)
+        assertTrue(callCount.get() > 1, "T070: Should try multiple candidates before giving up, got " + callCount.get() + " attempts");
+
         UUID villageId = UUID.nameUUIDFromBytes((seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ())
             .getBytes(StandardCharsets.UTF_8));
 
@@ -275,9 +283,11 @@ public class VillagePlacementServiceImplTest {
         assertTrue(countersOpt.isPresent(), "Expected rejection counters to be recorded");
 
         VillageMetadataStore.PlacementRejectionCounters counters = countersOpt.get();
-        assertEquals(1, counters.fluid, "Fluid rejection count should be recorded");
-        assertEquals(5, counters.steep, "Steep rejection count should be recorded");
-        assertEquals(2, counters.blocked, "Blocked rejection count should be recorded");
+        // T070: Counters are now multiplied by retry count since each failed attempt adds to counters
+        int expectedMultiplier = callCount.get();
+        assertEquals(expectedMultiplier, counters.fluid, "Fluid rejection count should be recorded per attempt");
+        assertEquals(5 * expectedMultiplier, counters.steep, "Steep rejection count should be recorded per attempt");
+        assertEquals(2 * expectedMultiplier, counters.blocked, "Blocked rejection count should be recorded per attempt");
         assertTrue(counters.attempts > 0, "Attempts should be greater than zero");
     }
 
@@ -479,6 +489,104 @@ public class VillagePlacementServiceImplTest {
             (villageId.toString() + ":" + structureId + ":" + 11111L).getBytes(StandardCharsets.UTF_8));
         
         assertNotEquals(expected, different, "Different building seed should produce different building UUID");
+    }
+
+    /**
+     * T070: Verify that placement retries with alternate candidates when initial terrain validation fails,
+     * and eventually succeeds when a valid candidate is found later in the sequence.
+     */
+    @Test
+    @DisplayName("T070 - placement retries alternate candidates when initial terrain validation fails")
+    public void testPlacementRetriesAlternateCandidates() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house_roman_small");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", structures, null)));
+
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
+            .thenReturn(Optional.of(new int[]{3, 3, 3}));
+
+        // T070: Track placement attempts and simulate success on 5th attempt
+        java.util.concurrent.atomic.AtomicInteger attemptCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        final int successOnAttempt = 5;
+        
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(
+                Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+                Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
+            .thenAnswer(inv -> {
+                int currentAttempt = attemptCount.incrementAndGet();
+                Location loc = inv.getArgument(2);
+                UUID villageId = inv.getArgument(4);
+                
+                if (currentAttempt >= successOnAttempt) {
+                    // Simulate successful placement on 5th attempt
+                    // Create mock foundation corners
+                    PlacementReceipt.CornerSample[] corners = new PlacementReceipt.CornerSample[]{
+                        new PlacementReceipt.CornerSample(loc.getBlockX(), loc.getBlockY() - 1, loc.getBlockZ(), Material.STONE),
+                        new PlacementReceipt.CornerSample(loc.getBlockX() + 3, loc.getBlockY() - 1, loc.getBlockZ(), Material.STONE),
+                        new PlacementReceipt.CornerSample(loc.getBlockX(), loc.getBlockY() - 1, loc.getBlockZ() + 3, Material.STONE),
+                        new PlacementReceipt.CornerSample(loc.getBlockX() + 3, loc.getBlockY() - 1, loc.getBlockZ() + 3, Material.STONE)
+                    };
+                    
+                    PlacementReceipt receipt = new PlacementReceipt.Builder()
+                        .structureId("house_roman_small")
+                        .villageId(villageId)
+                        .world(loc.getWorld())
+                        .origin(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())
+                        .entrance(loc.getBlockX() + 1, loc.getBlockY(), loc.getBlockZ())
+                        .rotation(0)
+                        .bounds(loc.getBlockX(), loc.getBlockX() + 3, loc.getBlockY(), loc.getBlockY() + 3, loc.getBlockZ(), loc.getBlockZ() + 3)
+                        .dimensions(3, 3, 3)
+                        .foundationCorners(corners)
+                        .build();
+                    return Optional.of(receipt);
+                }
+                
+                // Fail terrain validation for first 4 attempts
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Integer> diagnostics = (java.util.Map<String, Integer>) inv.getArgument(7);
+                diagnostics.put("placementAttempts", 1);
+                diagnostics.put("terrainInvalid", 1);
+                diagnostics.put("steep", 10);
+                return Optional.empty();
+            });
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        Location origin = new Location(world, 0, 64, 0);
+        long seed = 888L;
+
+        Optional<UUID> result = svc.placeVillage(world, origin, "test-culture", seed);
+        
+        // T070: Verify placement succeeded after retrying candidates
+        assertTrue(result.isPresent(), "T070: Placement should succeed after retrying alternate candidates");
+        assertTrue(attemptCount.get() >= successOnAttempt, 
+            "T070: Should have tried at least " + successOnAttempt + " candidates, got " + attemptCount.get());
+        
+        // Verify a building was placed
+        UUID villageId = result.get();
+        List<com.davisodom.villageoverhaul.model.Building> buildings = store.getVillageBuildings(villageId);
+        assertEquals(1, buildings.size(), "T070: One building should be placed after retry succeeded");
     }
 
 }
