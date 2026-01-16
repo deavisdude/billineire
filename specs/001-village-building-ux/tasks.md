@@ -1303,6 +1303,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Progress logging: `[GEN-PROGRESS] placed=<n> attempts=<n> elapsedMs=<n> phase=<phase> village='<name>'`
     - TestCommands.handleGenerateStructures refactored
     - VillagePlacementServiceImpl chunk loading already addressed by async placement in queue
+  - **HOTFIX** (2026-01-15): Fixed critical AsyncCatcher error where T066 implementation incorrectly used `CompletableFuture.supplyAsync()` for block placement, violating Minecraft's requirement that all block modifications occur on the main server thread. Changed `initiateStructurePlacement()` to use `Bukkit.getScheduler().runTask()` to properly schedule placement work on main thread. Error: `IllegalStateException: Asynchronous block onPlace!` from `TerraformingPlan.commit()` → `block.setType()`. All 140 tests pass after fix.
 
 - [X] T067 [P0] Terrain search must not immediately fall back to spawn on a new world
   - Story: Initial async seeding failed to find terrain due to chunk-load budget overruns and fell back to spawn, producing a zero-placement village (Roma I).
@@ -1328,14 +1329,40 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - This runs on async thread, so doesn't freeze main thread, but chunk loading still impacts server performance
   - **LIMITATION**: This is a band-aid fix. The proper solution requires T066's tick-budgeted architecture to eliminate lag risk entirely.
 
-- [ ] T071 [P0] Fix GenerateCommand overlap & location search
+- [X] T071 [P0] Fix GenerateCommand overlap & location search
   - Story: User reported `/vo generate` failed and reused the same position as the spawn village (Roma I). Command must enforce `minVillageSpacing` or search for a valid nearby site if the exact target is invalid/occupied.
   - Village locations should be tracked by the server ensuring the placement algorithm has up-to-date knowledge of all villages (naturally-generated or command-generated)
   - Priority: P0 (Core Command Broken)
+  - **IMPLEMENTED** (2026-01-15):
+    - Created `VillageTerrainSearcher` helper class to extract terrain search logic and avoid circular dependencies between `GenerateCommand` and `TickBudgetedGenerationQueue`
+    - Updated `GenerateCommand` to use `VillageTerrainSearcher` for terrain validation and spacing enforcement
+    - Updated `TickBudgetedGenerationQueue.processTerrainSearch()` to use proper terrain validation instead of blindly using the origin
+    - Added improved logging to `VillagePlacementServiceImpl` when spacing validation fails, showing distance to nearest village
+    - Created comprehensive unit tests in `VillageTerrainSearcherTest` covering:
+      - First village detection logic
+      - Nearest village finding logic
+      - Inter-village spacing enforcement
+      - Multiple villages in different worlds
+    - All 7 new unit tests pass, plus all existing tests (140 total)
 
 - [ ] T072 [P1] Fix generate-structures failure on existing villages
   - Story: User reported `/votest generate-structures` failed on Roma I (which already had 2 buildings). Ensure re-running generation is safe (fill-in mode) or reports specific errors instead of generic failure.
   - This command should always attempt to add structures unless the village is 'full' (other structures or impossible terrain)
+
+- [X] T073 [P0] HOTFIX: Synchronous chunk loading causing 19-second command freeze
+  - Story: Running `/vo generate roman test1` caused a 19-second server freeze due to `findCandidatePositions()` synchronously loading 728 chunks on the main thread.
+  - Root Cause: `VillagePlacementServiceImpl.findCandidatePositions()` called `world.getChunkAt()` synchronously for every candidate position in a 256-block search radius. With 728 unloaded chunks, this caused the server to freeze for 19 seconds.
+  - **IMPLEMENTED** (2026-01-16):
+    - Modified `findCandidatePositions()` to **skip** unloaded chunks instead of synchronously loading them
+    - Candidates are now only considered if their chunk is already loaded (player view distance provides sufficient candidates for command-based placement)
+    - For spawn village generation, `preloadVillageAreaChunks()` asynchronously pre-loads chunks before candidate search
+    - Changed log message from `Loaded %d chunks` to `Skipped %d unloaded chunks` for clarity
+    - All 140 tests pass
+  - Files: `VillagePlacementServiceImpl.java`
+  - Expected behavior after fix:
+    - `/vo generate` completes in <2 seconds instead of 19 seconds
+    - Spawn villages work correctly due to async pre-loading
+    - Log shows `[STRUCT][CHUNK-DIAG] Skipped N unloaded chunks during candidate search`
 
 - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.

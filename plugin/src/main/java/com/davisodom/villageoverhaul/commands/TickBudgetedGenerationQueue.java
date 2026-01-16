@@ -46,6 +46,7 @@ public class TickBudgetedGenerationQueue {
     
     private final VillageOverhaulPlugin plugin;
     private final VillageMetadataStore metadataStore;
+    private final VillageTerrainSearcher terrainSearcher;
     
     // Pending requests queue
     private final Queue<CommandGenerationRequest> pendingRequests = new ConcurrentLinkedQueue<>();
@@ -66,6 +67,8 @@ public class TickBudgetedGenerationQueue {
     public TickBudgetedGenerationQueue(VillageOverhaulPlugin plugin, VillageMetadataStore metadataStore) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.metadataStore = Objects.requireNonNull(metadataStore, "metadataStore cannot be null");
+        // T071: Use shared terrain searcher
+        this.terrainSearcher = new VillageTerrainSearcher(plugin, metadataStore);
     }
     
     /**
@@ -246,6 +249,8 @@ public class TickBudgetedGenerationQueue {
     
     /**
      * Process terrain search phase (async chunk loading, no blocking).
+     * 
+     * T071: Updated to use proper terrain validation and inter-village spacing enforcement.
      */
     private void processTerrainSearch(long tickStart, long remainingMs) {
         // If we already found terrain, move to next phase
@@ -255,10 +260,9 @@ public class TickBudgetedGenerationQueue {
             return;
         }
         
-        // Simple terrain search: just use the provided origin for now
-        // In a full implementation, this would do incremental spiral search with chunk readiness checks
-        Location origin = currentRequest.getOrigin();
-        World world = origin.getWorld();
+        // Get search parameters from request
+        Location searchOrigin = currentRequest.getOrigin();
+        World world = searchOrigin.getWorld();
         
         if (world == null) {
             currentRequest.sendMessage(Component.text("World not available", NamedTextColor.RED));
@@ -266,19 +270,47 @@ public class TickBudgetedGenerationQueue {
             return;
         }
         
-        // Check if chunk is loaded (non-blocking)
-        int chunkX = origin.getBlockX() >> 4;
-        int chunkZ = origin.getBlockZ() >> 4;
+        // T071: Adjust search origin based on first/subsequent village logic
+        boolean isFirstVillage = terrainSearcher.isFirstVillage(world);
+        int spawnProximityRadius = plugin.getSpawnProximityRadius();
         
-        if (!world.isChunkLoaded(chunkX, chunkZ)) {
-            // Request async chunk load and defer to next tick
-            world.getChunkAtAsync(chunkX, chunkZ);
-            return; // Will retry next tick
+        if (isFirstVillage && spawnProximityRadius > 0) {
+            // First village: search near spawn
+            searchOrigin = world.getSpawnLocation();
+            currentRequest.sendMessage(Component.text("First village: searching within " + spawnProximityRadius + 
+                    " blocks of spawn...", NamedTextColor.GRAY));
+        } else if (!isFirstVillage) {
+            // Subsequent villages: find nearest existing village
+            Location nearestVillage = terrainSearcher.findNearestVillageLocation(world, searchOrigin);
+            if (nearestVillage != null) {
+                searchOrigin = nearestVillage;
+                currentRequest.sendMessage(Component.text("Subsequent village: searching near existing village...", 
+                        NamedTextColor.GRAY));
+            }
         }
         
-        // Chunk ready, use this location
-        currentState.suitableLocation = origin.clone();
-        currentState.suitableLocation.setY(world.getHighestBlockYAt(origin.getBlockX(), origin.getBlockZ()));
+        // T071: Use proper terrain search with spacing enforcement
+        int minVillageSpacing = plugin.getMinVillageSpacing();
+        int maxSearchRadius = 512; // Match GenerateCommand default
+        
+        Location suitableLocation = terrainSearcher.findSuitableVillageLocation(
+                world, searchOrigin, maxSearchRadius, minVillageSpacing);
+        
+        if (suitableLocation == null) {
+            // No suitable terrain found
+            currentRequest.sendMessage(Component.text(
+                    "Failed to find suitable terrain within " + maxSearchRadius + " blocks. " +
+                    "All candidate locations either failed terrain checks or violated minVillageSpacing (" + 
+                    minVillageSpacing + " blocks).", NamedTextColor.RED));
+            currentRequest.sendMessage(Component.text(
+                    "Try a different location or increase search radius.", NamedTextColor.GRAY));
+            currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+            return;
+        }
+        
+        // Found suitable terrain
+        currentState.suitableLocation = suitableLocation;
+        currentState.searchOrigin = searchOrigin;
         
         currentRequest.sendMessage(Component.text("Found suitable terrain at " + 
                 formatLocation(currentState.suitableLocation), NamedTextColor.GREEN));
@@ -403,18 +435,30 @@ public class TickBudgetedGenerationQueue {
     }
     
     /**
-     * Initiate structure placement asynchronously.
+     * Initiate structure placement on the main thread.
+     * 
+     * CRITICAL: Block placement MUST run on main thread per Minecraft/Paper requirements.
+     * AsyncCatcher will throw IllegalStateException if blocks are modified off-thread.
      */
     private void initiateStructurePlacement() {
-        currentState.placementFuture = CompletableFuture.supplyAsync(() -> {
-            // Run placement on async thread
-            return currentState.placementService.placeVillage(
-                    currentState.world,
-                    currentState.suitableLocation,
-                    currentRequest.getCultureId(),
-                    currentState.villageSeed
-            );
+        CompletableFuture<Optional<UUID>> future = new CompletableFuture<>();
+        
+        // Schedule placement on main server thread (required for block modifications)
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                Optional<UUID> result = currentState.placementService.placeVillage(
+                        currentState.world,
+                        currentState.suitableLocation,
+                        currentRequest.getCultureId(),
+                        currentState.villageSeed
+                );
+                future.complete(result);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
         });
+        
+        currentState.placementFuture = future;
         
         LOGGER.info(String.format("[GEN-QUEUE] Initiated structure placement for '%s'", 
                 currentRequest.getVillageName()));

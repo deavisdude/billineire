@@ -136,6 +136,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         InterVillageSpacingResult spacingResult = checkInterVillageSpacingDetailed(origin, minVillageSpacing);
         if (!spacingResult.acceptable) {
+            // T071: Improved logging when spacing validation fails
+            LOGGER.warning(String.format("[STRUCT][T071] Village placement rejected: location (%d, %d, %d) violates minVillageSpacing=%d. " +
+                    "Nearest existing village: %s at distance %d blocks (required: %d blocks)",
+                    origin.getBlockX(), origin.getBlockY(), origin.getBlockZ(),
+                    minVillageSpacing,
+                    spacingResult.violatingVillageId != null ? spacingResult.violatingVillageId : "unknown",
+                    spacingResult.actualDistance,
+                    minVillageSpacing));
             return Optional.empty();
         }
         
@@ -643,8 +651,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         final int maxRadius = 256;
         final int gridSize = 4;
         
-        // T057h: Track chunks that needed loading for diagnostics
-        int chunksLoaded = 0;
+        // T071: Track chunks that were skipped (not loaded) for diagnostics
+        int chunksSkipped = 0;
         
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
@@ -665,13 +673,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     int chunkX = candidateX >> 4;
                     int chunkZ = candidateZ >> 4;
                     
-                    // T057h: Load chunks synchronously during candidate search
-                    // Village generation is already a blocking operation, so loading chunks
-                    // here doesn't add meaningful latency. This ensures we don't skip
-                    // candidates just because chunks weren't pre-loaded.
+                    // T071: Skip unloaded chunks instead of loading them synchronously
+                    // Previous approach (T057h) loaded 700+ chunks synchronously causing 19s freezes.
+                    // Now we only consider already-loaded chunks for placement candidates.
+                    // For command-based placement, the player's loaded chunks provide sufficient
+                    // candidates. For async village generation, chunks should be pre-loaded
+                    // asynchronously before calling this method.
                     if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                        world.getChunkAt(chunkX, chunkZ); // Synchronously load chunk
-                        chunksLoaded++;
+                        chunksSkipped++; // Track skipped chunks for diagnostics
+                        continue; // Skip this candidate - chunk not ready
                     }
                     
                     // R009: Use SurfaceSolver to find ground level
@@ -687,9 +697,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
         }
         
-        // T057h: Log chunk loading stats for diagnostics
-        if (chunksLoaded > 0) {
-            LOGGER.info(String.format("[STRUCT][CHUNK-DIAG] Loaded %d chunks during candidate search", chunksLoaded));
+        // T071: Log chunk skip stats for diagnostics (no longer loading chunks synchronously)
+        if (chunksSkipped > 0) {
+            LOGGER.info(String.format("[STRUCT][CHUNK-DIAG] Skipped %d unloaded chunks during candidate search", chunksSkipped));
         }
         
         // T026d2: Sort candidates by deterministic key: distance, then X, then Z
