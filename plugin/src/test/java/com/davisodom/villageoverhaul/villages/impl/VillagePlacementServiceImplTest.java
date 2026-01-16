@@ -2,6 +2,9 @@ package com.davisodom.villageoverhaul.villages.impl;
 
 import com.davisodom.villageoverhaul.cultures.CultureService;
 import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
+import com.davisodom.villageoverhaul.model.Building;
+import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl.PlacementOutcome;
+import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl.PlacementStatus;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.junit.jupiter.api.Test;
@@ -214,6 +217,62 @@ public class VillagePlacementServiceImplTest {
             }
         }
         }
+
+    @Test
+    @DisplayName("T072 - existing village reports FULL when all structures already placed")
+    public void testExistingVillageFullSkipsPlacement() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house", "market");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", structures, null)));
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+
+        Location origin = new Location(world, 0, 64, 0);
+        UUID villageId = UUID.randomUUID();
+        long seed = 123L;
+
+        store.registerVillage(villageId, "test-culture", origin, seed);
+
+        Building b1 = new Building.Builder()
+            .buildingId(UUID.randomUUID())
+            .villageId(villageId)
+            .structureId("house")
+            .origin(new Location(world, 0, 64, 0))
+            .dimensions(3, 3, 3)
+            .build();
+
+        Building b2 = new Building.Builder()
+            .buildingId(UUID.randomUUID())
+            .villageId(villageId)
+            .structureId("market")
+            .origin(new Location(world, 10, 64, 10))
+            .dimensions(3, 3, 3)
+            .build();
+
+        store.addBuilding(villageId, b1);
+        store.addBuilding(villageId, b2);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        PlacementOutcome outcome = svc.placeStructuresForExistingVillage(world, origin, "test-culture", seed, villageId);
+
+        assertEquals(PlacementStatus.FULL, outcome.getStatus(), "Expected FULL when all structures already placed");
+        assertEquals(2, outcome.getExistingBuildings(), "Expected existing building count to be reported");
+        assertEquals(0, outcome.getPlacedBuildings(), "Expected no new buildings when full");
+
+        Mockito.verifyNoInteractions(mockStructure);
+    }
 
     @Test
     @DisplayName("T068 - site validation failures increment steep/blocked/fluid counters")

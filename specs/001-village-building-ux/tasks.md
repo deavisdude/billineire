@@ -1345,9 +1345,14 @@ These follow-up tasks were added after T052a verification — logs show frequent
       - Multiple villages in different worlds
     - All 7 new unit tests pass, plus all existing tests (140 total)
 
-- [ ] T072 [P1] Fix generate-structures failure on existing villages
+- [X] T072 [P1] Fix generate-structures failure on existing villages
   - Story: User reported `/votest generate-structures` failed on Roma I (which already had 2 buildings). Ensure re-running generation is safe (fill-in mode) or reports specific errors instead of generic failure.
   - This command should always attempt to add structures unless the village is 'full' (other structures or impossible terrain)
+  - **IMPLEMENTED** (2026-01-16):
+    - Added existing-village request mode for the generation queue and `/votest generate-structures`
+    - Implemented fill-in placement in `VillagePlacementServiceImpl` that skips already-placed structure types
+    - Added explicit FULL/FAILED reporting for existing villages (no marker fallback)
+    - Added unit test verifying FULL behavior when all structures are already present
 
 - [X] T073 [P0] HOTFIX: Synchronous chunk loading causing 19-second command freeze
   - Story: Running `/vo generate roman test1` caused a 19-second server freeze due to `findCandidatePositions()` synchronously loading 728 chunks on the main thread.
@@ -1364,7 +1369,30 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Spawn villages work correctly due to async pre-loading
     - Log shows `[STRUCT][CHUNK-DIAG] Skipped N unloaded chunks during candidate search`
 
-- [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
+- [X] T075 [P1] Allow small water patch fill during placement
+  - Story: Playtests near coastlines showed placement aborting due to tiny surface water pockets. Small water patches (<3x3x3) should be filled with local surface materials during terraforming.
+  - **IMPLEMENTED** (2026-01-16):
+    - Site validation now allows small water patches while keeping lava as a hard veto
+    - Terraforming plan detects and fills small water patches (<= 27 blocks) using dominant surface material
+    - Added unit test to ensure small water patches are accepted and filled
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlanTest.java`
+  - Acceptance:
+    - Small surface water pockets are filled and do not block placement
+    - Large water bodies and lava still reject placement
+
+ - [ ] T074 [P1] Ensure villages spawn with initial villagers scaled to structures
+   - Story: Every village should start with some villagers so players have immediate interactivity; the number of villagers should scale with the number of structures generated for that village.
+   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/CustomVillagerService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/CustomVillagerServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`
+   - Description: After a village is placed (structures persisted and receipts committed), spawn an initial set of villagers near the village center. The spawn count should be computed from the number of successfully placed structures using a configurable ratio (default `worldgen.spawn.villagersPerStructure = 2`) with a minimum of 1 villager. Villagers must be assigned culture-appropriate professions, persisted via the metadata store, and spawned at safe walkable locations (avoid water/unsafe blocks). The implementation should expose the spawn policy as a small, testable helper and emit a structured log entry for instrumentation.
+   - Acceptance:
+     - **Minimum:** Every generated village spawns at least 1 villager after successful placement.
+     - **Scaling:** For N structures placed, default spawn count = max(1, round(N * 0.5)). This ratio must be configurable and covered by unit tests.
+     - **Persistence:** Spawned villagers are persisted in `VillageMetadataStore` (or equivalent) and survive server restarts in headless tests.
+     - **Safety:** Villager spawn positions are validated to be walkable (use `SurfaceSolver.nearestWalkable`) and avoid fluid/unsafe tiles.
+     - **Diagnostics:** Placement flow logs a structured line: `[VILLAGE] spawnedVillagers=%d village=%s structures=%d` on success.
+     - **Tests:** Add unit tests asserting spawn counts and integration test verifying villagers appear after `/vo generate` (mocked/fake world) and that marker-only fallback villages do not spawn villagers when `worldgen.allowMarkerFallback=false`.
+
+ - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.
   - Description: Add pre-commit verification and small chunk-level locks or retries; if many ops are skipped, abort and roll back (do not commit a partial pad). Add metrics that count skipped vs applied ops and surface the ratio in diagnostics.
   - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, metrics export.
@@ -1395,6 +1423,50 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Story: Add an end-to-end headless test that forces deterministic layout (fixed-layout), performs placement + path emission, and asserts: (a) no orphan terraforming pads for abandoned seats, (b) path blocks exist in world as logged, and (c) building summary equals persisted receipts.
   - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-fixed-layout-terraform-path.ps1`, `tests/HEADLESS-TESTING.md` updates.
   - Acceptance: CI headless test passes on platform with FAWE available.
+
+- [ ] T076 [P0] Scalable village bounds & spacing derived from max size
+  - Story: Structure generation resilience / village growth
+  - Description: Introduce a configurable `village.maxBoundsRadiusBlocks` (or equivalent width/length bounds) and derive `minVillageSpacing` from the max village diameter (e.g., spacing = maxBoundsDiameter * multiplier). Ensure all inter-village spacing checks use the derived value and are logged explicitly.
+  - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
+  - Acceptance:
+    - Config exposes max village bounds + spacing multiplier; defaults documented.
+    - Logs show computed `maxVillageBounds` and derived `minVillageSpacing` per generation.
+    - Inter-village spacing scales with the configured max bounds and prevents overlaps.
+
+- [ ] T077 [P0] Candidate search within max village bounds (rotate + reseat)
+  - Story: Structure generation resilience / site selection
+  - Description: When `/votest generate-structures` or `/vo generate` runs, search for placement candidates (including rotations) within the configured max village bounds around the village origin. Ensure failed placements advance to the next candidate within bounds rather than repeating the same origin. Persist and log candidate sampling coverage (count, radius, bounds).
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
+  - Acceptance:
+    - Candidate search respects max village bounds and rotates structures deterministically.
+    - A failed candidate results in a new (x,z,rotation) within bounds until the search budget is exhausted.
+    - Logs include `[STRUCT][BOUNDS]` with bounds, candidates tried, and coverage stats.
+
+- [ ] T078 [P1] Terraforming resilience inside bounds
+  - Story: Structure generation resilience / terraforming
+  - Description: When site validation passes but TerraformingPlan fails (water patches, blocked), retry with alternate candidates within bounds before aborting the structure. Add a bounded retry budget and ensure failures count toward diagnostics without ending the whole structure placement.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`
+  - Acceptance:
+    - Terraforming failures do not immediately abort the structure; next candidate is attempted within bounds.
+    - Diagnostics track `terraformRejects` separately from `siteValidationRejects`.
+    - Placement succeeds in seeds where terraform rejects occur at some candidates.
+
+- [ ] T079 [P1] Remove village caps on buildings and villagers
+  - Story: Village growth scalability
+  - Description: Eliminate hard-coded or config-based caps for max buildings and max villagers; ensure growth is limited only by terrain/available space. Update any services that enforce caps (e.g., CustomVillagerService) to use capacity derived from placed structures instead of fixed limits.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villagers/CustomVillagerService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/resources/config.yml`
+  - Acceptance:
+    - No fixed max villagers/buildings limit remains in production paths.
+    - Villager capacity scales with placed structures (or is unbounded if configured).
+    - Logs clearly state derived capacity or “no cap”.
+
+- [ ] T080 [P1] Headless regression: large bounds generate additional structures
+  - Story: Resilient structure generation validation
+  - Description: Add a headless test scenario that sets a large max village bounds value and asserts `/votest generate-structures` can add additional structures for an existing village. Capture artifacts and candidate coverage logs to validate the expanded search.
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-village-generation.ps1`, `tests/HEADLESS-TESTING.md`
+  - Acceptance:
+    - Test passes on a seed where prior runs failed to add structures.
+    - Logs show bounds, candidates tried, and at least one additional structure placed.
 
 Notes:
 - Repro first using known-bad seeds from logs and capture artifacts under `test-server/logs/`.
@@ -1537,6 +1609,8 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
   - **Solution**: On placement rejection, search spiral pattern for next suitable candidate within 32 blocks
 
 ---
+
+
 
 ## Phase 4.8: Pathfinding Performance & Caching (Future Work Prioritized)
 

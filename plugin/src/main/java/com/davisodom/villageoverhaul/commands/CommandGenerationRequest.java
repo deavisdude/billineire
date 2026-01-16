@@ -20,6 +20,8 @@ public class CommandGenerationRequest {
     private final String villageName;
     private final Long seed; // nullable - will be computed if null
     private final Location origin;
+    private final UUID existingVillageId; // optional - set when re-running structures for an existing village
+    private final boolean existingVillageRequest;
     private final long enqueuedAt;
     
     // Progress tracking
@@ -39,12 +41,19 @@ public class CommandGenerationRequest {
     
     public CommandGenerationRequest(CommandSender sender, String cultureId, String villageName,
                                    Long seed, Location origin) {
+        this(sender, cultureId, villageName, seed, origin, null);
+    }
+
+    public CommandGenerationRequest(CommandSender sender, String cultureId, String villageName,
+                                   Long seed, Location origin, UUID existingVillageId) {
         this.requestId = UUID.randomUUID();
         this.sender = sender;
         this.cultureId = cultureId;
         this.villageName = villageName;
         this.seed = seed;
         this.origin = origin;
+        this.existingVillageId = existingVillageId;
+        this.existingVillageRequest = existingVillageId != null;
         this.enqueuedAt = System.currentTimeMillis();
         this.currentPhase = GenerationPhase.QUEUED;
         this.structuresPlaced = 0;
@@ -74,6 +83,14 @@ public class CommandGenerationRequest {
     
     public Location getOrigin() {
         return origin;
+    }
+
+    public boolean isExistingVillageRequest() {
+        return existingVillageRequest;
+    }
+
+    public UUID getExistingVillageId() {
+        return existingVillageId;
     }
     
     public long getEnqueuedAt() {
@@ -133,7 +150,8 @@ public class CommandGenerationRequest {
     
     @Override
     public String toString() {
-        return String.format("GenerationRequest[id=%s, village='%s', culture=%s, phase=%s, placed=%d, attempts=%d]",
-                requestId, villageName, cultureId, currentPhase, structuresPlaced, structureAttempts);
+        return String.format("GenerationRequest[id=%s, village='%s', culture=%s, phase=%s, placed=%d, attempts=%d, existingVillage=%s]",
+            requestId, villageName, cultureId, currentPhase, structuresPlaced, structureAttempts,
+            existingVillageRequest ? String.valueOf(existingVillageId) : "none");
     }
 }

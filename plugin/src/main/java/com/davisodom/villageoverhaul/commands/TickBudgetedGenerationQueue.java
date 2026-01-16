@@ -2,13 +2,13 @@ package com.davisodom.villageoverhaul.commands;
 
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.villages.Village;
-import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl;
+import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl.PlacementOutcome;
+import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl.PlacementStatus;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
-import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -199,15 +199,39 @@ public class TickBudgetedGenerationQueue {
      */
     private void startRequest(CommandGenerationRequest request) {
         LOGGER.info(String.format("[GEN-QUEUE] Starting: %s", request));
-        
-        request.setCurrentPhase(CommandGenerationRequest.GenerationPhase.TERRAIN_SEARCH);
-        request.sendMessage(Component.text("Starting village generation for '" + request.getVillageName() + "'...", 
-                NamedTextColor.GRAY));
-        
+
         currentState = new GenerationState();
         currentState.world = request.getOrigin().getWorld();
         currentState.searchOrigin = request.getOrigin();
-        
+        currentState.existingVillageRequest = request.isExistingVillageRequest();
+
+        if (request.isExistingVillageRequest()) {
+            if (currentState.world == null) {
+                request.sendMessage(Component.text("World not available", NamedTextColor.RED));
+                request.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+                return;
+            }
+
+            currentState.villageId = request.getExistingVillageId();
+            currentState.villageName = request.getVillageName();
+            currentState.suitableLocation = request.getOrigin();
+
+            Long seedOverride = request.getSeed();
+            long resolvedSeed = seedOverride != null ? seedOverride : resolveExistingVillageSeed(request);
+            currentState.villageSeed = resolvedSeed;
+
+            currentState.placementService = new VillagePlacementServiceImpl(
+                    plugin, metadataStore, plugin.getCultureService());
+
+            request.setCurrentPhase(CommandGenerationRequest.GenerationPhase.STRUCTURE_PLACEMENT);
+            request.sendMessage(Component.text("Existing village detected. Attempting to add missing structures...",
+                    NamedTextColor.GRAY));
+        } else {
+            request.setCurrentPhase(CommandGenerationRequest.GenerationPhase.TERRAIN_SEARCH);
+            request.sendMessage(Component.text("Starting village generation for '" + request.getVillageName() + "'...",
+                    NamedTextColor.GRAY));
+        }
+
         ticksSinceLastProgress = 0;
     }
     
@@ -376,50 +400,12 @@ public class TickBudgetedGenerationQueue {
         
         // Placement complete, get results
         try {
-            Optional<UUID> result = currentState.placementFuture.join();
-            
-            if (result.isPresent()) {
-                // Success
-                int buildingCount = metadataStore.getVillageBuildings(currentState.villageId).size();
-                
-                currentRequest.sendMessage(Component.text("Village '" + currentState.villageName + 
-                        "' generated successfully!", NamedTextColor.GREEN));
-                currentRequest.sendMessage(Component.text("  Culture: " + currentRequest.getCultureId(), 
-                        NamedTextColor.GRAY));
-                currentRequest.sendMessage(Component.text("  Location: " + formatLocation(currentState.suitableLocation), 
-                        NamedTextColor.GRAY));
-                currentRequest.sendMessage(Component.text("  Buildings: " + buildingCount, NamedTextColor.GRAY));
-                currentRequest.sendMessage(Component.text("  Seed: " + currentState.villageSeed, NamedTextColor.GRAY));
-                
-                LOGGER.info(String.format("[GEN-QUEUE] Successfully generated village '%s' with %d buildings", 
-                        currentState.villageName, buildingCount));
-                
-                currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.COMPLETED);
-                
+            PlacementOutcome outcome = currentState.placementFuture.join();
+
+            if (currentState.existingVillageRequest) {
+            handleExistingVillageOutcome(outcome);
             } else {
-                // Failed
-                currentRequest.sendMessage(Component.text("Failed to place structures for village '" + 
-                        currentState.villageName + "'", NamedTextColor.RED));
-                currentRequest.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
-                
-                // Place marker if allowed
-                boolean allowMarkerFallback = plugin.getConfig().getBoolean("worldgen.allowMarkerFallback", false);
-                if (allowMarkerFallback) {
-                    Location loc = currentState.suitableLocation;
-                    loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())
-                            .setType(Material.STONE, false);
-                    loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY() + 1, loc.getBlockZ())
-                            .setType(Material.STONE, false);
-                    loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY() + 2, loc.getBlockZ())
-                            .setType(Material.TORCH, false);
-                    currentRequest.sendMessage(Component.text("Placed marker pillar at village center.", 
-                            NamedTextColor.GRAY));
-                }
-                
-                LOGGER.warning(String.format("[GEN-QUEUE] Failed to place structures for village '%s'", 
-                        currentState.villageName));
-                
-                currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+            handleNewVillageOutcome(outcome);
             }
             
             logProgress();
@@ -441,18 +427,35 @@ public class TickBudgetedGenerationQueue {
      * AsyncCatcher will throw IllegalStateException if blocks are modified off-thread.
      */
     private void initiateStructurePlacement() {
-        CompletableFuture<Optional<UUID>> future = new CompletableFuture<>();
+        CompletableFuture<PlacementOutcome> future = new CompletableFuture<>();
         
         // Schedule placement on main server thread (required for block modifications)
         Bukkit.getScheduler().runTask(plugin, () -> {
             try {
-                Optional<UUID> result = currentState.placementService.placeVillage(
-                        currentState.world,
-                        currentState.suitableLocation,
-                        currentRequest.getCultureId(),
-                        currentState.villageSeed
-                );
-                future.complete(result);
+                if (currentState.existingVillageRequest) {
+                    PlacementOutcome outcome = currentState.placementService.placeStructuresForExistingVillage(
+                            currentState.world,
+                            currentState.suitableLocation,
+                            currentRequest.getCultureId(),
+                            currentState.villageSeed,
+                            currentState.villageId
+                    );
+                    future.complete(outcome);
+                } else {
+                    Optional<UUID> result = currentState.placementService.placeVillage(
+                            currentState.world,
+                            currentState.suitableLocation,
+                            currentRequest.getCultureId(),
+                            currentState.villageSeed
+                    );
+
+                    if (result.isPresent()) {
+                        int buildingCount = metadataStore.getVillageBuildings(currentState.villageId).size();
+                        future.complete(new PlacementOutcome(PlacementStatus.SUCCESS, result.get(), 0, buildingCount, buildingCount));
+                    } else {
+                        future.complete(new PlacementOutcome(PlacementStatus.FAILED, currentState.villageId, 0, 0, 0));
+                    }
+                }
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
@@ -514,7 +517,109 @@ public class TickBudgetedGenerationQueue {
         UUID villageId;
         String villageName;
         long villageSeed;
-        VillagePlacementService placementService;
-        CompletableFuture<Optional<UUID>> placementFuture;
+        VillagePlacementServiceImpl placementService;
+        CompletableFuture<PlacementOutcome> placementFuture;
+        boolean existingVillageRequest;
     }
+
+        private long resolveExistingVillageSeed(CommandGenerationRequest request) {
+        if (request.getExistingVillageId() == null) {
+            return 0L;
+        }
+
+        Optional<VillageMetadataStore.VillageMetadata> metadataOpt =
+            metadataStore.getVillage(request.getExistingVillageId());
+
+        if (metadataOpt.isPresent()) {
+            return metadataOpt.get().getSeed();
+        }
+
+        World world = request.getOrigin().getWorld();
+        if (world == null) {
+            return 0L;
+        }
+
+        Location origin = request.getOrigin();
+        return world.getSeed() ^ (((long) origin.getBlockX() << 32) | (origin.getBlockZ() & 0xFFFFFFFFL));
+        }
+
+        private void handleExistingVillageOutcome(PlacementOutcome outcome) {
+        if (outcome.getStatus() == PlacementStatus.SUCCESS) {
+            int total = outcome.getExistingBuildings() + outcome.getPlacedBuildings();
+            currentRequest.sendMessage(Component.text("Added " + outcome.getPlacedBuildings() +
+                " structures to village '" + currentState.villageName + "'", NamedTextColor.GREEN));
+            currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
+                ", Total: " + total, NamedTextColor.GRAY));
+            currentRequest.sendMessage(Component.text("  Seed: " + currentState.villageSeed, NamedTextColor.GRAY));
+
+            LOGGER.info(String.format("[GEN-QUEUE] Added %d structures to existing village '%s' (total=%d)",
+                outcome.getPlacedBuildings(), currentState.villageName, total));
+
+            currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.COMPLETED);
+            return;
+        }
+
+        if (outcome.getStatus() == PlacementStatus.FULL) {
+            currentRequest.sendMessage(Component.text("Village already has all structures. No additional placement needed.",
+                NamedTextColor.YELLOW));
+            currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
+                " / " + outcome.getTotalStructures(), NamedTextColor.GRAY));
+            currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.COMPLETED);
+            return;
+        }
+
+        currentRequest.sendMessage(Component.text("Failed to place additional structures for village '" +
+            currentState.villageName + "'", NamedTextColor.RED));
+        currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
+            " / " + outcome.getTotalStructures(), NamedTextColor.GRAY));
+        currentRequest.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
+
+        LOGGER.warning(String.format("[GEN-QUEUE] Failed to add structures for existing village '%s'",
+            currentState.villageName));
+
+        currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+        }
+
+        private void handleNewVillageOutcome(PlacementOutcome outcome) {
+        if (outcome.getStatus() == PlacementStatus.SUCCESS) {
+            int buildingCount = metadataStore.getVillageBuildings(currentState.villageId).size();
+
+            currentRequest.sendMessage(Component.text("Village '" + currentState.villageName +
+                "' generated successfully!", NamedTextColor.GREEN));
+            currentRequest.sendMessage(Component.text("  Culture: " + currentRequest.getCultureId(),
+                NamedTextColor.GRAY));
+            currentRequest.sendMessage(Component.text("  Location: " + formatLocation(currentState.suitableLocation),
+                NamedTextColor.GRAY));
+            currentRequest.sendMessage(Component.text("  Buildings: " + buildingCount, NamedTextColor.GRAY));
+            currentRequest.sendMessage(Component.text("  Seed: " + currentState.villageSeed, NamedTextColor.GRAY));
+
+            LOGGER.info(String.format("[GEN-QUEUE] Successfully generated village '%s' with %d buildings",
+                currentState.villageName, buildingCount));
+
+            currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.COMPLETED);
+            return;
+        }
+
+        currentRequest.sendMessage(Component.text("Failed to place structures for village '" +
+            currentState.villageName + "'", NamedTextColor.RED));
+        currentRequest.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
+
+        boolean allowMarkerFallback = plugin.getConfig().getBoolean("worldgen.allowMarkerFallback", false);
+        if (allowMarkerFallback) {
+            Location loc = currentState.suitableLocation;
+            loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())
+                .setType(Material.STONE, false);
+            loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY() + 1, loc.getBlockZ())
+                .setType(Material.STONE, false);
+            loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY() + 2, loc.getBlockZ())
+                .setType(Material.TORCH, false);
+            currentRequest.sendMessage(Component.text("Placed marker pillar at village center.",
+                NamedTextColor.GRAY));
+        }
+
+        LOGGER.warning(String.format("[GEN-QUEUE] Failed to place structures for village '%s'",
+            currentState.villageName));
+
+        currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+        }
 }

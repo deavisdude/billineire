@@ -132,20 +132,25 @@ public class StructureServiceImplTest {
         int originX = 200, originY = 70, originZ = 300;
         Location origin = new Location(world, originX, originY, originZ);
 
-        // Prepare foundation blocks (stone) but place a water tile within the bounding region so TerraformingPlan.plan() will fail
+        // Prepare foundation blocks (stone) but place a large water patch within the bounding region so TerraformingPlan.plan() will fail
         for (int x = 0; x < 9; x++) {
             for (int z = 0; z < 9; z++) {
                 fake.setBlockType(originX + x, originY - 1, originZ + z, Material.STONE);
             }
         }
 
-        // Add a water tile in the footprint to trigger plan rejection
-        fake.setBlockType(originX + 1, originY + 1, originZ + 1, Material.WATER);
+        // Add a very large water patch (10x10) to exceed small water tolerance and trigger plan rejection
+        for (int x = 0; x < 10; x++) {
+            for (int z = 0; z < 10; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.WATER);
+            }
+        }
 
+        java.util.UUID villageId = java.util.UUID.randomUUID();
         Map<String, Integer> diagnostics = new HashMap<>();
         // Pass 0 for minBuildingSpacing since no existing masks (null) to check against
         Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
-                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, null, null, 0, diagnostics);
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, villageId, null, 0, diagnostics);
 
         assertFalse(receipt.isPresent(), "Receipt should be empty when terraform plan rejects site");
         assertTrue(diagnostics.getOrDefault("terrainInvalid", 0) > 0, "Diagnostics should report terrainInvalid on terraform failure");

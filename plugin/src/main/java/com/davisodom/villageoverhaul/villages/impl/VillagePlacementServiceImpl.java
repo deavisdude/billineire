@@ -64,6 +64,35 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     // In-memory cache of villages (villageId -> buildings)
     private final Map<UUID, List<Building>> villageBuildings = new HashMap<>();
+
+    public enum PlacementStatus {
+        SUCCESS,
+        FAILED,
+        FULL
+    }
+
+    public static class PlacementOutcome {
+        private final PlacementStatus status;
+        private final UUID villageId;
+        private final int existingBuildings;
+        private final int placedBuildings;
+        private final int totalStructures;
+
+        public PlacementOutcome(PlacementStatus status, UUID villageId, int existingBuildings,
+                                int placedBuildings, int totalStructures) {
+            this.status = status;
+            this.villageId = villageId;
+            this.existingBuildings = existingBuildings;
+            this.placedBuildings = placedBuildings;
+            this.totalStructures = totalStructures;
+        }
+
+        public PlacementStatus getStatus() { return status; }
+        public UUID getVillageId() { return villageId; }
+        public int getExistingBuildings() { return existingBuildings; }
+        public int getPlacedBuildings() { return placedBuildings; }
+        public int getTotalStructures() { return totalStructures; }
+    }
     
     /**
      * Constructor for testing without plugin reference (uses procedural structures).
@@ -461,6 +490,203 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         return Optional.of(villageId);
+    }
+
+    /**
+     * T072: Attempt to place remaining structures for an existing village.
+     * Does not re-register the village or clear existing metadata.
+     */
+    public PlacementOutcome placeStructuresForExistingVillage(World world, Location origin, String cultureId,
+                                                              long seed, UUID villageId) {
+        Optional<VillageMetadataStore.VillageMetadata> metadataOpt = metadataStore.getVillage(villageId);
+        long effectiveSeed = metadataOpt.map(VillageMetadataStore.VillageMetadata::getSeed).orElse(seed);
+
+        if (metadataOpt.isEmpty()) {
+            metadataStore.registerVillage(villageId, cultureId, origin, effectiveSeed);
+        }
+
+        List<Building> existingBuildings = metadataStore.getVillageBuildings(villageId);
+        Set<String> existingStructureIds = new HashSet<>();
+        for (Building building : existingBuildings) {
+            existingStructureIds.add(building.getStructureId());
+        }
+
+        Random villageRandom = new Random(effectiveSeed);
+        long placementSeed = villageRandom.nextLong();
+        long pathBaseSeed = new Random(placementSeed).nextLong();
+
+        List<String> structureIds = getCultureStructures(cultureId, placementSeed);
+        List<String> remainingStructureIds = new ArrayList<>();
+        for (String structureId : structureIds) {
+            if (!existingStructureIds.contains(structureId)) {
+                remainingStructureIds.add(structureId);
+            }
+        }
+
+        if (remainingStructureIds.isEmpty()) {
+            LOGGER.info(String.format("[STRUCT][T072] Village %s already has all %d structures; skipping generation.",
+                    villageId, structureIds.size()));
+            return new PlacementOutcome(PlacementStatus.FULL, villageId, existingBuildings.size(), 0, structureIds.size());
+        }
+
+        LOGGER.info(String.format("[STRUCT][T072] Existing village placement: id=%s existingBuildings=%d remaining=%d seedChain=%d:%d",
+                villageId, existingBuildings.size(), remainingStructureIds.size(), effectiveSeed, placementSeed));
+
+        PlacementRejectionTracker rejectionTracker = new PlacementRejectionTracker();
+        List<Building> placedBuildings = new ArrayList<>();
+
+        SurfaceSolver surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
+
+        final int maxCandidatesPerStructure = 20;
+
+        for (int i = 0; i < remainingStructureIds.size(); i++) {
+            String structureId = remainingStructureIds.get(i);
+
+            Optional<int[]> dimensions = structureService.getStructureDimensions(structureId);
+            if (!dimensions.isPresent()) {
+                continue;
+            }
+
+            int[] dims = dimensions.get();
+            int width = dims[0];
+            int depth = dims[2];
+            int height = dims[1];
+
+            long buildingSeed = placementSeed + i;
+
+            List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
+
+            List<CandidateSite> candidatePositions = findCandidatePositions(
+                    world, origin, width, depth, height, buildingSeed,
+                    existingMasks, surfaceSolver, rejectionTracker);
+
+            if (candidatePositions.isEmpty()) {
+                LOGGER.info(String.format("[STRUCT][T072] No collision-free candidates for %s, skipping structure", structureId));
+                continue;
+            }
+
+            boolean placed = false;
+            int candidatesTried = 0;
+            int candidatesToTry = Math.min(candidatePositions.size(), maxCandidatesPerStructure);
+
+            for (int candidateIdx = 0; candidateIdx < candidatesToTry && !placed; candidateIdx++) {
+                CandidateSite candidate = candidatePositions.get(candidateIdx);
+                candidatesTried++;
+
+                Location buildingLocation = new Location(world, candidate.x, candidate.y, candidate.z);
+
+                java.util.Map<String, Integer> attemptDiagnostics = new java.util.HashMap<>();
+                Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
+                        structureId, world, buildingLocation, buildingSeed, villageId, existingMasks,
+                        minBuildingSpacing, attemptDiagnostics);
+
+                if (receiptOpt.isPresent()) {
+                    PlacementReceipt receipt = receiptOpt.get();
+                    metadataStore.addPlacementReceipt(villageId, receipt);
+
+                    VolumeMask placedMask = VolumeMask.fromReceipt(receipt);
+                    metadataStore.addVolumeMask(villageId, placedMask);
+                    surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
+
+                    UUID deterministicBuildingId = UUID.nameUUIDFromBytes(
+                            (villageId.toString() + ":" + structureId + ":" + buildingSeed).getBytes(StandardCharsets.UTF_8));
+
+                    Building building = new Building.Builder()
+                            .buildingId(deterministicBuildingId)
+                            .villageId(villageId)
+                            .structureId(structureId)
+                            .origin(new Location(world, receipt.getOriginX(), receipt.getOriginY(), receipt.getOriginZ()))
+                            .dimensions(receipt.getEffectiveWidth(), receipt.getHeight(), receipt.getEffectiveDepth())
+                            .build();
+
+                    placedBuildings.add(building);
+                    placed = true;
+
+                    LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d° candidatesTried=%d",
+                            structureId,
+                            receipt.getMinX(), receipt.getMaxX(),
+                            receipt.getMinY(), receipt.getMaxY(),
+                            receipt.getMinZ(), receipt.getMaxZ(),
+                            receipt.getRotation(),
+                            candidatesTried));
+                } else {
+                    if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
+                        rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
+                        rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
+                        rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
+                        rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
+                        int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
+                        rejectionTracker.fluidRejections += fluidCount;
+                        rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
+                        rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
+                    }
+                    LOGGER.fine(String.format("[STRUCT][T072] Candidate %d/%d rejected for %s at (%d,%d,%d)",
+                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z));
+                }
+            }
+
+            if (!placed) {
+                LOGGER.info(String.format("[STRUCT][T072] Failed to place %s after trying %d/%d candidates",
+                        structureId, candidatesTried, candidatePositions.size()));
+            }
+        }
+
+        if (placedBuildings.isEmpty()) {
+            LOGGER.warning(String.format("[STRUCT][T072] No additional structures placed for village %s (existing=%d, remaining=%d)",
+                    villageId, existingBuildings.size(), remainingStructureIds.size()));
+
+            try {
+                VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                        rejectionTracker.totalAttempts,
+                        rejectionTracker.fluidRejections,
+                        rejectionTracker.steepRejections,
+                        rejectionTracker.blockedRejections,
+                        rejectionTracker.spacingRejections,
+                        rejectionTracker.overlapRejections,
+                        rejectionTracker.chunkNotReady,
+                        rejectionTracker.totalAttempts
+                );
+                metadataStore.recordPlacementRejectionCounters(villageId, counters);
+            } catch (Exception e) {
+                LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record placement rejection counters for village %s: %s", villageId, e.getMessage()));
+            }
+
+            return new PlacementOutcome(PlacementStatus.FAILED, villageId, existingBuildings.size(), 0, structureIds.size());
+        }
+
+        for (Building building : placedBuildings) {
+            metadataStore.addBuilding(villageId, building);
+        }
+
+        if (metadataStore.getMainBuilding(villageId).isEmpty()) {
+            List<Building> allBuildings = new ArrayList<>(existingBuildings);
+            allBuildings.addAll(placedBuildings);
+            Optional<UUID> mainBuildingId = mainBuildingSelector.selectMainBuilding(cultureId, allBuildings);
+            mainBuildingId.ifPresent(id -> metadataStore.setMainBuilding(villageId, id));
+        }
+
+        LOGGER.info(String.format("[SEED] village=%d placement=%d path=%d", effectiveSeed, placementSeed, pathBaseSeed));
+
+        LOGGER.info(String.format("[STRUCT][T072] village: id=%s existing=%d added=%d total=%d",
+                villageId, existingBuildings.size(), placedBuildings.size(), existingBuildings.size() + placedBuildings.size()));
+
+        try {
+            VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                    rejectionTracker.totalAttempts,
+                    rejectionTracker.fluidRejections,
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
+                    rejectionTracker.totalAttempts
+            );
+            metadataStore.recordPlacementRejectionCounters(villageId, counters);
+        } catch (Exception e) {
+            LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record placement rejection counters for village %s: %s", villageId, e.getMessage()));
+        }
+
+        return new PlacementOutcome(PlacementStatus.SUCCESS, villageId, existingBuildings.size(), placedBuildings.size(), structureIds.size());
     }
     
     @Override

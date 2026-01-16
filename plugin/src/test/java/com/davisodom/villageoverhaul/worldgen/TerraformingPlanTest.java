@@ -113,6 +113,37 @@ class TerraformingPlanTest {
         // Verify world was not modified
         assertEquals(Material.WATER, world.getBlockAt(100, 64, 200).getType());
     }
+
+    @Test
+    @DisplayName("Planning allows small water patch and plans fill")
+    void testPlanAllowsSmallWaterPatch() {
+        // Set up flat terrain
+        for (int x = 100; x < 110; x++) {
+            for (int z = 200; z < 210; z++) {
+                world.getBlockAt(x, 63, z).setType(Material.GRASS_BLOCK);
+                world.getBlockAt(x, 64, z).setType(Material.AIR);
+            }
+        }
+
+        // Add a small 2x2 water patch at surface (<= 3x3x3)
+        for (int x = 103; x < 105; x++) {
+            for (int z = 203; z < 205; z++) {
+                world.getBlockAt(x, 64, z).setType(Material.WATER);
+            }
+        }
+
+        Location origin = new Location(world, 100, 64, 200);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 10, 10, 5);
+
+        boolean result = plan.plan();
+
+        assertTrue(result);
+        assertTrue(plan.isSuccessful());
+
+        boolean hasWaterFill = plan.getPlannedOperations().stream()
+                .anyMatch(op -> op.originalMaterial == Material.WATER && op.type == TerraformingPlan.BlockOperation.OperationType.FILL);
+        assertTrue(hasWaterFill, "Expected water fill operations for small patch");
+    }
     
     @Test
     @DisplayName("Planning on lava terrain fails")
@@ -218,8 +249,12 @@ class TerraformingPlanTest {
     @Test
     @DisplayName("Cannot commit failed plan")
     void testCannotCommitFailedPlan() {
-        // Set up terrain with water (will fail)
-        world.getBlockAt(100, 64, 200).setType(Material.WATER);
+        // Set up terrain with very large water patch (10x10) that exceeds small water tolerance (3x3x3 = 27 blocks max)
+        for (int x = 0; x < 10; x++) {
+            for (int z = 0; z < 10; z++) {
+                world.getBlockAt(100 + x, 64, 200 + z).setType(Material.WATER);
+            }
+        }
         
         Location origin = new Location(world, 100, 64, 200);
         TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 10, 10, 5);

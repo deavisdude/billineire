@@ -3,11 +3,16 @@ package com.davisodom.villageoverhaul.worldgen;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.Classification;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier.ClassificationResult;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 /**
@@ -53,6 +58,12 @@ public class SiteValidator {
      * Default: 0.30 (30% air gaps allowed; foundation will be built)
      */
     private double maxBlockedFraction = 0.30;
+
+    /**
+     * T075: Allow small water patches (<= 3x3x3) to be filled during terraforming.
+     */
+    private static final int MAX_SMALL_WATER_PATCH_VOLUME = 27;
+    private static final int MAX_SMALL_WATER_PATCH_DEPTH = 3;
     
     // Legacy constants for backward compatibility (used if not configured)
     private static final double DEFAULT_MAX_SLOPE = 0.6;
@@ -198,8 +209,18 @@ public class SiteValidator {
         boolean steepOk = steepFraction <= maxSteepFraction;
         boolean blockedOk = blockedFraction <= maxBlockedFraction;
         
-        // Hard veto on any fluid (water/lava) - unchanged
+        // T075: Allow small water patches (<= 3x3x3) to be filled during terraforming.
+        // Lava is still a hard veto.
         boolean fluidOk = classificationResult.fluid == 0;
+        String fluidRejectionDetail = null;
+        if (!fluidOk) {
+            FluidPatchCheckResult patchResult = checkSmallWaterPatches(world, origin, width, depth);
+            if (patchResult.allowed) {
+                fluidOk = true;
+            } else {
+                fluidRejectionDetail = patchResult.rejectionReason;
+            }
+        }
         
         // Build rejection reasons for diagnostics
         if (!solidityOk) {
@@ -215,6 +236,9 @@ public class SiteValidator {
             rejectionReasons.add(String.format("blocked=%.2f>%.2f", blockedFraction, maxBlockedFraction));
         }
         if (!fluidOk) {
+            if (fluidRejectionDetail != null) {
+                rejectionReasons.add(fluidRejectionDetail);
+            }
             rejectionReasons.add(String.format("fluid=%d", classificationResult.fluid));
         }
         
@@ -231,6 +255,142 @@ public class SiteValidator {
                 passed, rejectionReasons));
         
         return passed;
+    }
+
+    private FluidPatchCheckResult checkSmallWaterPatches(World world, Location origin, int width, int depth) {
+        int minX = origin.getBlockX();
+        int maxX = origin.getBlockX() + width - 1;
+        int minZ = origin.getBlockZ();
+        int maxZ = origin.getBlockZ() + depth - 1;
+        int maxY = origin.getBlockY() - 1;
+        int minY = maxY - (MAX_SMALL_WATER_PATCH_DEPTH - 1);
+
+        Set<String> visited = new HashSet<>();
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = maxY; y >= minY; y--) {
+                    Block block = world.getBlockAt(x, y, z);
+                    Material mat = block.getType();
+
+                    if (isLavaMaterial(mat)) {
+                        return FluidPatchCheckResult.rejected(String.format("fluid (LAVA at %d, %d, %d)", x, y, z));
+                    }
+
+                    if (!isWaterMaterial(mat)) {
+                        continue;
+                    }
+
+                    String key = key(x, y, z);
+                    if (visited.contains(key)) {
+                        continue;
+                    }
+
+                    FluidPatchCheckResult patchResult = floodFillWaterPatch(world, x, y, z, minX, maxX, minY, maxY, minZ, maxZ, visited);
+                    if (!patchResult.allowed) {
+                        return patchResult;
+                    }
+                }
+            }
+        }
+
+        return FluidPatchCheckResult.allowed();
+    }
+
+    private FluidPatchCheckResult floodFillWaterPatch(
+            World world,
+            int startX,
+            int startY,
+            int startZ,
+            int minX,
+            int maxX,
+            int minY,
+            int maxY,
+            int minZ,
+            int maxZ,
+            Set<String> visited) {
+        Deque<int[]> queue = new ArrayDeque<>();
+        queue.add(new int[]{startX, startY, startZ});
+        visited.add(key(startX, startY, startZ));
+
+        int patchSize = 0;
+        int[] directions = new int[]{1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1};
+
+        while (!queue.isEmpty()) {
+            int[] pos = queue.poll();
+            int x = pos[0];
+            int y = pos[1];
+            int z = pos[2];
+
+            patchSize++;
+            if (patchSize > MAX_SMALL_WATER_PATCH_VOLUME) {
+                return FluidPatchCheckResult.rejected(String.format("fluid patch >3x3x3 near %d, %d, %d", startX, startY, startZ));
+            }
+
+            for (int i = 0; i < directions.length; i += 3) {
+                int nx = x + directions[i];
+                int ny = y + directions[i + 1];
+                int nz = z + directions[i + 2];
+
+                if (nx < minX || nx > maxX || nz < minZ || nz > maxZ || ny < minY || ny > maxY) {
+                    Material outsideMat = world.getBlockAt(nx, ny, nz).getType();
+                    if (isLavaMaterial(outsideMat)) {
+                        return FluidPatchCheckResult.rejected(String.format("fluid (LAVA at %d, %d, %d)", nx, ny, nz));
+                    }
+                    if (isWaterMaterial(outsideMat)) {
+                        return FluidPatchCheckResult.rejected(String.format("fluid patch >3x3x3 near %d, %d, %d", startX, startY, startZ));
+                    }
+                    continue;
+                }
+
+                String key = key(nx, ny, nz);
+                if (visited.contains(key)) {
+                    continue;
+                }
+
+                Block neighbor = world.getBlockAt(nx, ny, nz);
+                Material mat = neighbor.getType();
+                if (isLavaMaterial(mat)) {
+                    return FluidPatchCheckResult.rejected(String.format("fluid (LAVA at %d, %d, %d)", nx, ny, nz));
+                }
+                if (isWaterMaterial(mat)) {
+                    visited.add(key);
+                    queue.add(new int[]{nx, ny, nz});
+                }
+            }
+        }
+
+        return FluidPatchCheckResult.allowed();
+    }
+
+    private boolean isWaterMaterial(Material material) {
+        return material == Material.WATER || "BUBBLE_COLUMN".equals(material.name());
+    }
+
+    private boolean isLavaMaterial(Material material) {
+        return material == Material.LAVA;
+    }
+
+    private String key(int x, int y, int z) {
+        return x + ":" + y + ":" + z;
+    }
+
+    private static final class FluidPatchCheckResult {
+        private final boolean allowed;
+        private final String rejectionReason;
+
+        private FluidPatchCheckResult(boolean allowed, String rejectionReason) {
+            this.allowed = allowed;
+            this.rejectionReason = rejectionReason;
+        }
+
+        private static FluidPatchCheckResult allowed() {
+            return new FluidPatchCheckResult(true, null);
+        }
+
+        private static FluidPatchCheckResult rejected(String reason) {
+            return new FluidPatchCheckResult(false, reason);
+        }
     }
     
     /**

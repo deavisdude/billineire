@@ -83,14 +83,18 @@ class SiteValidatorTest {
             }
         }
 
-        // Inject fluid at one sample
-        fake.setBlockType(origin.getBlockX() + 1, origin.getBlockY() - 1, origin.getBlockZ() + 1, Material.WATER);
+        // Inject large water patch (5x5) to exceed small water tolerance (3x3x3 = 27 blocks max)
+        for (int x = 0; x < 5; x++) {
+            for (int z = 0; z < 5; z++) {
+                fake.setBlockType(origin.getBlockX() + x, origin.getBlockY() - 1, origin.getBlockZ() + z, Material.WATER);
+            }
+        }
 
         SiteValidator.ValidationResult r = sut.validateSite(world, origin, width, depth, 5);
 
-        assertFalse(r.passed, "site must fail when a fluid tile exists");
-        assertFalse(r.foundationOk, "foundationOk should be false when fluid present");
-        assertEquals(1, r.classificationResult.fluid, "exactly one sampled tile should be classified as fluid");
+        assertFalse(r.passed, "site must fail when a large fluid patch exists (exceeds 3x3x3 limit)");
+        assertFalse(r.foundationOk, "foundationOk should be false when large fluid patch present");
+        assertTrue(r.classificationResult.fluid > 0, "should have sampled fluid tiles");
     }
 
     @Test
@@ -316,16 +320,20 @@ class SiteValidatorTest {
                 }
             }
             
-            // Add water
-            fake.setBlockType(origin.getBlockX() + 1, origin.getBlockY() - 1, origin.getBlockZ() + 1, Material.WATER);
+            // Add large water patch (5x5) to exceed small water tolerance
+            for (int x = 0; x < 5; x++) {
+                for (int z = 0; z < 5; z++) {
+                    fake.setBlockType(origin.getBlockX() + x, origin.getBlockY() - 1, origin.getBlockZ() + z, Material.WATER);
+                }
+            }
             
             SiteValidator.ValidationResult r = sut.validateSite(world, origin, width, depth, 4);
             
-            assertFalse(r.passed, "Site should fail with fluid");
+            assertFalse(r.passed, "Site should fail with large fluid patch");
             
             List<String> reasons = r.getRejectionReasons();
             boolean hasFluidReason = reasons.stream().anyMatch(s -> s.contains("fluid"));
-            assertTrue(hasFluidReason, "Should have fluid rejection reason; reasons=" + reasons);
+            assertTrue(hasFluidReason, "Should have fluid rejection reason for large patch; reasons=" + reasons);
         }
         
         @Test

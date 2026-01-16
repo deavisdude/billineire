@@ -218,13 +218,15 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             village.getCultureId(),
             village.getName(),
             null, // No seed override for regeneration
-            origin
+            origin,
+            village.getId()
         );
         
         // Enqueue request for tick-budgeted processing
         plugin.getGenerationQueue().enqueue(request);
         
         sender.sendMessage("§aStructure generation enqueued for village: " + village.getName());
+        sender.sendMessage("§7Fill-in mode: existing village detected; missing structures will be attempted.");
         sender.sendMessage("§7Generation will occur over multiple ticks - watch for [GEN-PROGRESS] logs");
         
         return true;

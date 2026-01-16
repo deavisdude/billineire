@@ -31,6 +31,9 @@ public class TerraformingPlan {
     private static final int LARGE_STRUCTURE_THRESHOLD = 400; // 20x20 (lowered from 30x30)
     private static final int MAX_TERRAFORM_BLOCKS_LARGE = 5000; // increased from 3000
     private static final int MAX_VERTICAL_CHANGE = 4; // increased from 3
+    private static final int MAX_SMALL_WATER_PATCH_VOLUME = 27; // <= 3x3x3
+    private static final int MAX_SMALL_WATER_PATCH_DEPTH = 3;
+    private static final int WATER_PATCH_MARGIN = 1;
     
     // T057: Tolerance buffer for limit checks (allows small overages)
     // This prevents rejection for being just 1-2 blocks over limit
@@ -203,23 +206,12 @@ public class TerraformingPlan {
         LOGGER.fine(String.format("[STRUCT][PLAN] Planning terraforming at %s (%dx%dx%d), footprint=%d, large=%s", 
                 formatLocation(origin), width, depth, height, footprintArea, isLargeStructure));
         
-        // Step 0: HARD VETO on ANY water/lava in footprint or surrounding area
-        // T057d: Reduced margin from 2 to 1 since terrain search now has water proximity check
-        int checkMargin = 1;
-        for (int x = -checkMargin; x < width + checkMargin; x++) {
-            for (int z = -checkMargin; z < depth + checkMargin; z++) {
-                int checkX = origin.getBlockX() + x;
-                int checkZ = origin.getBlockZ() + z;
-                int y = world.getHighestBlockYAt(checkX, checkZ);
-                Material surfaceMat = world.getBlockAt(checkX, y, checkZ).getType();
-                
-                if (surfaceMat == Material.WATER || surfaceMat == Material.LAVA) {
-                    rejectionReason = String.format("fluid (%s at %d, %d, %d)", surfaceMat, checkX, y, checkZ);
-                    LOGGER.info(String.format("[STRUCT][PLAN] Site rejected: %s", rejectionReason));
-                    planSucceeded = false;
-                    return false;
-                }
-            }
+        // Step 0: T075 - allow small water patches (<= 3x3x3) to be filled; lava remains a hard veto
+        boolean waterOk = planSmallWaterPatches(maxBlocks);
+        if (!waterOk) {
+            LOGGER.info(String.format("[STRUCT][PLAN] Site rejected: %s", rejectionReason));
+            planSucceeded = false;
+            return false;
         }
         
         // Step 1: Plan vegetation trimming
@@ -731,5 +723,188 @@ public class TerraformingPlan {
     
     private String formatLocation(Location loc) {
         return String.format("(%d,%d,%d)", loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+    }
+
+    private boolean planSmallWaterPatches(int maxBlocks) {
+        int minX = origin.getBlockX() - WATER_PATCH_MARGIN;
+        int maxX = origin.getBlockX() + width - 1 + WATER_PATCH_MARGIN;
+        int minZ = origin.getBlockZ() - WATER_PATCH_MARGIN;
+        int maxZ = origin.getBlockZ() + depth - 1 + WATER_PATCH_MARGIN;
+        int hardLimit = (int) Math.ceil(maxBlocks * LIMIT_TOLERANCE);
+
+        Material dominantSurface = determineDominantSurfaceMaterial(
+                origin.getBlockX(), origin.getBlockX() + width - 1,
+                origin.getBlockZ(), origin.getBlockZ() + depth - 1);
+
+        Set<String> visited = new HashSet<>();
+        int plannedFill = 0;
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                int surfaceY = world.getHighestBlockYAt(x, z);
+                Material surfaceMat = world.getBlockAt(x, surfaceY, z).getType();
+
+                if (isLavaMaterial(surfaceMat)) {
+                    rejectionReason = String.format("fluid (LAVA at %d, %d, %d)", x, surfaceY, z);
+                    return false;
+                }
+
+                if (!isWaterMaterial(surfaceMat)) {
+                    continue;
+                }
+
+                String key = key(x, surfaceY, z);
+                if (visited.contains(key)) {
+                    continue;
+                }
+
+                List<int[]> patchBlocks = new ArrayList<>();
+                boolean patchOk = floodFillWaterPatch(
+                        x, surfaceY, z,
+                        minX, maxX,
+                        minZ, maxZ,
+                        surfaceY - (MAX_SMALL_WATER_PATCH_DEPTH - 1), surfaceY,
+                        visited, patchBlocks);
+
+                if (!patchOk) {
+                    rejectionReason = String.format("fluid patch >3x3x3 near %d, %d, %d", x, surfaceY, z);
+                    return false;
+                }
+
+                for (int[] pos : patchBlocks) {
+                    int px = pos[0];
+                    int py = pos[1];
+                    int pz = pos[2];
+
+                    if (px < origin.getBlockX() || px > origin.getBlockX() + width - 1) continue;
+                    if (pz < origin.getBlockZ() || pz > origin.getBlockZ() + depth - 1) continue;
+
+                    Block block = world.getBlockAt(px, py, pz);
+                    Material mat = block.getType();
+                    if (!isWaterMaterial(mat)) {
+                        continue;
+                    }
+
+                    int columnSurfaceY = world.getHighestBlockYAt(px, pz);
+                    Material fillMaterial = determineFillMaterial(dominantSurface, py, columnSurfaceY);
+                    plannedOperations.add(new BlockOperation(
+                            px, py, pz, mat, fillMaterial, BlockOperation.OperationType.FILL));
+                    plannedFill++;
+                    fillCount++;
+
+                    if (plannedFill > hardLimit) {
+                        rejectionReason = "water fill exceeded limits";
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if (plannedFill > 0) {
+            LOGGER.info(String.format("[STRUCT][PLAN] Planned small water fill: %d blocks", plannedFill));
+        }
+
+        return true;
+    }
+
+    private boolean floodFillWaterPatch(
+            int startX,
+            int startY,
+            int startZ,
+            int minX,
+            int maxX,
+            int minZ,
+            int maxZ,
+            int minY,
+            int maxY,
+            Set<String> visited,
+            List<int[]> patchBlocks) {
+        Deque<int[]> queue = new ArrayDeque<>();
+        queue.add(new int[]{startX, startY, startZ});
+        visited.add(key(startX, startY, startZ));
+
+        int[] directions = new int[]{1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1};
+
+        while (!queue.isEmpty()) {
+            int[] pos = queue.poll();
+            int x = pos[0];
+            int y = pos[1];
+            int z = pos[2];
+
+            patchBlocks.add(pos);
+            if (patchBlocks.size() > MAX_SMALL_WATER_PATCH_VOLUME) {
+                return false;
+            }
+
+            for (int i = 0; i < directions.length; i += 3) {
+                int nx = x + directions[i];
+                int ny = y + directions[i + 1];
+                int nz = z + directions[i + 2];
+
+                if (nx < minX || nx > maxX || nz < minZ || nz > maxZ || ny < minY || ny > maxY) {
+                    Material outsideMat = world.getBlockAt(nx, ny, nz).getType();
+                    if (isLavaMaterial(outsideMat)) {
+                        return false;
+                    }
+                    if (isWaterMaterial(outsideMat)) {
+                        return false;
+                    }
+                    continue;
+                }
+
+                String key = key(nx, ny, nz);
+                if (visited.contains(key)) {
+                    continue;
+                }
+
+                Material mat = world.getBlockAt(nx, ny, nz).getType();
+                if (isLavaMaterial(mat)) {
+                    return false;
+                }
+                if (isWaterMaterial(mat)) {
+                    visited.add(key);
+                    queue.add(new int[]{nx, ny, nz});
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private Material determineDominantSurfaceMaterial(int minX, int maxX, int minZ, int maxZ) {
+        Map<Material, Integer> counts = new HashMap<>();
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                int surfaceY = world.getHighestBlockYAt(x, z);
+                Material surfaceMat = world.getBlockAt(x, surfaceY, z).getType();
+                if (surfaceMat.isSolid()) {
+                    counts.merge(surfaceMat, 1, Integer::sum);
+                }
+            }
+        }
+
+        Material dominant = Material.DIRT;
+        int best = 0;
+        for (Map.Entry<Material, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > best) {
+                best = entry.getValue();
+                dominant = entry.getKey();
+            }
+        }
+
+        return dominant;
+    }
+
+    private boolean isWaterMaterial(Material material) {
+        return material == Material.WATER || "BUBBLE_COLUMN".equals(material.name());
+    }
+
+    private boolean isLavaMaterial(Material material) {
+        return material == Material.LAVA;
+    }
+
+    private String key(int x, int y, int z) {
+        return x + ":" + y + ":" + z;
     }
 }
