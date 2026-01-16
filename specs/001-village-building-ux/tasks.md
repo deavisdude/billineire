@@ -1449,6 +1449,44 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
 
 ---
 
+## Code Quality & Paper Best Practices
+
+**Purpose**: Align codebase with Paper developer skill guidelines (SKILL.md) for maintainability and modern API usage.
+
+- [ ] T052 [P] Complete Adventure API migration for admin/test commands
+  - **Files**: `TestCommands.java` (~60 sendMessage calls), `ProjectCommands.java` (~60 sendMessage calls)
+  - **Pattern**: Replace legacy `§` color codes with `Component.text()` + `NamedTextColor`
+  - **Reference**: TradeListener.java, VillageCommands.java, GenerateCommand.java (already migrated)
+
+- [ ] T053 Refactor static plugin singleton to dependency injection pattern
+  - **File**: `VillageOverhaulPlugin.java` (lines 40, 250)
+  - **Issue**: `private static VillageOverhaulPlugin instance` + `getInstance()` violates Paper skill anti-patterns
+  - **Solution**: Pass plugin instance via constructor injection to all dependent services
+  - **Scope**: Requires updating all classes that call `VillageOverhaulPlugin.getInstance()`
+
+---
+
+## Terrain Search & Placement Issues (Identified via T019r headless testing)
+
+**Purpose**: Address root causes for village generation failures discovered during CI headless testing.
+
+- [ ] T067 Increase terrain search budget or optimize search algorithm
+  - **Root Cause**: Terrain search exceeded 2000ms timeout on spawn-area mountains, fell back to spawn location
+  - **Evidence**: `[STRUCT] ... exceeded timeout 2233ms/2000ms → falling back to spawn`
+  - **Solution**: Increase budget to 5000ms or implement early-exit heuristics for unsuitable biomes
+
+- [ ] T069 Fix SurfaceSolver Y-level calculation for mountain terrain
+  - **Root Cause**: SurfaceSolver returns Y=147 (mountain peak) instead of finding flat area
+  - **Evidence**: Multiple placement rejections at Y>140, structures embedded in terrain
+  - **Solution**: Add flatness requirement to SurfaceSolver; reject locations with >3 block variance
+
+- [ ] T070 Implement alternate candidate search on placement failure
+  - **Root Cause**: After placement fails, no attempt made to find alternate nearby locations
+  - **Evidence**: 0/5 buildings placed when first candidate fails (mountain terrain)
+  - **Solution**: On placement rejection, search spiral pattern for next suitable candidate within 32 blocks
+
+---
+
 ## Phase 4.8: Pathfinding Performance & Caching (Future Work Prioritized)
 
 **Purpose**: Implement planned pathfinding enhancements identified during T026a (node cap & cache tests) to improve scalability, reduce redundant computations, and prepare for NPC movement & builder logistics. These tasks convert future work items into actionable, testable backlog entries.

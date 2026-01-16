@@ -5,6 +5,8 @@ import com.davisodom.villageoverhaul.villages.Village;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.impl.VillagePlacementServiceImpl;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -48,8 +50,8 @@ public class GenerateCommand {
     public boolean execute(CommandSender sender, String[] args) {
         // Parse arguments
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /vo generate <culture> <name> [seed] [--allow-marker]");
-            sender.sendMessage("§7Example: /vo generate roman 'New Rome' 12345 --allow-marker");
+            sender.sendMessage(Component.text("Usage: /vo generate <culture> <name> [seed] [--allow-marker]", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Example: /vo generate roman 'New Rome' 12345 --allow-marker", NamedTextColor.GRAY));
             return true;
         }
         
@@ -69,37 +71,37 @@ public class GenerateCommand {
                 try {
                     parsedSeed = Long.parseLong(extra);
                 } catch (NumberFormatException e) {
-                    sender.sendMessage("§cInvalid seed: " + extra);
+                    sender.sendMessage(Component.text("Invalid seed: " + extra, NamedTextColor.RED));
                     return true;
                 }
             } else {
-                sender.sendMessage("§cUnexpected argument: " + extra);
+                sender.sendMessage(Component.text("Unexpected argument: " + extra, NamedTextColor.RED));
                 return true;
             }
         }
         final Long seedArg = parsedSeed;
 
         // Immediate feedback to user
-        sender.sendMessage("§aOK Village generation command received");
-        sender.sendMessage("§7  Culture: §f" + cultureId);
-        sender.sendMessage("§7  Name: §f" + villageName);
+        sender.sendMessage(Component.text("OK Village generation command received", NamedTextColor.GREEN));
+        sender.sendMessage(Component.text("  Culture: ", NamedTextColor.GRAY).append(Component.text(cultureId, NamedTextColor.WHITE)));
+        sender.sendMessage(Component.text("  Name: ", NamedTextColor.GRAY).append(Component.text(villageName, NamedTextColor.WHITE)));
         if (seedArg != null) {
-            sender.sendMessage("§7  Seed: §f" + seedArg);
+            sender.sendMessage(Component.text("  Seed: ", NamedTextColor.GRAY).append(Component.text(String.valueOf(seedArg), NamedTextColor.WHITE)));
         }
 
         final boolean allowMarkerFallback = allowMarkerFlag || plugin.isMarkerFallbackAllowed();
         if (allowMarkerFallback) {
-            sender.sendMessage("§7Marker fallback is enabled for this run.");
+            sender.sendMessage(Component.text("Marker fallback is enabled for this run.", NamedTextColor.GRAY));
         } else {
-            sender.sendMessage("§7Marker fallback suppressed. Enable worldgen.allowMarkerFallback or add --allow-marker to place a pillar on failure.");
+            sender.sendMessage(Component.text("Marker fallback suppressed. Enable worldgen.allowMarkerFallback or add --allow-marker to place a pillar on failure.", NamedTextColor.GRAY));
         }
         
         // Validate culture exists
         if (!plugin.getCultureService().all().stream().anyMatch(c -> c.getId().equals(cultureId))) {
-            sender.sendMessage("§cUnknown culture: " + cultureId);
-            sender.sendMessage("§7Available cultures: " + 
+            sender.sendMessage(Component.text("Unknown culture: " + cultureId, NamedTextColor.RED));
+            sender.sendMessage(Component.text("Available cultures: " + 
                 String.join(", ", plugin.getCultureService().all().stream()
-                    .map(c -> c.getId()).toList()));
+                    .map(c -> c.getId()).toList()), NamedTextColor.GRAY));
             return true;
         }
         
@@ -110,12 +112,12 @@ public class GenerateCommand {
         if (sender instanceof Player player) {
             searchOrigin = player.getLocation();
             world = player.getWorld();
-            sender.sendMessage("§7Searching for suitable terrain near your location...");
+            sender.sendMessage(Component.text("Searching for suitable terrain near your location...", NamedTextColor.GRAY));
         } else {
             // Console command - use world spawn
             world = Bukkit.getWorlds().get(0);
             searchOrigin = world.getSpawnLocation();
-            sender.sendMessage("§7Searching for suitable terrain near world spawn...");
+            sender.sendMessage(Component.text("Searching for suitable terrain near world spawn...", NamedTextColor.GRAY));
         }
         
         // Use shared metadata store (T012l: singleton for cross-session enforcement)
@@ -127,14 +129,14 @@ public class GenerateCommand {
         if (isFirstVillage && spawnProximityRadius > 0) {
             // First village: search near spawn (Constitution v1.5.0, Principle XII)
             searchOrigin = world.getSpawnLocation();
-            sender.sendMessage("§7First village: searching within " + spawnProximityRadius + " blocks of spawn...");
+            sender.sendMessage(Component.text("First village: searching within " + spawnProximityRadius + " blocks of spawn...", NamedTextColor.GRAY));
         } else if (!isFirstVillage) {
             // Subsequent villages: find nearest existing village and search near it
             Location nearestVillage = findNearestVillageLocation(world, searchOrigin, metadataStore);
             if (nearestVillage != null) {
                 searchOrigin = nearestVillage;
-                sender.sendMessage("§7Subsequent village: searching near existing village at " + 
-                    formatLocation(nearestVillage) + "...");
+                sender.sendMessage(Component.text("Subsequent village: searching near existing village at " + 
+                    formatLocation(nearestVillage) + "...", NamedTextColor.GRAY));
             }
         }
         
@@ -147,7 +149,7 @@ public class GenerateCommand {
                     isFirstVillage ? spawnProximityRadius : 512, metadataStore, minVillageSpacing);
             
             if (suitableLocation == null) {
-                sender.sendMessage("§cNo suitable terrain found. Try a different location.");
+                sender.sendMessage(Component.text("No suitable terrain found. Try a different location.", NamedTextColor.RED));
                 return;
             }
             
@@ -155,7 +157,7 @@ public class GenerateCommand {
             int baseZ = suitableLocation.getBlockZ();
             int baseY = world.getHighestBlockYAt(baseX, baseZ);
             
-            sender.sendMessage("§aFound suitable terrain at (" + baseX + ", " + baseY + ", " + baseZ + ")");
+            sender.sendMessage(Component.text("Found suitable terrain at (" + baseX + ", " + baseY + ", " + baseZ + ")", NamedTextColor.GREEN));
             
             // Calculate seed (use provided seed or generate from world + location)
             final long villageSeed = seedArg != null ? seedArg : 
@@ -184,7 +186,7 @@ public class GenerateCommand {
                     // Note: Village registration now happens INSIDE placeVillage() after spacing validation
                     logger.info("[STRUCT] User-triggered village generation: '" + villageName + "' (culture=" + 
                         cultureId + ", seed=" + villageSeed + ")");
-                    sender.sendMessage("§7Generating village '" + villageName + "' (ID: " + villageId + ")...");
+                    sender.sendMessage(Component.text("Generating village '" + villageName + "' (ID: " + villageId + ")...", NamedTextColor.GRAY));
                     
                     // Place structures
                     Location villageOrigin = new Location(world, baseX, baseY, baseZ);
@@ -195,30 +197,30 @@ public class GenerateCommand {
                     if (placedVillageId.isPresent()) {
                         int buildingCount = metadataStore.getVillageBuildings(villageId).size();
                         
-                        sender.sendMessage("§aOK Village '" + villageName + "' generated successfully!");
-                        sender.sendMessage("§7  Culture: " + cultureId);
-                        sender.sendMessage("§7  Location: " + baseX + ", " + baseY + ", " + baseZ);
-                        sender.sendMessage("§7  Buildings: " + buildingCount);
-                        sender.sendMessage("§7  Seed: " + villageSeed);
+                        sender.sendMessage(Component.text("OK Village '" + villageName + "' generated successfully!", NamedTextColor.GREEN));
+                        sender.sendMessage(Component.text("  Culture: " + cultureId, NamedTextColor.GRAY));
+                        sender.sendMessage(Component.text("  Location: " + baseX + ", " + baseY + ", " + baseZ, NamedTextColor.GRAY));
+                        sender.sendMessage(Component.text("  Buildings: " + buildingCount, NamedTextColor.GRAY));
+                        sender.sendMessage(Component.text("  Seed: " + villageSeed, NamedTextColor.GRAY));
                         
                         logger.info("[STRUCT] Successfully generated village '" + villageName + "' with " + 
                             buildingCount + " buildings");
                         
                         // TODO: When US2 is complete, invoke path network generation here
                         // For now, report that paths are not yet available
-                        sender.sendMessage("§7  Paths: Not yet available (US2 in progress)");
+                        sender.sendMessage(Component.text("  Paths: Not yet available (US2 in progress)", NamedTextColor.GRAY));
                         
                     } else {
-                        sender.sendMessage("§cX Failed to place structures for village '" + villageName + "'");
-                        sender.sendMessage("§7Check server logs for details.");
+                        sender.sendMessage(Component.text("X Failed to place structures for village '" + villageName + "'", NamedTextColor.RED));
+                        sender.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
 
                         if (allowMarkerFallback) {
                             world.getBlockAt(baseX, baseY, baseZ).setType(Material.STONE, false);
                             world.getBlockAt(baseX, baseY + 1, baseZ).setType(Material.STONE, false);
                             world.getBlockAt(baseX, baseY + 2, baseZ).setType(Material.TORCH, false);
-                            sender.sendMessage("§7Placed marker pillar at village center.");
+                            sender.sendMessage(Component.text("Placed marker pillar at village center.", NamedTextColor.GRAY));
                         } else {
-                            sender.sendMessage("§7Marker fallback suppressed; no pillar placed. Set worldgen.allowMarkerFallback or rerun with --allow-marker.");
+                            sender.sendMessage(Component.text("Marker fallback suppressed; no pillar placed. Set worldgen.allowMarkerFallback or rerun with --allow-marker.", NamedTextColor.GRAY));
                         }
                         
                         logger.warning("[STRUCT] Failed to place structures for village '" + villageName + "' " +
@@ -226,7 +228,7 @@ public class GenerateCommand {
                     }
                     
                 } catch (Exception e) {
-                    sender.sendMessage("§cError generating village: " + e.getMessage());
+                    sender.sendMessage(Component.text("Error generating village: " + e.getMessage(), NamedTextColor.RED));
                     logger.severe("[STRUCT] Error during village generation: " + e.getMessage());
                     e.printStackTrace();
                 }
