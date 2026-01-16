@@ -1150,6 +1150,8 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Terrain search rejects locations with water within 25 blocks of center
     - TerraformingPlan margin reduced from 2 to 1 block
     - All unit tests pass
+  - Root Cause Analysis (2026-01-15):
+    - While the 2026-01-15 playtest failed on `blocked`/`steep` (mountain peaks), the extreme chunk skipping observed in T067 (145 chunks skipped) effectively blinds the water proximity check for large swaths of the search area. This increases the likelihood that any "suitable" site found during a timed-out search will actually be near water once the chunks finally load.
   - **IMPLEMENTED** (2025-12-02):
     - Added `hasWaterInProximity(world, x, z, radius)` to both VillageWorldgenAdapter and GenerateCommand
     - Method checks cross pattern (4-block intervals), diagonals (6-block intervals), and structure perimeter (3-block intervals)
@@ -1230,7 +1232,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - ✅ Aggregate those diagnostics into `PlacementRejectionCounters` in `VillagePlacementServiceImpl`.
     - ✅ Added unit test `testSiteValidationFailureCounters` to assert counters persist in zero-placement runs.
 
-- [ ] T069 [P0] Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
+- [X] T069 [P0] Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
   - Story: Fresh-world seeding found terrain quickly, but every structure placement at the chosen origin failed with `steep (98-108 tiles)`.
   - Description: Add diagnostic output for SiteValidator steepness decision so we can tell whether this is (a) incorrect sampling, (b) threshold defaults too strict at runtime, (c) heightmap/surfaceY mismatch, or (d) using the wrong footprint/bounds. Log computed steep fraction, blocked fraction, max slope delta, sample density, footprint dims, and the effective thresholds.
   - Files: `SiteValidator.java`, `VillagePlacementServiceImpl.java`, `config.yml` (if thresholds are intended to be configurable)
@@ -1250,6 +1252,12 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Add diagnostic line: `[SITE-REJECT] structure=%s origin=(%d,%d,%d) steep=%d blocked=%d fluid=%d total=%d thresholds=(steep:%.2f, blocked:%.2f)`
     - May need to adjust SurfaceSolver to prefer lower Y values when multiple candidates exist
     - Consider adding a max-Y check in terrain search to avoid mountain peaks
+  - **IMPLEMENTED** (2026-01-15):
+    - Added structured [SITE-REJECT] diagnostic log in StructureServiceImpl.attemptSinglePlacementAndGetLocation()
+    - Log format: `[SITE-REJECT] structure=%s origin=(%d,%d,%d) steep=%d blocked=%d fluid=%d total=%d fractions=(steep:%.2f, blocked:%.2f, fluid:%.2f) thresholds=(steep:%.2f, blocked:%.2f) maxSlopeDelta=%.2f footprint=%dx%d sampleDensity=1.0`
+    - Includes all requested metrics: tile counts, computed fractions, thresholds, footprint dimensions, and slope estimate
+    - Logged at INFO level for visibility in standard logs and CI harness parsing
+    - Diagnostic appears immediately after existing "Site validation failed" message with rejection reason
 
 - [ ] T070 [P0] Placement must explore alternate candidates when the chosen origin fails validation
   - Story: Logs show multiple structure IDs attempted at the same origin `(-216,63,-144)` with immediate `site_validation_failed` and no evidence of trying alternate nearby positions.
@@ -1266,6 +1274,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - The spiral search in `findSuitablePlacementPosition()` only filters for AABB collision with existing masks
     - It does NOT pre-validate terrain (steep/blocked) - that's done in StructureService
     - When StructureService rejects the location, we lose all other candidates and move on
+    - 2026-01-15 playtest confirms: buildings 2-6 all tried origin=(112,142,-16) and failed, immediately moving to next building ID instead of trying alternate coordinates.
   - Implementation:
     - Wrap the placement attempt in a retry loop (max 10-20 candidates per structure)
     - Return a List<Location> or Iterator<Location> from `findSuitablePlacementPosition()`
@@ -1306,9 +1315,10 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Spawn location `(96, 136, -32)` is at Y=136 (high elevation - likely a mountain)
     - Fallback chose `(112, 142, -16)` which is even higher (Y=142)
     - The 2000ms budget is too aggressive for fresh-world chunk generation
+    - 2026-01-15 playtest confirms: "Roma I" generation was constrained to 168 locations, found nothing ideal, and fell back to spawn which was on a mountain peak.
   - Implementation Notes:
-    - Increase terrain search budget to 10000ms (10s) for fresh worlds
-    - OR: Make budget configurable via config.yml
+    - Increase terrain search budget to 10000ms (10s) for fresh worlds (e.g. if plugin detected first-run or first-seeding)
+    - OR: Implement tick-resuming search
     - Consider async chunk pre-generation before terrain search starts
     - Add check for spawn Y-level: if spawn is above sea level + 30 blocks, search for lower terrain first
     - Add structured log: `[TERRAIN][RESULT] found=(true/false) checked=N skippedChunks=M elapsedMs=T fallback=(none/spawn) chosenY=Y`

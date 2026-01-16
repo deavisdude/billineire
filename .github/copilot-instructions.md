@@ -29,6 +29,8 @@ Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 - 001-village-overhaul: Added Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17) + Paper API (or Purpur fork), Geyser + Floodgate, Vault API, LuckPerms API, WorldGuard + FAWE (optional), MythicMobs (optional), Adventure API, Jackson/Gson for JSON
 
 <!-- MANUAL ADDITIONS START -->
+Before beginning a task, consider using any/all of the skills avaialble to you in /.github/skills/. Review relevant skill files for best practices, code patterns, and critical rules related to the task at hand.
+
 When completing tasks, stop and test your work, then return suggestions and a summary to the user. Do not continue to the next task until instructed.
 
 Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a

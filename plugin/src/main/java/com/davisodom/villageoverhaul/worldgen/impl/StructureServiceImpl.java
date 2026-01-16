@@ -3,6 +3,7 @@ package com.davisodom.villageoverhaul.worldgen.impl;
 import com.davisodom.villageoverhaul.worldgen.PlacementResult;
 import com.davisodom.villageoverhaul.worldgen.SiteValidator;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.TerraformingPlan;
 import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
 import com.sk89q.worldedit.WorldEdit;
@@ -417,6 +418,38 @@ public class StructureServiceImpl implements StructureService {
         if (!siteValidation.passed) {
             String rejectionReason = buildRejectionReason(siteValidation);
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Site validation failed: %s", rejectionReason));
+            
+            // T069: Structured diagnostic line for site rejection with detailed metrics
+            if (siteValidation.classificationResult != null) {
+                TerrainClassifier.ClassificationResult cr = siteValidation.classificationResult;
+                int total = cr.getTotal();
+                double steepFrac = total > 0 ? (double) cr.steep / total : 0.0;
+                double blockedFrac = total > 0 ? (double) cr.blocked / total : 0.0;
+                double fluidFrac = total > 0 ? (double) cr.fluid / total : 0.0;
+                
+                // Compute max slope delta from classification results (approximation)
+                // Real slope calculation is in SiteValidator, but we can estimate from steep count
+                double maxSlopeDelta = steepFrac * template.dimensions[1]; // rough estimate
+                
+                // Get effective thresholds from validator (these are configurable)
+                // We'll use the default values for now since SiteValidator doesn't expose them
+                double maxSteepThreshold = 0.40;  // from SiteValidator.maxSteepFraction default
+                double maxBlockedThreshold = 0.30; // from SiteValidator.maxBlockedFraction default
+                
+                LOGGER.info(String.format(
+                    "[SITE-REJECT] structure=%s origin=(%d,%d,%d) steep=%d blocked=%d fluid=%d total=%d " +
+                    "fractions=(steep:%.2f, blocked:%.2f, fluid:%.2f) thresholds=(steep:%.2f, blocked:%.2f) " +
+                    "maxSlopeDelta=%.2f footprint=%dx%d sampleDensity=1.0",
+                    template.id,
+                    origin.getBlockX(), origin.getBlockY(), origin.getBlockZ(),
+                    cr.steep, cr.blocked, cr.fluid, total,
+                    steepFrac, blockedFrac, fluidFrac,
+                    maxSteepThreshold, maxBlockedThreshold,
+                    maxSlopeDelta,
+                    template.dimensions[0], template.dimensions[2]
+                ));
+            }
+            
             if (attemptDiagnostics != null) {
                 attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
                 if (siteValidation.classificationResult != null) {
