@@ -1232,7 +1232,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - ✅ Aggregate those diagnostics into `PlacementRejectionCounters` in `VillagePlacementServiceImpl`.
     - ✅ Added unit test `testSiteValidationFailureCounters` to assert counters persist in zero-placement runs.
 
-- [X] T069 [P0] Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
+- [X] T069 [P0] ✅ Diagnose/fix "ideal terrain" steep false-positives (Paper 1.21.8)
   - Story: Fresh-world seeding found terrain quickly, but every structure placement at the chosen origin failed with `steep (98-108 tiles)`.
   - Description: Add diagnostic output for SiteValidator steepness decision so we can tell whether this is (a) incorrect sampling, (b) threshold defaults too strict at runtime, (c) heightmap/surfaceY mismatch, or (d) using the wrong footprint/bounds. Log computed steep fraction, blocked fraction, max slope delta, sample density, footprint dims, and the effective thresholds.
   - Files: `SiteValidator.java`, `VillagePlacementServiceImpl.java`, `config.yml` (if thresholds are intended to be configurable)

@@ -55,6 +55,9 @@ artifacts/
 .m2/
 .ivy2/
 
+# Temp/scratch directories
+tmp/
+
 # OS
 .DS_Store
 Thumbs.db
