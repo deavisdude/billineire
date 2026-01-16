@@ -25,6 +25,11 @@ village:
 # World Generation (Worldgen) Settings
 # T052a: Non-blocking seeding configuration
 worldgen:
+  spawn:
+    # Initial villager scaling ratio per placed structure
+    # Spawn count = max(1, round(structuresPlaced * villagersPerStructure))
+    # Default: 2
+    villagersPerStructure: 2
   seed:
     # Enable async terrain search and chunk loading
     # When true: Uses time-budgeted chunk loading to prevent main thread blocking

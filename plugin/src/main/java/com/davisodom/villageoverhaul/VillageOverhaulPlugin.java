@@ -20,6 +20,7 @@ import com.davisodom.villageoverhaul.projects.ProjectService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.villages.VillageService;
 import com.davisodom.villageoverhaul.worldgen.VillageWorldgenAdapter;
+import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 import java.util.logging.Logger;
@@ -46,6 +47,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private int minVillageSpacing;
     private int spawnProximityRadius;
     private boolean allowMarkerFallback;
+    private double villagersPerStructure;
     
     // Core services (Phase 2)
     private TickEngine tickEngine;
@@ -84,10 +86,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
         allowMarkerFallback = getConfig().getBoolean("worldgen.allowMarkerFallback", false);
+        villagersPerStructure = getConfig().getDouble("worldgen.spawn.villagersPerStructure", 2.0);
         
         // Configure debug logging if enabled
         getConfig().addDefault("debug.verbose", false);
         getConfig().addDefault("worldgen.allowMarkerFallback", false);
+        getConfig().addDefault("worldgen.spawn.villagersPerStructure", 2.0);
         saveConfig();
         
         boolean verboseLogging = getConfig().getBoolean("debug.verbose", false);
@@ -98,10 +102,25 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         
     logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
                 ", minVillageSpacing=" + minVillageSpacing + 
-                ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback + ")");
+                ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback + 
+                ", villagersPerStructure=" + villagersPerStructure + ")");
         
         // Initialize foundational services
         initializeFoundation();
+
+        try {
+            metadataStore.loadAll();
+            logger.info("OK Village metadata loaded");
+        } catch (Exception e) {
+            logger.warning("Failed to load village metadata: " + e.getMessage());
+        }
+
+        if (customVillagerService != null) {
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                int restored = customVillagerService.restorePersistedVillagers();
+                logger.info("OK Restored " + restored + " persisted villagers");
+            }, 1L);
+        }
         
         // Start the tick engine (must be after all service initialization)
         if (tickEngine != null) {
@@ -119,10 +138,18 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         logger.info("Village Overhaul shutting down...");
+
+        if (metadataStore != null) {
+            try {
+                metadataStore.saveAll();
+            } catch (Exception e) {
+                logger.warning("Failed to save village metadata: " + e.getMessage());
+            }
+        }
         
         // Despawn all custom villagers
         if (customVillagerService != null) {
-            customVillagerService.despawnAll();
+            customVillagerService.despawnAll(true);
         }
         
         // T066: Stop generation queue
@@ -139,7 +166,6 @@ public class VillageOverhaulPlugin extends JavaPlugin {
             adminServer.stop();
         }
         
-        // TODO: Save all state via JsonStore
         
         logger.info("Village Overhaul disabled.");
     }
@@ -190,7 +216,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     logger.info("OK Upgrade executor initialized");
         
         // Custom villager service (Phase 2.6)
-    customVillagerService = new CustomVillagerService(this, logger, metrics);
+    customVillagerService = new CustomVillagerService(this, logger, metrics, metadataStore);
     logger.info("OK Custom villager service initialized");
         
         // Villager appearance adapter (Phase 2.6)
@@ -341,5 +367,9 @@ public class VillageOverhaulPlugin extends JavaPlugin {
      */
     public int getSpawnProximityRadius() {
         return spawnProximityRadius;
+    }
+
+    public double getVillagersPerStructure() {
+        return villagersPerStructure;
     }
 }

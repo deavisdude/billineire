@@ -34,6 +34,7 @@ public class VillageMetadataStore {
     private final Map<UUID, List<Building>> villageBuildings = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> mainBuildings = new ConcurrentHashMap<>(); // villageId -> mainBuildingId
     private final Map<UUID, PathNetwork> pathNetworks = new ConcurrentHashMap<>();
+    private final Map<UUID, List<VillagerRecord>> villageVillagers = new ConcurrentHashMap<>();
     
     // R001: PlacementReceipt storage (villageId -> list of receipts)
     private final Map<UUID, List<com.davisodom.villageoverhaul.model.PlacementReceipt>> placementReceipts = new ConcurrentHashMap<>();
@@ -65,6 +66,7 @@ public class VillageMetadataStore {
         VillageMetadata metadata = new VillageMetadata(villageId, cultureId, origin, seed, System.currentTimeMillis());
         villages.put(villageId, metadata);
         villageBuildings.put(villageId, new ArrayList<>());
+        villageVillagers.putIfAbsent(villageId, new ArrayList<>());
         logger.info(String.format("[STRUCT] Registered village %s (culture: %s) at %s", 
             villageId, cultureId, formatLocation(origin)));
 
@@ -98,6 +100,54 @@ public class VillageMetadataStore {
      */
     public List<Building> getVillageBuildings(UUID villageId) {
         return new ArrayList<>(villageBuildings.getOrDefault(villageId, Collections.emptyList()));
+    }
+
+    /**
+     * Record a spawned villager for persistence.
+     */
+    public void addVillagerRecord(VillagerRecord record) {
+        if (record == null || record.villageId == null) return;
+        villageVillagers.computeIfAbsent(record.villageId, k -> new ArrayList<>()).add(record);
+    }
+
+    /**
+     * Remove a villager record by entity ID.
+     */
+    public void removeVillagerRecord(UUID villageId, UUID entityId) {
+        if (villageId == null || entityId == null) return;
+        List<VillagerRecord> records = villageVillagers.get(villageId);
+        if (records == null) return;
+        records.removeIf(r -> entityId.toString().equals(r.entityId));
+    }
+
+    /**
+     * Remove a villager record by definition and location (fallback for missing entity IDs).
+     */
+    public void removeVillagerRecord(UUID villageId, String definitionId, String professionId, int x, int y, int z) {
+        if (villageId == null) return;
+        List<VillagerRecord> records = villageVillagers.get(villageId);
+        if (records == null) return;
+        records.removeIf(r -> Objects.equals(definitionId, r.definitionId)
+            && Objects.equals(professionId, r.professionId)
+            && r.x == x && r.y == y && r.z == z);
+    }
+
+    /**
+     * Get all villager records for a village.
+     */
+    public List<VillagerRecord> getVillagerRecords(UUID villageId) {
+        return new ArrayList<>(villageVillagers.getOrDefault(villageId, Collections.emptyList()));
+    }
+
+    /**
+     * Get all villager records across villages.
+     */
+    public List<VillagerRecord> getAllVillagerRecords() {
+        List<VillagerRecord> all = new ArrayList<>();
+        for (List<VillagerRecord> records : villageVillagers.values()) {
+            all.addAll(records);
+        }
+        return all;
     }
     
     /**
@@ -249,6 +299,7 @@ public class VillageMetadataStore {
             villageBuildings.remove(villageId);
             mainBuildings.remove(villageId);
             pathNetworks.remove(villageId);
+            villageVillagers.remove(villageId);
             logger.info(String.format("[STRUCT] Removed village %s", villageId));
             return true;
         }
@@ -317,6 +368,10 @@ public class VillageMetadataStore {
             if (placementRejectionCounters.containsKey(villageId)) {
                 PlacementRejectionCounters counters = placementRejectionCounters.get(villageId);
                 dto.placementRejectionCounters = counters;
+            }
+
+            if (villageVillagers.containsKey(villageId)) {
+                dto.villagerRecords = new ArrayList<>(villageVillagers.get(villageId));
             }
             
             // Save to individual village file
@@ -417,6 +472,10 @@ public class VillageMetadataStore {
                     placementRejectionCounters.put(villageId, dto.placementRejectionCounters);
                     logger.fine(String.format("[STRUCT][DIAG] Restored placement rejection counters for village %s", villageId));
                 }
+
+                if (dto.villagerRecords != null) {
+                    villageVillagers.put(villageId, new ArrayList<>(dto.villagerRecords));
+                }
                 
                 loadedCount++;
                 
@@ -437,6 +496,7 @@ public class VillageMetadataStore {
         villageBuildings.clear();
         mainBuildings.clear();
         pathNetworks.clear();
+        villageVillagers.clear();
         placementReceipts.clear(); // R001
         volumeMasks.clear(); // R002
         lastPlacementFailureSummary.clear(); // T026d11
@@ -766,6 +826,7 @@ public class VillageMetadataStore {
         public List<PlacementReceiptDTO> placementReceipts; // R001: Nullable, added for ground-truth persistence
         public List<VolumeMaskDTO> volumeMasks; // R002: Nullable, added for verified 3D volume persistence
         public PlacementRejectionCounters placementRejectionCounters; // T026d12: per-run rejection counters
+        public List<VillagerRecord> villagerRecords; // T074: persisted villagers
         
         public VillageDataDTO() {} // For Jackson
     }
@@ -819,6 +880,38 @@ public class VillageMetadataStore {
             this.maxX = maxX;
             this.minZ = minZ;
             this.maxZ = maxZ;
+        }
+    }
+
+    /**
+     * T074: Persisted villager record.
+     */
+    public static class VillagerRecord {
+        public String entityId;
+        public UUID villageId;
+        public String definitionId;
+        public String cultureId;
+        public String professionId;
+        public String worldName;
+        public int x;
+        public int y;
+        public int z;
+        public long createdTimestamp;
+
+        public VillagerRecord() {} // For Jackson
+
+        public VillagerRecord(String entityId, UUID villageId, String definitionId, String cultureId,
+                              String professionId, String worldName, int x, int y, int z, long createdTimestamp) {
+            this.entityId = entityId;
+            this.villageId = villageId;
+            this.definitionId = definitionId;
+            this.cultureId = cultureId;
+            this.professionId = professionId;
+            this.worldName = worldName;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.createdTimestamp = createdTimestamp;
         }
     }
     

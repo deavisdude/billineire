@@ -1,6 +1,7 @@
 package com.davisodom.villageoverhaul.npc;
 
 import com.davisodom.villageoverhaul.obs.Metrics;
+import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -32,18 +33,24 @@ public class CustomVillagerService {
     private final Plugin plugin;
     private final Logger logger;
     private final Metrics metrics;
+    private final VillageMetadataStore metadataStore;
     private final Map<UUID, CustomVillager> villagersByEntityId;
     private final Map<UUID, List<CustomVillager>> villagersByVillageId;
     private final int maxVillagersPerVillage;
     
     public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics) {
-        this(plugin, logger, metrics, 10);
+        this(plugin, logger, metrics, null, 10);
     }
-    
-    public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, int maxPerVillage) {
+
+    public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, VillageMetadataStore metadataStore) {
+        this(plugin, logger, metrics, metadataStore, 10);
+    }
+
+    public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, VillageMetadataStore metadataStore, int maxPerVillage) {
         this.plugin = plugin;
         this.logger = logger;
         this.metrics = metrics;
+        this.metadataStore = metadataStore;
         this.villagersByEntityId = new ConcurrentHashMap<>();
         this.villagersByVillageId = new ConcurrentHashMap<>();
         this.maxVillagersPerVillage = maxPerVillage;
@@ -64,19 +71,25 @@ public class CustomVillagerService {
     public CustomVillager spawnVillager(String definitionId, String cultureId, 
                                         String professionId, UUID villageId, 
                                         Location location) {
+        return spawnVillagerInternal(definitionId, cultureId, professionId, villageId, location, true);
+    }
+
+    private CustomVillager spawnVillagerInternal(String definitionId, String cultureId,
+                                                 String professionId, UUID villageId,
+                                                 Location location, boolean persist) {
         // Check village cap
         List<CustomVillager> existing = villagersByVillageId.getOrDefault(villageId, new ArrayList<>());
         if (existing.size() >= maxVillagersPerVillage) {
-            logger.warning("Cannot spawn " + definitionId + " at village " + villageId + 
+            logger.warning("Cannot spawn " + definitionId + " at village " + villageId +
                           ": cap reached (" + maxVillagersPerVillage + ")");
             return null;
         }
-        
+
         // Spawn entity (default to VILLAGER for now; appearance adapter will customize)
         Entity entity = location.getWorld().spawnEntity(location, EntityType.VILLAGER);
         entity.setCustomNameVisible(true);
         entity.setPersistent(true);
-        
+
         // Create CustomVillager wrapper
         CustomVillager villager = new CustomVillager(
             entity.getUniqueId(),
@@ -86,18 +99,33 @@ public class CustomVillagerService {
             villageId,
             location
         );
-        
+
         // Register
         villagersByEntityId.put(entity.getUniqueId(), villager);
         villagersByVillageId.computeIfAbsent(villageId, k -> new ArrayList<>()).add(villager);
-        
+
         // Metrics
         metrics.increment("npc.spawns");
         metrics.increment("npc.count.total");
-        
-        logger.info("Spawned custom villager " + definitionId + " (entity: " + entity.getUniqueId() + 
+
+        if (persist && metadataStore != null) {
+            metadataStore.addVillagerRecord(new VillageMetadataStore.VillagerRecord(
+                entity.getUniqueId().toString(),
+                villageId,
+                definitionId,
+                cultureId,
+                professionId,
+                location.getWorld().getName(),
+                location.getBlockX(),
+                location.getBlockY(),
+                location.getBlockZ(),
+                System.currentTimeMillis()
+            ));
+        }
+
+        logger.info("Spawned custom villager " + definitionId + " (entity: " + entity.getUniqueId() +
                    ", village: " + villageId + ")");
-        
+
         return villager;
     }
     
@@ -108,6 +136,10 @@ public class CustomVillagerService {
      * @return true if despawned, false if not found
      */
     public boolean despawnVillager(UUID entityId) {
+        return despawnVillagerInternal(entityId, true);
+    }
+
+    private boolean despawnVillagerInternal(UUID entityId, boolean removeRecord) {
         CustomVillager villager = villagersByEntityId.remove(entityId);
         if (villager == null) {
             return false;
@@ -119,6 +151,10 @@ public class CustomVillagerService {
             villageList.removeIf(v -> v.getEntityId().equals(entityId));
         }
         
+        if (removeRecord && metadataStore != null) {
+            metadataStore.removeVillagerRecord(villager.getVillageId(), entityId);
+        }
+
         // Remove entity from world
         Entity entity = plugin.getServer().getEntity(entityId);
         if (entity != null) {
@@ -188,10 +224,10 @@ public class CustomVillagerService {
     /**
      * Despawn all custom villagers (e.g., on plugin disable)
      */
-    public void despawnAll() {
+    public void despawnAll(boolean preserveRecords) {
         List<UUID> entityIds = new ArrayList<>(villagersByEntityId.keySet());
         for (UUID entityId : entityIds) {
-            despawnVillager(entityId);
+            despawnVillagerInternal(entityId, !preserveRecords);
         }
         logger.info("Despawned all custom villagers (" + entityIds.size() + ")");
     }
@@ -203,6 +239,69 @@ public class CustomVillagerService {
      */
     public int getActiveVillagerCount() {
         return villagersByEntityId.size();
+    }
+
+    /**
+     * Restore persisted villagers from metadata store.
+     *
+     * @return number of villagers restored
+     */
+    public int restorePersistedVillagers() {
+        if (metadataStore == null) {
+            return 0;
+        }
+
+        int restored = 0;
+        for (VillageMetadataStore.VillagerRecord record : metadataStore.getAllVillagerRecords()) {
+            if (record == null || record.villageId == null) {
+                continue;
+            }
+
+            org.bukkit.World world = plugin.getServer().getWorld(record.worldName);
+            if (world == null) {
+                continue;
+            }
+
+            Location location = new Location(world, record.x + 0.5, record.y, record.z + 0.5);
+            CustomVillager villager = spawnVillagerInternal(
+                record.definitionId,
+                record.cultureId,
+                record.professionId,
+                record.villageId,
+                location,
+                false
+            );
+
+            if (villager != null) {
+                if (record.entityId != null) {
+                    try {
+                        metadataStore.removeVillagerRecord(record.villageId, UUID.fromString(record.entityId));
+                    } catch (IllegalArgumentException ignored) {
+                        metadataStore.removeVillagerRecord(record.villageId, record.definitionId, record.professionId,
+                            record.x, record.y, record.z);
+                    }
+                } else {
+                    metadataStore.removeVillagerRecord(record.villageId, record.definitionId, record.professionId,
+                        record.x, record.y, record.z);
+                }
+
+                metadataStore.addVillagerRecord(new VillageMetadataStore.VillagerRecord(
+                    villager.getEntityId().toString(),
+                    record.villageId,
+                    record.definitionId,
+                    record.cultureId,
+                    record.professionId,
+                    record.worldName,
+                    record.x,
+                    record.y,
+                    record.z,
+                    record.createdTimestamp
+                ));
+                restored++;
+            }
+        }
+
+        return restored;
     }
     
     /**

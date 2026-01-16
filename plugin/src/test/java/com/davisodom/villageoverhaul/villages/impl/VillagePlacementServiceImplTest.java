@@ -23,7 +23,11 @@ import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import org.bukkit.block.Block;
 import org.bukkit.Material;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import com.davisodom.villageoverhaul.model.PlacementReceipt;
+import com.davisodom.villageoverhaul.npc.CustomVillagerService;
+import com.davisodom.villageoverhaul.obs.Metrics;
 
 public class VillagePlacementServiceImplTest {
 
@@ -128,6 +132,151 @@ public class VillagePlacementServiceImplTest {
         assertNotEquals(expected, differentOrigin, "Different origin should produce different village UUID");
     }
 
+    @Test
+    @DisplayName("T074 - initial villager spawn count scales with structures")
+    public void testInitialVillagerSpawnCount() {
+        assertEquals(10, VillagePlacementServiceImpl.computeInitialVillagerCount(5, 2.0),
+            "Five structures at 2 should equal ten villagers");
+        assertEquals(1, VillagePlacementServiceImpl.computeInitialVillagerCount(0, 2.0),
+            "Zero structures still yields the minimum count");
+        assertEquals(4, VillagePlacementServiceImpl.computeInitialVillagerCount(5, 0.75),
+            "Custom ratio should be respected");
+    }
+
+    @Test
+    @DisplayName("T074 - placeVillage spawns initial villagers on success")
+    public void testPlaceVillageSpawnsInitialVillagers() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+        Metrics metrics = new Metrics(plugin.getLogger());
+        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", structures, null)));
+
+        Mockito.when(mockStructure.getStructureDimensions("house")).thenReturn(Optional.of(new int[]{3,3,3}));
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(63);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block ground = Mockito.mock(Block.class);
+        Mockito.when(ground.getType()).thenReturn(Material.DIRT);
+        Block air = Mockito.mock(Block.class);
+        Mockito.when(air.getType()).thenReturn(Material.AIR);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()))
+            .thenAnswer(inv -> {
+                int y = inv.getArgument(1);
+                return y == 63 ? ground : air;
+            });
+
+        Entity entity = Mockito.mock(Entity.class);
+        Mockito.when(entity.getUniqueId()).thenReturn(UUID.randomUUID());
+        Mockito.when(world.spawnEntity(Mockito.any(Location.class), Mockito.eq(EntityType.VILLAGER)))
+            .thenReturn(entity);
+
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world),
+                Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
+                Mockito.anyInt(), Mockito.anyMap()))
+            .thenAnswer(inv -> {
+                String sid = inv.getArgument(0);
+                UUID vid = inv.getArgument(4);
+                int w = 3, h = 3, d = 3;
+                int ox = 0;
+                int oz = 0;
+                PlacementReceipt receipt = new PlacementReceipt.Builder()
+                    .structureId(sid)
+                    .villageId(vid)
+                    .world(world)
+                    .origin(ox, 64, oz)
+                    .rotation(0)
+                    .bounds(ox, ox + w - 1, 64, 64 + h - 1, oz, oz + d - 1)
+                    .dimensions(w, h, d)
+                    .entrance(ox, 63, oz + 1)
+                    .foundationCorners(new PlacementReceipt.CornerSample[]{
+                        new PlacementReceipt.CornerSample(ox, 63, oz, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox + w - 1, 63, oz, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox + w - 1, 63, oz + d - 1, Material.DIRT),
+                        new PlacementReceipt.CornerSample(ox, 63, oz + d - 1, Material.DIRT)
+                    })
+                    .build();
+                return Optional.of(receipt);
+            });
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(
+            mockStructure, store, cs, npcService, null, 0.5);
+        Location origin = new Location(world, 0, 64, 0);
+
+        Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
+        assertTrue(villageOpt.isPresent(), "Village placement should succeed");
+        assertEquals(1, npcService.getVillagerCount(villageOpt.get()),
+            "Initial villagers should spawn for successful placement");
+        assertEquals(1, store.getVillagerRecords(villageOpt.get()).size(),
+            "Villager record should be persisted on spawn");
+    }
+
+    @Test
+    @DisplayName("T074 - zero-placement does not spawn villagers")
+    public void testZeroPlacementDoesNotSpawnVillagers() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+        Metrics metrics = new Metrics(plugin.getLogger());
+        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        List<String> structures = Arrays.asList("house");
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", structures, null)));
+
+        Mockito.when(mockStructure.getStructureDimensions("house")).thenReturn(Optional.of(new int[]{3,3,3}));
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.any(World.class),
+                Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
+                Mockito.anyInt(), Mockito.anyMap()))
+            .thenReturn(Optional.empty());
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(63);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block ground = Mockito.mock(Block.class);
+        Mockito.when(ground.getType()).thenReturn(Material.DIRT);
+        Block air = Mockito.mock(Block.class);
+        Mockito.when(air.getType()).thenReturn(Material.AIR);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()))
+            .thenAnswer(inv -> {
+                int y = inv.getArgument(1);
+                return y == 63 ? ground : air;
+            });
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(
+            mockStructure, store, cs, npcService, null, 0.5);
+        Location origin = new Location(world, 0, 64, 0);
+
+        Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
+        assertFalse(villageOpt.isPresent(), "Village placement should fail with zero placements");
+        assertEquals(0, npcService.getActiveVillagerCount(), "No villagers should spawn on failure");
+    }
+
         @Test
         @DisplayName("placeVillage places multiple structures and avoids overlaps")
         public void testPlaceVillagePlacesMultipleBuildings_NoOverlap() throws Exception {
@@ -150,7 +299,12 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
-        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt()))
+            .thenAnswer(inv -> {
+                int cx = inv.getArgument(0);
+                int cz = inv.getArgument(1);
+                return Math.abs(cx) <= 1 && Math.abs(cz) <= 1;
+            });
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
         Mockito.when(world.getMinHeight()).thenReturn(0);
         Mockito.when(world.getMaxHeight()).thenReturn(256);

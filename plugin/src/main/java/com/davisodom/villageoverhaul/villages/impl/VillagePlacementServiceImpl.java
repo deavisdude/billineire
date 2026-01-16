@@ -4,6 +4,9 @@ import com.davisodom.villageoverhaul.cultures.CultureService;
 import com.davisodom.villageoverhaul.model.Building;
 import com.davisodom.villageoverhaul.model.PlacementReceipt;
 import com.davisodom.villageoverhaul.model.VolumeMask;
+import com.davisodom.villageoverhaul.npc.CustomVillagerService;
+import com.davisodom.villageoverhaul.npc.VillagerAppearanceAdapter;
+import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.villages.VillagePlacementService;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
@@ -39,10 +42,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     // Default minimum spacing between villages (border-to-border, blocks)
     private static final int DEFAULT_VILLAGE_SPACING = 200;
+
+    // Default villagers per structure ratio
+    private static final double DEFAULT_VILLAGERS_PER_STRUCTURE = 2.0;
+    private static final int MIN_INITIAL_VILLAGERS = 1;
     
     // Configured spacing values (loaded from plugin config)
     private final int minBuildingSpacing;
     private final int minVillageSpacing;
+    private final double villagersPerStructure;
     
     // Structure service for building placement
     private final StructureService structureService;
@@ -58,6 +66,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     // Culture service for structure selection
     private final CultureService cultureService;
+
+    // Optional NPC services for initial villager spawns
+    private final CustomVillagerService customVillagerService;
+    private final VillagerAppearanceAdapter villagerAppearanceAdapter;
     
     // Main building selector
     private final MainBuildingSelector mainBuildingSelector;
@@ -93,6 +105,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         public int getPlacedBuildings() { return placedBuildings; }
         public int getTotalStructures() { return totalStructures; }
     }
+
+    /**
+     * Compute initial villager spawn count based on structures placed.
+     */
+    public static int computeInitialVillagerCount(int structureCount, double villagersPerStructure) {
+        int computed = (int) Math.round(structureCount * villagersPerStructure);
+        return Math.max(MIN_INITIAL_VILLAGERS, computed);
+    }
     
     /**
      * Constructor for testing without plugin reference (uses procedural structures).
@@ -106,6 +126,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.villagersPerStructure = DEFAULT_VILLAGERS_PER_STRUCTURE;
+        this.customVillagerService = null;
+        this.villagerAppearanceAdapter = null;
     }
     
     /**
@@ -125,6 +148,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Load spacing from plugin config
         this.minBuildingSpacing = plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
         this.minVillageSpacing = plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
+        this.villagersPerStructure = plugin.getConfig().getDouble("worldgen.spawn.villagersPerStructure", DEFAULT_VILLAGERS_PER_STRUCTURE);
+        VillageOverhaulPlugin voPlugin = plugin instanceof VillageOverhaulPlugin ? (VillageOverhaulPlugin) plugin : null;
+        this.customVillagerService = voPlugin != null ? voPlugin.getCustomVillagerService() : null;
+        this.villagerAppearanceAdapter = voPlugin != null ? voPlugin.getVillagerAppearanceAdapter() : null;
     }
     
     /**
@@ -139,6 +166,29 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.villagersPerStructure = DEFAULT_VILLAGERS_PER_STRUCTURE;
+        this.customVillagerService = null;
+        this.villagerAppearanceAdapter = null;
+    }
+
+    /**
+     * Constructor with custom structure and villager services (for testing).
+     */
+    public VillagePlacementServiceImpl(StructureService structureService, VillageMetadataStore metadataStore,
+                                       CultureService cultureService, CustomVillagerService customVillagerService,
+                                       VillagerAppearanceAdapter villagerAppearanceAdapter,
+                                       double villagersPerStructure) {
+        this.structureService = structureService;
+        this.pathService = new PathServiceImpl(metadataStore);
+        this.pathEmitter = new PathEmitter();
+        this.metadataStore = metadataStore;
+        this.cultureService = cultureService;
+        this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
+        this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
+        this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.villagersPerStructure = villagersPerStructure;
+        this.customVillagerService = customVillagerService;
+        this.villagerAppearanceAdapter = villagerAppearanceAdapter;
     }
     
     @Override
@@ -417,6 +467,19 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         if (mainBuildingId.isPresent()) {
             metadataStore.setMainBuilding(villageId, mainBuildingId.get());
         }
+
+        int spawnedVillagers = spawnInitialVillagers(
+            world,
+            villageId,
+            cultureId,
+            origin,
+            placedBuildings.size(),
+            placementSeed,
+            surfaceSolver
+        );
+
+        LOGGER.info(String.format("[VILLAGE] spawnedVillagers=%d village=%s structures=%d",
+            spawnedVillagers, villageId, placedBuildings.size()));
         
         if (placedBuildings.size() > 1) {
             List<Location> buildingEntrances = new ArrayList<>();
@@ -490,6 +553,101 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
         
         return Optional.of(villageId);
+    }
+
+    private int spawnInitialVillagers(World world, UUID villageId, String cultureId, Location origin,
+                                      int structuresPlaced, long placementSeed, SurfaceSolver surfaceSolver) {
+        if (structuresPlaced <= 0) {
+            return 0;
+        }
+        if (customVillagerService == null) {
+            return 0;
+        }
+
+        int targetCount = computeInitialVillagerCount(structuresPlaced, villagersPerStructure);
+        List<String> professions = getDefaultProfessions();
+
+        Random random = new Random(placementSeed ^ villageId.getLeastSignificantBits());
+        int spawned = 0;
+        int attempts = 0;
+        int maxAttempts = Math.max(8, targetCount * 8);
+        int centerX = origin.getBlockX();
+        int centerY = origin.getBlockY();
+        int centerZ = origin.getBlockZ();
+
+        while (spawned < targetCount && attempts < maxAttempts) {
+            attempts++;
+
+            int dx = random.nextInt(15) - 7;
+            int dz = random.nextInt(15) - 7;
+            if (dx == 0 && dz == 0) {
+                continue;
+            }
+
+            int x = centerX + dx;
+            int z = centerZ + dz;
+
+            OptionalInt yOpt = surfaceSolver.nearestWalkable(x, z, centerY);
+            if (!yOpt.isPresent()) {
+                continue;
+            }
+
+            int y = yOpt.getAsInt();
+            if (!isSafeSpawnLocation(world, x, y, z)) {
+                continue;
+            }
+
+            String profession = professions.get(spawned % professions.size());
+            String definitionId = cultureId + "_" + profession;
+
+            Location spawnLoc = new Location(world, x + 0.5, y, z + 0.5);
+            var customVillager = customVillagerService.spawnVillager(
+                definitionId,
+                cultureId,
+                profession,
+                villageId,
+                spawnLoc
+            );
+
+            if (customVillager != null) {
+                spawned++;
+                if (villagerAppearanceAdapter != null) {
+                    org.bukkit.entity.Entity entity = world.getEntity(customVillager.getEntityId());
+                    if (entity != null) {
+                        villagerAppearanceAdapter.applyAppearance(entity, definitionId);
+                    }
+                }
+            }
+        }
+
+        return spawned;
+    }
+
+    private List<String> getDefaultProfessions() {
+        return Arrays.asList("merchant", "blacksmith", "elder");
+    }
+
+    private boolean isSafeSpawnLocation(World world, int x, int y, int z) {
+        Block ground = world.getBlockAt(x, y - 1, z);
+        Block body = world.getBlockAt(x, y, z);
+
+        Material groundType = ground.getType();
+        Material bodyType = body.getType();
+
+        if (!groundType.isSolid()) {
+            return false;
+        }
+        if (isFluid(groundType)) {
+            return false;
+        }
+        if (bodyType.isSolid()) {
+            return false;
+        }
+        return !isFluid(bodyType);
+    }
+
+    private boolean isFluid(Material type) {
+        return type == Material.WATER || type == Material.LAVA;
     }
 
     /**
@@ -882,6 +1040,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
+
+        // R011b: Determine rotation deterministically from building seed
+        int rotation = new Random(buildingSeed).nextInt(4) * 90; // 0, 90, 180, or 270
         
         // Spiral search pattern: start at origin, expand outward
         for (int radius = 0; radius <= maxRadius; radius += gridSize) {
@@ -910,9 +1071,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         continue; // Skip this candidate - chunk not ready
                     }
                     
-                    // R009: Use SurfaceSolver to find ground level
-                    // This finds the highest solid block NOT inside any existing mask
-                    int candidateY = surfaceSolver.getSurfaceHeight(candidateX, candidateZ);
+                    // R009: Use SurfaceSolver to find footprint-aware ground level
+                    // Compute the minimum surface height under the rotated footprint
+                    int[] xzBounds = computeRotatedXZBounds(candidateX, candidateZ, width, depth, rotation);
+                    int baseY = computeFootprintBaseY(surfaceSolver, xzBounds[0], xzBounds[1], xzBounds[2], xzBounds[3]);
+                    int candidateY = baseY + 1;
                     
                     // Calculate distance from origin for sorting
                     int distanceSquared = dx * dx + dz * dz;
@@ -942,10 +1105,6 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // Tertiary: Z coordinate (final tie-breaker)
             return Integer.compare(a.z, b.z);
         });
-        
-        // R011b: Determine rotation deterministically from building seed
-        Random rotRandom = new Random(buildingSeed);
-        int rotation = rotRandom.nextInt(4) * 90; // 0, 90, 180, or 270
         
         // T070: Collect all collision-free candidates instead of returning first one
         List<CandidateSite> validCandidates = new ArrayList<>();
@@ -1101,6 +1260,102 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         int maxZ = originZ + maxRotZ - 1;
         
         return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+    }
+
+    /**
+     * Compute rotated XZ bounds for a footprint without requiring a specific Y.
+     *
+     * @param originX Origin X
+     * @param originZ Origin Z
+     * @param baseWidth Base structure width (X, before rotation)
+     * @param baseDepth Base structure depth (Z, before rotation)
+     * @param rotation Rotation in degrees (0, 90, 180, or 270)
+     * @return int[] {minX, maxX, minZ, maxZ}
+     */
+    private int[] computeRotatedXZBounds(int originX, int originZ, int baseWidth, int baseDepth, int rotation) {
+        int[][] corners = new int[4][2];
+        int idx = 0;
+        for (int x : new int[]{0, baseWidth}) {
+            for (int z : new int[]{0, baseDepth}) {
+                corners[idx][0] = x;
+                corners[idx][1] = z;
+                idx++;
+            }
+        }
+
+        int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
+        int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
+
+        for (int i = 0; i < corners.length; i++) {
+            int x = corners[i][0];
+            int z = corners[i][1];
+            int rotX = 0;
+            int rotZ = 0;
+
+            switch (rotation) {
+                case 0:
+                    rotX = x;
+                    rotZ = z;
+                    break;
+                case 90:
+                    rotX = -z;
+                    rotZ = x;
+                    break;
+                case 180:
+                    rotX = -x;
+                    rotZ = -z;
+                    break;
+                case 270:
+                    rotX = z;
+                    rotZ = -x;
+                    break;
+            }
+
+            minRotX = Math.min(minRotX, rotX);
+            maxRotX = Math.max(maxRotX, rotX);
+            minRotZ = Math.min(minRotZ, rotZ);
+            maxRotZ = Math.max(maxRotZ, rotZ);
+        }
+
+        int minX = originX + minRotX;
+        int maxX = originX + maxRotX - 1;
+        int minZ = originZ + minRotZ;
+        int maxZ = originZ + maxRotZ - 1;
+
+        return new int[]{minX, maxX, minZ, maxZ};
+    }
+
+    /**
+     * Compute the minimum surface height across a footprint bounds in XZ.
+     * Samples corners and a grid of intermediate points to balance accuracy and performance.
+     */
+    private int computeFootprintBaseY(SurfaceSolver surfaceSolver, int minX, int maxX, int minZ, int maxZ) {
+        int minY = Integer.MAX_VALUE;
+        
+        // Sample corners
+        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, minZ));
+        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, minZ));
+        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, maxZ));
+        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, maxZ));
+        
+        // Sample a 3x3 grid of intermediate points for larger footprints
+        int width = maxX - minX;
+        int depth = maxZ - minZ;
+        if (width > 2 || depth > 2) {
+            int midX = minX + width / 2;
+            int midZ = minZ + depth / 2;
+            
+            // Sample midpoints along edges
+            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, minZ));
+            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, midZ));
+            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, maxZ));
+            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, midZ));
+            
+            // Sample center
+            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, midZ));
+        }
+
+        return minY == Integer.MAX_VALUE ? surfaceSolver.getSurfaceHeight(minX, minZ) : minY;
     }
     
     /**

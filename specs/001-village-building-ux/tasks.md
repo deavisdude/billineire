@@ -1380,17 +1380,22 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Small surface water pockets are filled and do not block placement
     - Large water bodies and lava still reject placement
 
- - [ ] T074 [P1] Ensure villages spawn with initial villagers scaled to structures
+ - [X] T074 [P1] Ensure villages spawn with initial villagers scaled to structures
    - Story: Every village should start with some villagers so players have immediate interactivity; the number of villagers should scale with the number of structures generated for that village.
    - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/CustomVillagerService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/CustomVillagerServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`
    - Description: After a village is placed (structures persisted and receipts committed), spawn an initial set of villagers near the village center. The spawn count should be computed from the number of successfully placed structures using a configurable ratio (default `worldgen.spawn.villagersPerStructure = 2`) with a minimum of 1 villager. Villagers must be assigned culture-appropriate professions, persisted via the metadata store, and spawned at safe walkable locations (avoid water/unsafe blocks). The implementation should expose the spawn policy as a small, testable helper and emit a structured log entry for instrumentation.
    - Acceptance:
      - **Minimum:** Every generated village spawns at least 1 villager after successful placement.
-     - **Scaling:** For N structures placed, default spawn count = max(1, round(N * 0.5)). This ratio must be configurable and covered by unit tests.
+     - **Scaling:** For N structures placed, default spawn count = max(1, round(N * 2)). This ratio must be configurable and covered by unit tests.
      - **Persistence:** Spawned villagers are persisted in `VillageMetadataStore` (or equivalent) and survive server restarts in headless tests.
      - **Safety:** Villager spawn positions are validated to be walkable (use `SurfaceSolver.nearestWalkable`) and avoid fluid/unsafe tiles.
      - **Diagnostics:** Placement flow logs a structured line: `[VILLAGE] spawnedVillagers=%d village=%s structures=%d` on success.
      - **Tests:** Add unit tests asserting spawn counts and integration test verifying villagers appear after `/vo generate` (mocked/fake world) and that marker-only fallback villages do not spawn villagers when `worldgen.allowMarkerFallback=false`.
+    - **IMPLEMENTED** (2026-01-16):
+      - Added configurable `worldgen.spawn.villagersPerStructure` (default 2) and spawn policy helper.
+      - Spawned initial villagers after successful placement with safe SurfaceSolver walkable checks.
+      - Persisted villager records in VillageMetadataStore and restored on startup.
+      - Added unit tests for spawn count and villager persistence/restore.
 
  - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.
