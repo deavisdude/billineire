@@ -34,6 +34,10 @@ public class TerraformingPlan {
     private static final int MAX_SMALL_WATER_PATCH_VOLUME = 27; // <= 3x3x3
     private static final int MAX_SMALL_WATER_PATCH_DEPTH = 3;
     private static final int WATER_PATCH_MARGIN = 1;
+    private static final double MAX_PRECOMMIT_MISMATCH_RATIO = 0.10;
+    private static final int MIN_PRECOMMIT_MISMATCH_ABORT = 10;
+    private static final double MAX_SKIP_RATIO_ABORT = 0.15;
+    private static final int MIN_SKIPPED_FOR_ABORT = 10;
     
     // T057: Tolerance buffer for limit checks (allows small overages)
     // This prevents rejection for being just 1-2 blocks over limit
@@ -48,6 +52,8 @@ public class TerraformingPlan {
     
     // Planned operations (not yet committed)
     private final List<BlockOperation> plannedOperations = new ArrayList<>();
+    private final Map<String, BlockOperation> plannedOperationsByKey = new HashMap<>();
+    private static final Map<Long, Object> CHUNK_LOCKS = new java.util.concurrent.ConcurrentHashMap<>();
     
     // T058: Applied operations tracking for rollback support
     private final List<AppliedOperation> appliedOperations = new ArrayList<>();
@@ -57,6 +63,7 @@ public class TerraformingPlan {
     private boolean committed = false;
     private boolean planSucceeded = false;
     private boolean rolledBack = false;
+    private boolean planFailed = false;
     private String rejectionReason = null;
     
     // T058: Commit diagnostics
@@ -213,9 +220,17 @@ public class TerraformingPlan {
             planSucceeded = false;
             return false;
         }
+        if (planFailed) {
+            planSucceeded = false;
+            return false;
+        }
         
         // Step 1: Plan vegetation trimming
         planVegetationTrimming();
+        if (planFailed) {
+            planSucceeded = false;
+            return false;
+        }
         
         int targetY = origin.getBlockY();
         
@@ -237,6 +252,10 @@ public class TerraformingPlan {
                 planSucceeded = false;
                 return false;
             }
+            if (planFailed) {
+                planSucceeded = false;
+                return false;
+            }
             
             // Step 3: Plan gap filling (independent budget)
             int fillResult = planGapFilling(targetY, fillBudget);
@@ -245,7 +264,13 @@ public class TerraformingPlan {
                 planSucceeded = false;
                 return false;
             }
+            if (planFailed) {
+                planSucceeded = false;
+                return false;
+            }
         }
+
+        normalizeTopLayerMaterials(origin.getBlockY());
         
         int totalPlanned = trimCount + gradeCount + fillCount;
         LOGGER.info(String.format("[STRUCT][PLAN] Plan complete: %d operations (trim=%d, grade=%d, fill=%d)",
@@ -271,9 +296,23 @@ public class TerraformingPlan {
         if (!planSucceeded) {
             throw new IllegalStateException("Cannot commit failed plan");
         }
-        
+        if (plannedOperations.isEmpty()) {
+            LOGGER.info(String.format("[STRUCT][COMMIT] No terraforming operations to commit at %s",
+                    formatLocation(origin)));
+            committed = true;
+            return true;
+        }
+
+        PreCommitCheck preCommitCheck = preCommitVerify();
+        if (preCommitCheck.shouldAbort) {
+            rejectionReason = "precommit_mismatch";
+            LOGGER.warning(String.format("[STRUCT][COMMIT] Pre-commit verification failed: mismatches=%d total=%d ratio=%.2f",
+                    preCommitCheck.mismatches, preCommitCheck.total, preCommitCheck.mismatchRatio));
+            return false;
+        }
+
         committed = true;
-        
+
         LOGGER.info(String.format("[STRUCT][COMMIT] Committing %d terraforming operations at %s",
                 plannedOperations.size(), formatLocation(origin)));
         
@@ -282,31 +321,43 @@ public class TerraformingPlan {
         appliedOpsCount = 0;
         skippedOpsCount = 0;
         
-        for (BlockOperation op : plannedOperations) {
-            Block block = world.getBlockAt(op.x, op.y, op.z);
-            
-            // T058: Capture actual current material at commit time (for rollback)
-            Material currentMaterial = block.getType();
-            
-            // Verify block hasn't changed since planning (concurrent modification detection)
-            if (!currentMaterial.equals(op.originalMaterial)) {
-                LOGGER.warning(String.format("[STRUCT][COMMIT] Block at (%d,%d,%d) changed from %s to %s - skipping",
-                        op.x, op.y, op.z, op.originalMaterial, currentMaterial));
-                skippedOpsCount++;
-                continue;
+        Map<Long, List<BlockOperation>> opsByChunk = groupOperationsByChunk();
+        boolean abortCommit = false;
+
+        for (Map.Entry<Long, List<BlockOperation>> entry : opsByChunk.entrySet()) {
+            Object lock = CHUNK_LOCKS.computeIfAbsent(entry.getKey(), key -> new Object());
+            synchronized (lock) {
+                for (BlockOperation op : entry.getValue()) {
+                    if (applyOperation(op)) {
+                        appliedOpsCount++;
+                    } else {
+                        skippedOpsCount++;
+                    }
+
+                    if (shouldAbortForSkips(skippedOpsCount, plannedOperations.size())) {
+                        abortCommit = true;
+                        break;
+                    }
+                }
             }
-            
-            // T058: Record the operation before applying so we can rollback if needed
-            appliedOperations.add(new AppliedOperation(op.x, op.y, op.z, currentMaterial, op.targetMaterial));
-            
-            block.setType(op.targetMaterial);
-            appliedOpsCount++;
+            if (abortCommit) {
+                break;
+            }
+        }
+
+        if (abortCommit) {
+            LOGGER.warning(String.format("[STRUCT][COMMIT] Skip ratio exceeded - aborting and rolling back. skipped=%d total=%d",
+                    skippedOpsCount, plannedOperations.size()));
+            rollback();
+            return false;
         }
         
         // T058: Emit TERRAFORM-COMMIT diagnostic line with applied/skipped counts
-        LOGGER.info(String.format("[TERRAFORM-COMMIT] bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d",
-                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
-                appliedOpsCount, skippedOpsCount, plannedOperations.size()));
+        double skippedRatio = plannedOperations.isEmpty() ? 0.0
+            : (double) skippedOpsCount / (double) plannedOperations.size();
+        LOGGER.info(String.format("[TERRAFORM-COMMIT] bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d skippedRatio=%.2f",
+            bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+            appliedOpsCount, skippedOpsCount, plannedOperations.size(), skippedRatio));
         
         return true;
     }
@@ -423,10 +474,12 @@ public class TerraformingPlan {
      * T058: Now includes applied/skipped counts and rollback status.
      */
     public String getDiagnosticsSummary() {
-        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, applied=%d, skipped=%d, success=%s, committed=%s, rolledBack=%s, reason=%s}",
+        double skippedRatio = plannedOperations.isEmpty() ? 0.0
+            : (double) skippedOpsCount / (double) plannedOperations.size();
+        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, applied=%d, skipped=%d, skippedRatio=%.2f, success=%s, committed=%s, rolledBack=%s, reason=%s}",
                 bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
                 plannedOperations.size(), trimCount, gradeCount, fillCount,
-                appliedOpsCount, skippedOpsCount,
+            appliedOpsCount, skippedOpsCount, skippedRatio,
                 planSucceeded, committed, rolledBack, rejectionReason);
     }
     
@@ -453,9 +506,13 @@ public class TerraformingPlan {
                     Material mat = block.getType();
                     
                     if (isTrimmableVegetation(mat)) {
-                        plannedOperations.add(new BlockOperation(
-                                blockX, blockY, blockZ, mat, Material.AIR, BlockOperation.OperationType.TRIM));
-                        trimCount++;
+                        if (addPlannedOperation(new BlockOperation(
+                                blockX, blockY, blockZ, mat, Material.AIR, BlockOperation.OperationType.TRIM))) {
+                            trimCount++;
+                        }
+                        if (planFailed) {
+                            return;
+                        }
                     }
                 }
             }
@@ -472,25 +529,38 @@ public class TerraformingPlan {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
                 
-                int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
+                Material topMaterial = world.getBlockAt(blockX, targetY, blockZ).getType();
+                if (isTrimmableVegetation(topMaterial)) {
+                    continue;
+                }
+
+                int scanStartY = topMaterial.isAir() ? targetY - 1 : targetY;
+                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, scanStartY);
                 int yDiff = surfaceY - targetY;
                 
                 // Only fill gaps UPWARD - never dig down
                 if (yDiff < 0 && Math.abs(yDiff) <= MAX_VERTICAL_CHANGE) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
                     
                     for (int y = surfaceY + 1; y <= targetY; y++) {
                         Block fillBlock = world.getBlockAt(blockX, y, blockZ);
                         Material mat = fillBlock.getType();
                         
                         if (!mat.isSolid()) {
+                            if (isTrimmableVegetation(mat)) {
+                                continue;
+                            }
                             // T065: For the top block, use surface-appropriate material to prevent dirt scars
                             Material fillMaterial = determineFillMaterial(surfaceMat, y, targetY);
-                            plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.GRADE));
-                            graded++;
-                            gradeCount++;
+                            if (addPlannedOperation(new BlockOperation(
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.GRADE))) {
+                                graded++;
+                                gradeCount++;
+                            }
+                            if (planFailed) {
+                                return -1;
+                            }
                             
                             // T057: Use hard limit with tolerance instead of exact limit
                             if (graded > hardLimit) {
@@ -524,7 +594,7 @@ public class TerraformingPlan {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
                 
-                int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
+                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, foundationY - 1);
                 
                 // T057e: DO NOT fill at foundationY - the structure will be placed there by WorldEdit
                 // Only fill gaps BELOW the structure's foundation level (from surfaceY+1 to foundationY-1)
@@ -533,7 +603,7 @@ public class TerraformingPlan {
                 // Fill gaps below foundation (from ground surface up to one block below structure)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
                     
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
@@ -542,10 +612,14 @@ public class TerraformingPlan {
                         if (!mat.isSolid() && mat != Material.WATER) {
                             // T065: For the top block, use surface-appropriate material to prevent dirt scars
                             Material fillMaterial = determineFillMaterial(surfaceMat, y, foundationY - 1);
-                            plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL));
-                            filled++;
-                            fillCount++;
+                            if (addPlannedOperation(new BlockOperation(
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL))) {
+                                filled++;
+                                fillCount++;
+                            }
+                            if (planFailed) {
+                                return -1;
+                            }
                             
                             // T057: Use hard limit with tolerance instead of exact limit
                             if (filled > hardLimit) {
@@ -579,12 +653,12 @@ public class TerraformingPlan {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
                 
-                int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
+                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, foundationY - 1);
                 
                 // Only fill gaps below the foundation (not at foundation level)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = world.getBlockAt(blockX, surfaceY, blockZ).getType();
+                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
                     
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
@@ -593,10 +667,14 @@ public class TerraformingPlan {
                         if (!mat.isSolid() && mat != Material.WATER) {
                             // T065: For the top block, use surface-appropriate material to prevent dirt scars
                             Material fillMaterial = determineFillMaterial(surfaceMat, y, foundationY - 1);
-                            plannedOperations.add(new BlockOperation(
-                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL));
-                            filled++;
-                            fillCount++;
+                            if (addPlannedOperation(new BlockOperation(
+                                    blockX, y, blockZ, mat, fillMaterial, BlockOperation.OperationType.FILL))) {
+                                filled++;
+                                fillCount++;
+                            }
+                            if (planFailed) {
+                                return;
+                            }
                         }
                     }
                 }
@@ -628,6 +706,9 @@ public class TerraformingPlan {
         // For the top layer, preserve grass-family surfaces to prevent dirt scars
         // GRASS_BLOCK -> GRASS_BLOCK (preserves the grassy appearance)
         if (surfaceMaterial == Material.GRASS_BLOCK) {
+            return Material.GRASS_BLOCK;
+        }
+        if ("GRASS".equals(surfaceMaterial.name())) {
             return Material.GRASS_BLOCK;
         }
         
@@ -787,10 +868,15 @@ public class TerraformingPlan {
 
                     int columnSurfaceY = world.getHighestBlockYAt(px, pz);
                     Material fillMaterial = determineFillMaterial(dominantSurface, py, columnSurfaceY);
-                    plannedOperations.add(new BlockOperation(
-                            px, py, pz, mat, fillMaterial, BlockOperation.OperationType.FILL));
-                    plannedFill++;
-                    fillCount++;
+                    if (addPlannedOperation(new BlockOperation(
+                            px, py, pz, mat, fillMaterial, BlockOperation.OperationType.FILL))) {
+                        plannedFill++;
+                        fillCount++;
+                    }
+                    if (planFailed) {
+                        rejectionReason = "duplicate operation conflict";
+                        return false;
+                    }
 
                     if (plannedFill > hardLimit) {
                         rejectionReason = "water fill exceeded limits";
@@ -876,8 +962,8 @@ public class TerraformingPlan {
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                int surfaceY = world.getHighestBlockYAt(x, z);
-                Material surfaceMat = world.getBlockAt(x, surfaceY, z).getType();
+                int surfaceY = findSurfaceYFromTarget(x, z, world.getHighestBlockYAt(x, z));
+                Material surfaceMat = findSurfaceMaterialForColumn(x, z, surfaceY);
                 if (surfaceMat.isSolid()) {
                     counts.merge(surfaceMat, 1, Integer::sum);
                 }
@@ -906,5 +992,258 @@ public class TerraformingPlan {
 
     private String key(int x, int y, int z) {
         return x + ":" + y + ":" + z;
+    }
+
+    private int findSurfaceYFromTarget(int blockX, int blockZ, int startY) {
+        int minY = world.getMinHeight();
+        for (int y = startY; y >= minY; y--) {
+            Material mat = world.getBlockAt(blockX, y, blockZ).getType();
+            if (!mat.isAir() && !isWaterMaterial(mat) && !isLavaMaterial(mat)) {
+                return y;
+            }
+        }
+        return startY;
+    }
+
+    private boolean isSurfaceMaterial(Material material) {
+        return material == Material.GRASS_BLOCK
+            || "GRASS".equals(material.name())
+                || material == Material.PODZOL
+                || material == Material.MYCELIUM
+                || material == Material.SAND
+                || material == Material.RED_SAND
+                || material == Material.GRAVEL
+                || material == Material.COARSE_DIRT;
+    }
+
+    private void normalizeTopLayerMaterials(int targetY) {
+        for (BlockOperation op : new ArrayList<>(plannedOperations)) {
+            if (op.type != BlockOperation.OperationType.GRADE || op.y != targetY) {
+                continue;
+            }
+
+            Material surfaceMat = findSurfaceMaterialForColumn(op.x, op.z, targetY - 1);
+            Material normalized = determineFillMaterial(surfaceMat, op.y, targetY);
+            if (op.targetMaterial == normalized) {
+                continue;
+            }
+
+            String opKey = key(op.x, op.y, op.z);
+            BlockOperation replacement = new BlockOperation(op.x, op.y, op.z, op.originalMaterial, normalized, op.type);
+            replacePlannedOperation(opKey, op, replacement);
+        }
+    }
+
+    private Material findSurfaceMaterialForColumn(int blockX, int blockZ, int startY) {
+        int minY = world.getMinHeight();
+        Material fallback = Material.DIRT;
+        for (int y = startY; y >= minY; y--) {
+            Material mat = world.getBlockAt(blockX, y, blockZ).getType();
+            if (isSurfaceMaterial(mat)) {
+                return mat;
+            }
+            if (!mat.isAir() && !isWaterMaterial(mat) && !isLavaMaterial(mat)) {
+                fallback = mat;
+            }
+        }
+        return fallback;
+    }
+
+
+    private boolean addPlannedOperation(BlockOperation operation) {
+        if (planFailed) {
+            return false;
+        }
+
+        String opKey = key(operation.x, operation.y, operation.z);
+        BlockOperation existing = plannedOperationsByKey.get(opKey);
+        if (existing == null) {
+            plannedOperations.add(operation);
+            plannedOperationsByKey.put(opKey, operation);
+            return true;
+        }
+
+        if (existing.targetMaterial == operation.targetMaterial && existing.type == operation.type) {
+            return false;
+        }
+
+        if (existing.type == BlockOperation.OperationType.TRIM
+                && operation.type != BlockOperation.OperationType.TRIM) {
+            decrementOperationCount(existing.type);
+            replacePlannedOperation(opKey, existing, operation);
+            return true;
+        }
+
+        if (existing.type != BlockOperation.OperationType.TRIM
+                && operation.type == BlockOperation.OperationType.TRIM) {
+            return false;
+        }
+
+        if (existing.targetMaterial == operation.targetMaterial) {
+            LOGGER.fine(String.format("[STRUCT][PLAN] Duplicate operation merged at (%d,%d,%d) target=%s",
+                    operation.x, operation.y, operation.z, operation.targetMaterial));
+            return false;
+        }
+
+        // T059/T065: When two GRADE/FILL operations target the same block with different materials,
+        // keep the first one (grading takes precedence over gap filling). This avoids false failures
+        // when both methods legitimately try to fill the same gap with different surface logic.
+        // The first operation (planLightGrading) has the correct top-layer awareness.
+        if (existing.type != BlockOperation.OperationType.TRIM
+                && operation.type != BlockOperation.OperationType.TRIM) {
+            LOGGER.fine(String.format("[STRUCT][PLAN] Duplicate GRADE/FILL at (%d,%d,%d): keeping %s, ignoring %s",
+                    operation.x, operation.y, operation.z, existing.targetMaterial, operation.targetMaterial));
+            return false;
+        }
+
+        planFailed = true;
+        rejectionReason = String.format("duplicate operation conflict at (%d,%d,%d): %s -> %s vs %s",
+                operation.x, operation.y, operation.z,
+                existing.originalMaterial, existing.targetMaterial, operation.targetMaterial);
+        LOGGER.warning(String.format("[STRUCT][PLAN] %s", rejectionReason));
+        return false;
+    }
+
+    private void replacePlannedOperation(String opKey, BlockOperation existing, BlockOperation replacement) {
+        int existingIndex = plannedOperations.indexOf(existing);
+        if (existingIndex >= 0) {
+            plannedOperations.set(existingIndex, replacement);
+        } else {
+            plannedOperations.add(replacement);
+        }
+        plannedOperationsByKey.put(opKey, replacement);
+    }
+
+    private void decrementOperationCount(BlockOperation.OperationType type) {
+        switch (type) {
+            case TRIM:
+                trimCount = Math.max(0, trimCount - 1);
+                break;
+            case GRADE:
+                gradeCount = Math.max(0, gradeCount - 1);
+                break;
+            case FILL:
+                fillCount = Math.max(0, fillCount - 1);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private PreCommitCheck preCommitVerify() {
+        int mismatches = 0;
+        int total = plannedOperations.size();
+
+        for (BlockOperation op : plannedOperations) {
+            Block block = world.getBlockAt(op.x, op.y, op.z);
+            Material current = block.getType();
+            if (current.equals(op.originalMaterial)) {
+                continue;
+            }
+            if (current.equals(op.targetMaterial)) {
+                continue;
+            }
+            if (shouldApplyDespiteMismatch(op, current)) {
+                continue;
+            }
+            mismatches++;
+        }
+
+        double mismatchRatio = total == 0 ? 0.0 : (double) mismatches / (double) total;
+        boolean shouldAbort = mismatches >= MIN_PRECOMMIT_MISMATCH_ABORT
+                && mismatchRatio >= MAX_PRECOMMIT_MISMATCH_RATIO;
+
+        if (mismatches > 0) {
+            LOGGER.info(String.format("[STRUCT][COMMIT] Pre-commit verification: mismatches=%d total=%d ratio=%.2f",
+                    mismatches, total, mismatchRatio));
+        }
+
+        return new PreCommitCheck(mismatches, total, mismatchRatio, shouldAbort);
+    }
+
+    private Map<Long, List<BlockOperation>> groupOperationsByChunk() {
+        Map<Long, List<BlockOperation>> grouped = new HashMap<>();
+        for (BlockOperation op : plannedOperations) {
+            long chunkKey = chunkKey(op.x, op.z);
+            grouped.computeIfAbsent(chunkKey, key -> new ArrayList<>()).add(op);
+        }
+        return grouped;
+    }
+
+    private boolean applyOperation(BlockOperation op) {
+        Block block = world.getBlockAt(op.x, op.y, op.z);
+
+        // T058: Capture actual current material at commit time (for rollback)
+        Material currentMaterial = block.getType();
+
+        // Retry read in case of transient change
+        if (!currentMaterial.equals(op.originalMaterial)) {
+            currentMaterial = block.getType();
+        }
+
+        if (currentMaterial.equals(op.originalMaterial)) {
+            appliedOperations.add(new AppliedOperation(op.x, op.y, op.z, currentMaterial, op.targetMaterial));
+            block.setType(op.targetMaterial);
+            return true;
+        }
+
+        if (currentMaterial.equals(op.targetMaterial)) {
+            appliedOperations.add(new AppliedOperation(op.x, op.y, op.z, currentMaterial, op.targetMaterial));
+            return true;
+        }
+
+        if (shouldApplyDespiteMismatch(op, currentMaterial)) {
+            appliedOperations.add(new AppliedOperation(op.x, op.y, op.z, currentMaterial, op.targetMaterial));
+            block.setType(op.targetMaterial);
+            return true;
+        }
+
+        LOGGER.warning(String.format("[STRUCT][COMMIT] Block at (%d,%d,%d) changed from %s to %s - skipping",
+                op.x, op.y, op.z, op.originalMaterial, currentMaterial));
+        return false;
+    }
+
+    private boolean shouldApplyDespiteMismatch(BlockOperation op, Material currentMaterial) {
+        if (currentMaterial.equals(op.targetMaterial)) {
+            return true;
+        }
+
+        switch (op.type) {
+            case TRIM:
+                return isTrimmableVegetation(currentMaterial);
+            case GRADE:
+            case FILL:
+                return !currentMaterial.isSolid() && !isLavaMaterial(currentMaterial);
+            default:
+                return false;
+        }
+    }
+
+    private boolean shouldAbortForSkips(int skipped, int total) {
+        if (total == 0) {
+            return false;
+        }
+        double ratio = (double) skipped / (double) total;
+        return skipped >= MIN_SKIPPED_FOR_ABORT && ratio >= MAX_SKIP_RATIO_ABORT;
+    }
+
+    private long chunkKey(int blockX, int blockZ) {
+        int chunkX = blockX >> 4;
+        int chunkZ = blockZ >> 4;
+        return (((long) chunkX) << 32) ^ (chunkZ & 0xffffffffL);
+    }
+
+    private static class PreCommitCheck {
+        private final int mismatches;
+        private final int total;
+        private final double mismatchRatio;
+        private final boolean shouldAbort;
+
+        private PreCommitCheck(int mismatches, int total, double mismatchRatio, boolean shouldAbort) {
+            this.mismatches = mismatches;
+            this.total = total;
+            this.mismatchRatio = mismatchRatio;
+            this.shouldAbort = shouldAbort;
+        }
     }
 }

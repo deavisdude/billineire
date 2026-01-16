@@ -161,10 +161,10 @@ public class AsyncTerrainSearch {
             processed++;
             
             // Evaluate terrain (this may block on chunk load)
-            boolean suitable = evaluateTerrainSafe(state.world, candidate);
+            boolean suitable = evaluateTerrainSafe(state.world, candidate, state.surfaceSolver);
             
             if (suitable) {
-                int y = getHighestBlockSafe(state.world, candidate.x, candidate.z);
+                int y = state.surfaceSolver.getSurfaceHeight(candidate.x, candidate.z);
                 Location result = new Location(state.world, candidate.x, y, candidate.z);
                 
                 // Complete on main thread
@@ -237,10 +237,10 @@ public class AsyncTerrainSearch {
             }
             
             // Evaluate terrain (chunk is loaded, should be fast)
-            boolean suitable = evaluateTerrainFast(state.world, candidate);
+            boolean suitable = evaluateTerrainFast(state.world, candidate, state.surfaceSolver);
             
             if (suitable) {
-                int y = state.world.getHighestBlockYAt(candidate.x, candidate.z);
+                int y = state.surfaceSolver.getSurfaceHeight(candidate.x, candidate.z);
                 Location result = new Location(state.world, candidate.x, y, candidate.z);
                 LOGGER.info(String.format("[TERRAIN] Found suitable location at (%d, %d, %d) after checking %d candidates",
                         candidate.x, y, candidate.z, state.currentIndex));
@@ -271,7 +271,7 @@ public class AsyncTerrainSearch {
     /**
      * Evaluate terrain at candidate location (safe version with chunk handling).
      */
-    private boolean evaluateTerrainSafe(World world, CandidateLocation candidate) {
+    private boolean evaluateTerrainSafe(World world, CandidateLocation candidate, SurfaceSolver surfaceSolver) {
         try {
             // Ensure chunks are loaded for evaluation
             int checkRadius = 24;
@@ -293,7 +293,7 @@ public class AsyncTerrainSearch {
                 }
             }
             
-            return evaluateTerrainFast(world, candidate);
+            return evaluateTerrainFast(world, candidate, surfaceSolver);
         } catch (Exception e) {
             LOGGER.fine("Error evaluating terrain at (" + candidate.x + ", " + candidate.z + "): " + e.getMessage());
             return false;
@@ -303,7 +303,7 @@ public class AsyncTerrainSearch {
     /**
      * Fast terrain evaluation (assumes chunks are loaded).
      */
-    private boolean evaluateTerrainFast(World world, CandidateLocation candidate) {
+    private boolean evaluateTerrainFast(World world, CandidateLocation candidate, SurfaceSolver surfaceSolver) {
         int checkRadius = 24;
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
@@ -316,13 +316,12 @@ public class AsyncTerrainSearch {
                 int checkX = candidate.x + x;
                 int checkZ = candidate.z + z;
                 
-                int y = world.getHighestBlockYAt(checkX, checkZ);
+                int y = surfaceSolver.getSurfaceHeight(checkX, checkZ);
                 minY = Math.min(minY, y);
                 maxY = Math.max(maxY, y);
                 totalChecks++;
                 
-                Material surface = world.getBlockAt(checkX, y, checkZ).getType();
-                if (surface == Material.WATER) {
+                if (isWaterOrFrozenWaterSurface(world, checkX, y, checkZ)) {
                     waterBlocks++;
                 }
             }
@@ -336,18 +335,58 @@ public class AsyncTerrainSearch {
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
+        if (flatEnough && notTooWatery && goodHeight) {
+            if (hasWaterInProximity(world, candidate.x, candidate.z, 25, surfaceSolver)) {
+                return false;
+            }
+        }
+        
         return flatEnough && notTooWatery && goodHeight;
     }
     
     /**
      * Safe highest block query.
      */
-    private int getHighestBlockSafe(World world, int x, int z) {
-        try {
-            return world.getHighestBlockYAt(x, z);
-        } catch (Exception e) {
-            return 64; // Default fallback
+    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius,
+                                        SurfaceSolver surfaceSolver) {
+        // Check in a cross pattern first (fast rejection)
+        for (int d = -radius; d <= radius; d += 4) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ)) {
+                return true;
+            }
+            int y2 = surfaceSolver.getSurfaceHeight(centerX, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX, y2, centerZ + d)) {
+                return true;
+            }
         }
+        
+        // Check diagonals
+        for (int d = -radius; d <= radius; d += 6) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ + d)) {
+                return true;
+            }
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ - d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y2, centerZ - d)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    private boolean isWaterOrFrozenWaterSurface(World world, int x, int groundY, int z) {
+        Material surface = world.getBlockAt(x, groundY + 1, z).getType();
+        return isWaterOrFrozenWater(surface);
+    }
+    
+    private boolean isWaterOrFrozenWater(Material type) {
+        return type == Material.WATER ||
+               type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
     }
     
     /**
@@ -419,6 +458,7 @@ public class AsyncTerrainSearch {
      */
     private static class SearchState {
         final World world;
+        final SurfaceSolver surfaceSolver;
         final List<CandidateLocation> candidates;
         final CompletableFuture<Location> future;
         final Consumer<SearchProgress> progressCallback;
@@ -432,6 +472,7 @@ public class AsyncTerrainSearch {
             this.future = future;
             this.progressCallback = progressCallback;
             this.startTime = System.currentTimeMillis();
+            this.surfaceSolver = new SurfaceSolver(world, java.util.Collections.emptyList());
         }
     }
     
@@ -440,6 +481,7 @@ public class AsyncTerrainSearch {
      */
     private static class SearchStateYielding {
         final World world;
+        final SurfaceSolver surfaceSolver;
         final List<CandidateLocation> candidates;
         final Consumer<Location> callback;
         final List<int[]> pendingChunks = new ArrayList<>();
@@ -450,6 +492,7 @@ public class AsyncTerrainSearch {
             this.world = world;
             this.candidates = candidates;
             this.callback = callback;
+            this.surfaceSolver = new SurfaceSolver(world, java.util.Collections.emptyList());
         }
     }
     

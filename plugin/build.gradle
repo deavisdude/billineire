@@ -109,6 +109,8 @@ test {
         events "passed", "skipped", "failed"
         exceptionFormat "full"
     }
+    // Increase heap to avoid OOM in MockBukkit-heavy test suites
+    maxHeapSize = "1g"
     finalizedBy jacocoTestReport
 }
 

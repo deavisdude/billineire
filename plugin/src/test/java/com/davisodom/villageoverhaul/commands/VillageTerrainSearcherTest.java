@@ -46,6 +46,10 @@ class VillageTerrainSearcherTest {
         
         // Mock world name
         when(world.getName()).thenReturn("test_world");
+
+        // Mock world height bounds for SurfaceSolver
+        when(world.getMaxHeight()).thenReturn(320);
+        when(world.getMinHeight()).thenReturn(0);
         
         // Mock heightmap - flat terrain at Y=64
         when(world.getHighestBlockYAt(anyInt(), anyInt())).thenReturn(64);

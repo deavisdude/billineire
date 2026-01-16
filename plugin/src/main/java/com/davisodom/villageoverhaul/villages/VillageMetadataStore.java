@@ -387,8 +387,14 @@ public class VillageMetadataStore {
      * Load all village data from disk.
      */
     public void loadAll() throws IOException {
+        // Filter to only load village data files, excluding:
+        // - placement_rejections.json (diagnostic artifacts)
+        // - backup files
         File[] files = storageDir.listFiles((dir, name) -> 
-            name.startsWith("village_") && name.endsWith(".json"));
+            name.startsWith("village_") && 
+            name.endsWith(".json") &&
+            !name.contains("_placement_rejections") &&
+            !name.contains(".backup"));
         
         if (files == null || files.length == 0) {
             logger.info("[STRUCT] No village data files found");

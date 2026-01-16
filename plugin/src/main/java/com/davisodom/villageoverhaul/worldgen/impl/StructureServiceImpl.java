@@ -514,7 +514,16 @@ public class StructureServiceImpl implements StructureService {
         // This fixes empty pads caused by WorldEdit modifying blocks before terraforming commit
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming BEFORE placement for '%s' at %s",
                 template.id, formatLocation(origin)));
-        terraformPlan.commit();
+        boolean commitOk = terraformPlan.commit();
+        if (!commitOk) {
+            LOGGER.warning(String.format("[STRUCT] Terraforming commit aborted for '%s' at %s",
+                template.id, formatLocation(origin)));
+            if (attemptDiagnostics != null) {
+            attemptDiagnostics.merge("terraformCommitFailed", 1, Integer::sum);
+            }
+            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, terraformPlan.isCommitted(), terraformPlan.isRolledBack());
+            return Optional.empty();
+        }
         
         // Now perform structure placement on the prepared foundation
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
@@ -565,11 +574,14 @@ public class StructureServiceImpl implements StructureService {
         }
         
         // T058: Enhanced diagnostics with applied/skipped counts
-        LOGGER.info(String.format("[STRUCT][TERRAFORM-DIAG] structure=%s status=%s bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d reason=%s",
-                structureId, status,
-                bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
-                plan.getAppliedOpsCount(), plan.getSkippedOpsCount(), plan.getPlannedOperations().size(),
-                plan.getRejectionReason() != null ? plan.getRejectionReason() : "none"));
+        int opsTotal = plan.getPlannedOperations().size();
+        double skippedRatio = opsTotal == 0 ? 0.0
+            : (double) plan.getSkippedOpsCount() / (double) opsTotal;
+        LOGGER.info(String.format("[STRUCT][TERRAFORM-DIAG] structure=%s status=%s bounds=(%d..%d,%d..%d,%d..%d) appliedOps=%d skippedOps=%d opsTotal=%d skippedRatio=%.2f reason=%s",
+            structureId, status,
+            bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+            plan.getAppliedOpsCount(), plan.getSkippedOpsCount(), opsTotal, skippedRatio,
+            plan.getRejectionReason() != null ? plan.getRejectionReason() : "none"));
     }
     
     /**

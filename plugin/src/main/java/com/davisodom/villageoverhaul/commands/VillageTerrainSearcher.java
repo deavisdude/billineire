@@ -2,6 +2,7 @@ package com.davisodom.villageoverhaul.commands;
 
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
+import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -50,6 +51,8 @@ public class VillageTerrainSearcher {
         boolean isFirstVillage = isFirstVillage(world);
         int startRadius = isFirstVillage ? 16 : (minVillageSpacing + 32);
         
+        SurfaceSolver surfaceSolver = new SurfaceSolver(world, java.util.Collections.emptyList());
+
         // Spiral search pattern
         for (int radius = startRadius; radius <= Math.min(maxRadius, 512); radius += sampleInterval) {
             // Check 8 points around the circle at this radius
@@ -59,11 +62,11 @@ public class VillageTerrainSearcher {
                 int z = startZ + (int)(radius * Math.sin(angle));
                 
                 // Check if this location is suitable for terrain
-                if (!isTerrainSuitable(world, x, z, checkRadius)) {
+                if (!isTerrainSuitable(world, x, z, checkRadius, surfaceSolver)) {
                     continue;
                 }
                 
-                int y = world.getHighestBlockYAt(x, z);
+                int y = surfaceSolver.getSurfaceHeight(x, z);
                 Location candidate = new Location(world, x, y, z);
                 
                 // Check inter-village spacing
@@ -95,7 +98,8 @@ public class VillageTerrainSearcher {
      * @param checkRadius Radius to check around center
      * @return true if terrain is suitable
      */
-    private boolean isTerrainSuitable(World world, int centerX, int centerZ, int checkRadius) {
+    private boolean isTerrainSuitable(World world, int centerX, int centerZ, int checkRadius,
+                                      SurfaceSolver surfaceSolver) {
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
         int waterBlocks = 0;
@@ -106,15 +110,14 @@ public class VillageTerrainSearcher {
             for (int z = -checkRadius; z <= checkRadius; z += 12) {
                 int checkX = centerX + x;
                 int checkZ = centerZ + z;
-                int y = world.getHighestBlockYAt(checkX, checkZ);
+                int y = surfaceSolver.getSurfaceHeight(checkX, checkZ);
                 
                 minY = Math.min(minY, y);
                 maxY = Math.max(maxY, y);
                 totalChecks++;
                 
-                // Check if surface is water
-                Material surface = world.getBlockAt(checkX, y, checkZ).getType();
-                if (surface == Material.WATER) {
+                // Check if surface above ground is water or frozen water (ice on top of water)
+                if (isWaterOrFrozenWaterSurface(world, checkX, y, checkZ)) {
                     waterBlocks++;
                 }
             }
@@ -130,7 +133,7 @@ public class VillageTerrainSearcher {
         
         // T057d: Dense water proximity check to prevent selecting water-adjacent sites
         if (flatEnough && notTooWatery && goodHeight) {
-            if (hasWaterInProximity(world, centerX, centerZ, 25)) {
+            if (hasWaterInProximity(world, centerX, centerZ, 25, surfaceSolver)) {
                 return false;
             }
         }
@@ -149,29 +152,30 @@ public class VillageTerrainSearcher {
      * @param radius Radius to check (should cover largest structure footprint + margin)
      * @return true if water is found within proximity
      */
-    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius) {
+    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius,
+                                        SurfaceSolver surfaceSolver) {
         // Check in a cross pattern first (fast rejection)
         for (int d = -radius; d <= radius; d += 4) {
             // Check along X axis
-            int y1 = world.getHighestBlockYAt(centerX + d, centerZ);
-            if (world.getBlockAt(centerX + d, y1, centerZ).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ)) {
                 return true;
             }
             // Check along Z axis
-            int y2 = world.getHighestBlockYAt(centerX, centerZ + d);
-            if (world.getBlockAt(centerX, y2, centerZ + d).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX, y2, centerZ + d)) {
                 return true;
             }
         }
         
         // Check diagonals
         for (int d = -radius; d <= radius; d += 6) {
-            int y1 = world.getHighestBlockYAt(centerX + d, centerZ + d);
-            if (world.getBlockAt(centerX + d, y1, centerZ + d).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ + d)) {
                 return true;
             }
-            int y2 = world.getHighestBlockYAt(centerX + d, centerZ - d);
-            if (world.getBlockAt(centerX + d, y2, centerZ - d).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ - d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y2, centerZ - d)) {
                 return true;
             }
         }
@@ -180,30 +184,51 @@ public class VillageTerrainSearcher {
         int structureRadius = 20; // Covers 18-block structure + 2-block margin
         for (int x = -structureRadius; x <= structureRadius; x += 3) {
             // Top edge
-            int y1 = world.getHighestBlockYAt(centerX + x, centerZ - structureRadius);
-            if (world.getBlockAt(centerX + x, y1, centerZ - structureRadius).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ - structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y1, centerZ - structureRadius)) {
                 return true;
             }
             // Bottom edge
-            int y2 = world.getHighestBlockYAt(centerX + x, centerZ + structureRadius);
-            if (world.getBlockAt(centerX + x, y2, centerZ + structureRadius).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ + structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y2, centerZ + structureRadius)) {
                 return true;
             }
         }
         for (int z = -structureRadius; z <= structureRadius; z += 3) {
             // Left edge
-            int y1 = world.getHighestBlockYAt(centerX - structureRadius, centerZ + z);
-            if (world.getBlockAt(centerX - structureRadius, y1, centerZ + z).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX - structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX - structureRadius, y1, centerZ + z)) {
                 return true;
             }
             // Right edge
-            int y2 = world.getHighestBlockYAt(centerX + structureRadius, centerZ + z);
-            if (world.getBlockAt(centerX + structureRadius, y2, centerZ + z).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX + structureRadius, y2, centerZ + z)) {
                 return true;
             }
         }
         
         return false;
+    }
+    
+    /**
+     * Check if a material is water or a frozen water surface (ice variants).
+     * Frozen water appears as ice on top of water - buildings placed here would
+     * end up underwater because SurfaceSolver skips ice to find the actual ground.
+     * 
+     * @param type Material to check
+     * @return true if water or any ice variant
+     */
+    private boolean isWaterOrFrozenWater(Material type) {
+        return type == Material.WATER ||
+               type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
+    }
+
+    private boolean isWaterOrFrozenWaterSurface(World world, int x, int groundY, int z) {
+        Material surface = world.getBlockAt(x, groundY + 1, z).getType();
+        return isWaterOrFrozenWater(surface);
     }
     
     /**

@@ -135,6 +135,10 @@ public class SiteValidator {
      * Validate foundation solidity and acceptable slope with terrain classification.
      * T057: Improved to count vegetation as "solid" (can be cleared), use configurable thresholds,
      * and provide detailed rejection reasons.
+     * 
+     * BUG FIX: Previously used fixed Y level (origin.getBlockY() - 1) for ALL tiles, causing
+     * massive false "BLOCKED" rejections on sloped terrain. Now finds actual ground level
+     * for each (x, z) position before classifying.
      */
     private boolean validateFoundation(World world, Location origin, int width, int depth, 
                                       ClassificationResult classificationResult) {
@@ -149,17 +153,21 @@ public class SiteValidator {
         List<String> rejectionReasons = new ArrayList<>();
         
         // Sample foundation blocks and classify terrain
+        // FIX: Find actual ground level for each (x, z) position instead of using fixed Y
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
                 int worldX = origin.getBlockX() + x;
-                int worldY = origin.getBlockY() - 1;
                 int worldZ = origin.getBlockZ() + z;
                 
-                Block block = world.getBlockAt(worldX, worldY, worldZ);
+                // Find actual ground level at this position
+                // This fixes the bug where all tiles used origin Y, causing BLOCKED on slopes
+                int actualGroundY = findGroundLevelAt(world, worldX, worldZ, origin.getBlockY());
+                
+                Block block = world.getBlockAt(worldX, actualGroundY, worldZ);
                 totalCount++;
                 
-                // Classify terrain at this position
-                Classification classification = TerrainClassifier.classify(world, worldX, worldY, worldZ);
+                // Classify terrain at the ACTUAL ground position
+                Classification classification = TerrainClassifier.classify(world, worldX, actualGroundY, worldZ);
                 classificationResult.increment(classification);
                 
                 // T057: Count solid blocks REGARDLESS of terrain classification
@@ -167,14 +175,13 @@ public class SiteValidator {
                 // Solidity is about whether there's actual ground to build on
                 if (block.getType().isSolid()) {
                     solidCount++;
-                    // Track Y variation for slope calculation
-                    int y = block.getY();
-                    if (minY == null || y < minY) minY = y;
-                    if (maxY == null || y > maxY) maxY = y;
+                    // Track Y variation for slope calculation using ACTUAL ground level
+                    if (minY == null || actualGroundY < minY) minY = actualGroundY;
+                    if (maxY == null || actualGroundY > maxY) maxY = actualGroundY;
                 } else if (classification == Classification.VEGETATION) {
                     vegetationCount++;
                     // Vegetation is on solid ground - find the ground below
-                    Block belowBlock = world.getBlockAt(worldX, worldY - 1, worldZ);
+                    Block belowBlock = world.getBlockAt(worldX, actualGroundY - 1, worldZ);
                     if (belowBlock.getType().isSolid()) {
                         // Count vegetation location as solid since there's solid ground below
                         solidCount++;
@@ -255,6 +262,45 @@ public class SiteValidator {
                 passed, rejectionReasons));
         
         return passed;
+    }
+
+    /**
+     * Find actual ground level at a specific (x, z) position.
+     * Searches downward from the world's highest block to find solid ground.
+     * 
+     * This fixes the bug where site validation used a fixed Y level (origin Y - 1)
+     * for ALL tiles, causing massive false BLOCKED rejections on sloped terrain
+     * where the actual ground varies in height.
+     * 
+     * @param world The world to search in
+     * @param x X coordinate
+     * @param z Z coordinate  
+     * @param hintY A hint Y level to start near (used if lower than highest block)
+     * @return The Y coordinate of the ground (solid block beneath air/vegetation)
+     */
+    private int findGroundLevelAt(World world, int x, int z, int hintY) {
+        int startY = world.getHighestBlockYAt(x, z);
+        
+        // Search downward to find solid ground beneath air/vegetation
+        for (int y = startY; y > startY - 30 && y > world.getMinHeight(); y--) {
+            Block block = world.getBlockAt(x, y, z);
+            Block below = world.getBlockAt(x, y - 1, z);
+            
+            // Found ground: current block is air/vegetation AND block below is solid
+            Classification currentClass = TerrainClassifier.classify(block);
+            Classification belowClass = TerrainClassifier.classify(below);
+            
+            boolean currentIsEmpty = (currentClass == Classification.BLOCKED || 
+                                     currentClass == Classification.VEGETATION);
+            boolean belowIsSolid = (belowClass == Classification.ACCEPTABLE);
+            
+            if (currentIsEmpty && belowIsSolid) {
+                return y - 1; // Return Y of the solid ground block
+            }
+        }
+        
+        // Fallback: return the hint Y minus 1 (original behavior) if nothing found
+        return hintY - 1;
     }
 
     private FluidPatchCheckResult checkSmallWaterPatches(World world, Location origin, int width, int depth) {

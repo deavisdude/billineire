@@ -1397,13 +1397,21 @@ These follow-up tasks were added after T052a verification — logs show frequent
       - Persisted villager records in VillageMetadataStore and restored on startup.
       - Added unit tests for spawn count and villager persistence/restore.
 
- - [ ] T059 [P0] Reduce partial-commit skipping and external-modification races
+ - [X] T059 [P0] Reduce partial-commit skipping and external-modification races
   - Story: Many commit ops are skipped because block states changed between plan creation and commit (concurrent edits / FAWE timing / player actions), producing incomplete terraforming.
   - Description: Add pre-commit verification and small chunk-level locks or retries; if many ops are skipped, abort and roll back (do not commit a partial pad). Add metrics that count skipped vs applied ops and surface the ratio in diagnostics.
   - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, metrics export.
   - Acceptance:
     - Partial-commit incidents reduced; diagnostic line includes applied/skipped counts per commit.
     - TerraformingPlan guarantees at most one operation per (x,y,z); detect and reject/merge duplicate-target ops (prevents self-conflicting expectations like `expected AIR but found DIRT` within a single commit run).
+  - **IMPLEMENTED** (2026-01-16):
+    - Added pre-commit verification to abort when mismatch ratio exceeds threshold.
+    - Grouped operations by chunk with per-chunk locks to reduce concurrent modifications.
+    - Added tolerant apply/retry logic and skip-ratio abort with rollback to avoid partial pads.
+    - Enforced one planned operation per (x,y,z) with duplicate merge/reject handling.
+    - Diagnostics now include skippedRatio alongside applied/skipped counts.
+    - Fixed T065 regression: when planLightGrading and planGapFilling overlap at the same block with different target materials (e.g., DIRT vs GRASS_BLOCK), keep the first operation (grading) instead of failing. This resolves surface material preservation while maintaining duplicate-op safety.
+    - Increased test heap to 1GB in build.gradle to prevent OOM in MockBukkit-heavy test suites.
 
 - [ ] T060 [P0] Ensure `PathEmitter` writes are persisted and visible
   - Story: Some villages show A* success and path-block counts in logs, but the in-world inspection shows no or incomplete path blocks.

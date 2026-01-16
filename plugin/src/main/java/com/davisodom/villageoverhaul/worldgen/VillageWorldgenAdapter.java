@@ -133,13 +133,23 @@ public class VillageWorldgenAdapter implements Listener {
 
         logger.info("Attempting to seed village in world: " + world.getName());
 
-        // Search for suitable terrain starting from spawn (this is slow, but now async!)
+        VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        if (hasExistingVillages(world, metadataStore)) {
+            logger.info("[WORLDGEN] Existing villages detected for world " + world.getName()
+                + "; skipping spawn seeding.");
+            return;
+        }
+
+        // Search for suitable terrain starting from spawn (async with yielding)
         Location spawn = world.getSpawnLocation();
-        Location suitableLocation = findSuitableVillageLocation(world, spawn, 512); // Search up to 512 blocks
+        int maxRadius = plugin.getSpawnProximityRadius();
+        Location suitableLocation = findSuitableVillageLocation(world, spawn, maxRadius);
         
         if (suitableLocation == null) {
-            logger.warning("Could not find suitable terrain for village placement, using spawn location as fallback");
-            suitableLocation = spawn.clone().add(16, 0, 16);
+            logger.warning("Could not find suitable terrain for village placement; aborting spawn seeding");
+            maybePlaceMarkerPillar(world, spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ(),
+                "no suitable terrain found");
+            return;
         }
         
         int baseX = suitableLocation.getBlockX();
@@ -168,19 +178,13 @@ public class VillageWorldgenAdapter implements Listener {
         UUID deterministicVillageId = UUID.nameUUIDFromBytes(
             ("worldgen-village-" + worldSeed + "-" + baseX + "-" + baseZ).getBytes(StandardCharsets.UTF_8));
         
-        VillageService vs = plugin.getVillageService();
-        var village = vs.createVillage(deterministicVillageId, cultureId, name, world.getName(), baseX, y + 1, baseZ);
-        
         // Village creation and structure placement must happen on main thread
         // We're already async from terrain search, so schedule sync for block operations
-        final UUID villageId = village.getId();
-        final String villageName = village.getName();
+        final UUID villageId = deterministicVillageId;
+        final String villageName = name;
         final int finalY = y;
         
         Bukkit.getScheduler().runTask(plugin, () -> {
-            // Use shared metadata store (T012l: singleton for cross-session enforcement)
-            VillageMetadataStore metadataStore = plugin.getMetadataStore();
-            
             VillagePlacementServiceImpl placementService;
             try {
                 placementService = new VillagePlacementServiceImpl(
@@ -211,16 +215,17 @@ public class VillageWorldgenAdapter implements Listener {
             Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed, villageId);
             
             if (placedVillageId.isPresent()) {
+                VillageService vs = plugin.getVillageService();
+                var village = vs.createVillage(villageId, cultureId, villageName, world.getName(),
+                        baseX, finalY + 1, baseZ);
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
                         + world.getName() + " @ (" + baseX + "," + (finalY + 1) + "," + baseZ + ")");
+                if (plugin.getProjectGenerator() != null) {
+                    plugin.getProjectGenerator().generateInitialProjects(village);
+                }
             } else {
                 logger.warning("X Failed to place structures for village '" + villageName + "'");
                 maybePlaceMarkerPillar(world, baseX, finalY, baseZ, "zero structure placements");
-            }
-            
-            // Generate initial projects for the village
-            if (plugin.getProjectGenerator() != null) {
-                plugin.getProjectGenerator().generateInitialProjects(village);
             }
             
         });
@@ -239,85 +244,27 @@ public class VillageWorldgenAdapter implements Listener {
         logger.info("Searching for suitable village terrain within " + maxRadius + " blocks of spawn...");
         logger.info("  Spawn location: " + start.getBlockX() + ", " + start.getBlockY() + ", " + start.getBlockZ());
         
-        int startX = start.getBlockX();
-        int startZ = start.getBlockZ();
-        int checkRadius = 24; // Check 24 block radius for flatness (reduced from 32)
-        int sampleInterval = 24; // Check every 24 blocks in spiral (increased from 16 for speed)
+        int[] radii = new int[]{
+                maxRadius,
+                Math.max(maxRadius * 2, 1024),
+                Math.max(maxRadius * 4, 2048)
+        };
         
-        int locationsChecked = 0;
-        long searchStartTime = System.currentTimeMillis();
-        
-        // T052a/T067: Time budget for chunk loading (ms) - prevents extended blocking
-        // Increased from 2000ms to 10000ms (10 seconds) to improve spawn village success rate.
-        // This method runs async, so it doesn't directly block the main thread, but aggressive
-        // chunk loading can still cause lag spikes. T066 will address this properly with 
-        // tick-budgeted placement. For now, 10s is a compromise between success rate and 
-        // acceptable lag impact. The 2s budget was too restrictive (only 168 locations checked
-        // with 145 chunks skipped), causing terrain search to fail and fall back to unsuitable
-        // spawn locations. Command placement has no budget limit, hence its success.
-        final long CHUNK_LOAD_BUDGET_MS = 10000; // Max 10 seconds of chunk loading for terrain search
-        int chunksLoaded = 0;
-        int chunksSkipped = 0;
-        
-        // Spiral search pattern - increased max radius for more opportunities
-        for (int radius = 16; radius <= Math.min(maxRadius, 768); radius += sampleInterval) {
-            // Check 8 points around the circle at this radius
-            for (int i = 0; i < 8; i++) {
-                double angle = (i / 8.0) * 2 * Math.PI;
-                int x = startX + (int)(radius * Math.cos(angle));
-                int z = startZ + (int)(radius * Math.sin(angle));
-                
-                locationsChecked++;
-                
-                // T052a: Check time budget before chunk loading
-                long elapsed = System.currentTimeMillis() - searchStartTime;
-                if (elapsed > CHUNK_LOAD_BUDGET_MS) {
-                    // Budget exceeded - log diagnostic and skip remaining unloaded chunks
-                    if (chunksSkipped == 0) {
-                        logger.warning(String.format("[TERRAIN][DIAG] Chunk load budget exceeded (%dms > %dms), skipping unloaded chunks",
-                                elapsed, CHUNK_LOAD_BUDGET_MS));
-                    }
-                    
-                    int chunkX = x >> 4;
-                    int chunkZ = z >> 4;
-                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                        chunksSkipped++;
-                        continue;
-                    }
-                }
-                
-                // Check if this location is suitable
-                if (isTerrainSuitableTimeBudgeted(world, x, z, checkRadius, searchStartTime, CHUNK_LOAD_BUDGET_MS)) {
-                    int y = world.getHighestBlockYAt(x, z);
-                    long searchTime = System.currentTimeMillis() - searchStartTime;
-                    logger.info("OK Found suitable terrain after checking " + locationsChecked + " locations in " + searchTime + "ms");
-                    logger.info("   Location: distance=" + radius + " blocks, coords=(" + x + ", " + y + ", " + z + ")");
-                    
-                    // T052a: Emit diagnostic if significant chunk loading occurred
-                    if (chunksLoaded > 20 || chunksSkipped > 0) {
-                        logger.info(String.format("[TERRAIN][DIAG] Terrain search stats: chunks_loaded=%d, chunks_skipped=%d, time=%dms",
-                                chunksLoaded, chunksSkipped, searchTime));
-                    }
-                    
-                    return new Location(world, x, y, z);
-                }
+        AsyncTerrainSearch searcher = new AsyncTerrainSearch(plugin);
+        Location result = null;
+        for (int radius : radii) {
+            logger.info("  Terrain search pass: radius=" + radius + " blocks");
+            try {
+                result = searcher.searchAsync(world, start, radius, null).join();
+            } catch (Exception e) {
+                logger.warning("  Terrain search pass failed: " + e.getMessage());
             }
-            
-            // Log progress every 100 blocks of radius to show we're not stuck
-            if (radius % 96 == 0) {
-                long elapsed = System.currentTimeMillis() - searchStartTime;
-                logger.info("  Terrain search progress: radius=" + radius + "/" + maxRadius + ", checked=" + locationsChecked + " locations, elapsed=" + elapsed + "ms");
+            if (result != null) {
+                return result;
             }
         }
         
-        long searchTime = System.currentTimeMillis() - searchStartTime;
-        logger.warning("X No suitable terrain found after checking " + locationsChecked + " locations in " + searchTime + "ms");
-        
-        // T052a: Emit final diagnostic
-        if (chunksSkipped > 0) {
-            logger.warning(String.format("[TERRAIN][DIAG] Search completed with %d chunks skipped due to budget", chunksSkipped));
-        }
-        
+        logger.warning("X No suitable terrain found after expanded search passes");
         return null;
     }
     
@@ -334,7 +281,8 @@ public class VillageWorldgenAdapter implements Listener {
      * @return true if terrain is suitable
      */
     private boolean isTerrainSuitableTimeBudgeted(World world, int centerX, int centerZ, int checkRadius,
-                                                   long searchStartTime, long chunkLoadBudgetMs) {
+                                                   long searchStartTime, long chunkLoadBudgetMs,
+                                                   SurfaceSolver surfaceSolver) {
         // T052a: Check time budget before forcing chunk loads
         long elapsed = System.currentTimeMillis() - searchStartTime;
         boolean budgetExceeded = elapsed > chunkLoadBudgetMs;
@@ -375,14 +323,15 @@ public class VillageWorldgenAdapter implements Listener {
         }
         
         // Now do the actual terrain check (chunks are loaded)
-        return evaluateTerrainFast(world, centerX, centerZ, checkRadius);
+        return evaluateTerrainFast(world, centerX, centerZ, checkRadius, surfaceSolver);
     }
     
     /**
      * Fast terrain evaluation (assumes chunks are loaded).
      * T057d: Added dense water proximity check to prevent selecting water-adjacent sites.
      */
-    private boolean evaluateTerrainFast(World world, int centerX, int centerZ, int checkRadius) {
+    private boolean evaluateTerrainFast(World world, int centerX, int centerZ, int checkRadius,
+                                        SurfaceSolver surfaceSolver) {
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
         int waterBlocks = 0;
@@ -393,15 +342,14 @@ public class VillageWorldgenAdapter implements Listener {
             for (int z = -checkRadius; z <= checkRadius; z += 12) {
                 int checkX = centerX + x;
                 int checkZ = centerZ + z;
-                int y = world.getHighestBlockYAt(checkX, checkZ);
+                int y = surfaceSolver.getSurfaceHeight(checkX, checkZ);
                 
                 minY = Math.min(minY, y);
                 maxY = Math.max(maxY, y);
                 totalChecks++;
                 
-                // Check if surface is water
-                Material surface = world.getBlockAt(checkX, y, checkZ).getType();
-                if (surface == Material.WATER) {
+                // Check if surface above ground is water or frozen water (ice on top of water)
+                if (isWaterOrFrozenWaterSurface(world, checkX, y, checkZ)) {
                     waterBlocks++;
                 }
             }
@@ -423,7 +371,7 @@ public class VillageWorldgenAdapter implements Listener {
         // TerraformingPlan vetoes any water within margin of structure footprint
         // Structures are typically 13-18 blocks, so check 25-block radius densely
         if (flatEnough && notTooWatery && goodHeight) {
-            if (hasWaterInProximity(world, centerX, centerZ, 25)) {
+            if (hasWaterInProximity(world, centerX, centerZ, 25, surfaceSolver)) {
                 return false;
             }
         }
@@ -442,29 +390,30 @@ public class VillageWorldgenAdapter implements Listener {
      * @param radius Radius to check (should cover largest structure footprint + margin)
      * @return true if water is found within proximity
      */
-    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius) {
+    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius,
+                                        SurfaceSolver surfaceSolver) {
         // Check in a cross pattern first (fast rejection)
         for (int d = -radius; d <= radius; d += 4) {
             // Check along X axis
-            int y1 = world.getHighestBlockYAt(centerX + d, centerZ);
-            if (world.getBlockAt(centerX + d, y1, centerZ).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ)) {
                 return true;
             }
             // Check along Z axis
-            int y2 = world.getHighestBlockYAt(centerX, centerZ + d);
-            if (world.getBlockAt(centerX, y2, centerZ + d).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX, y2, centerZ + d)) {
                 return true;
             }
         }
         
         // Check diagonals
         for (int d = -radius; d <= radius; d += 6) {
-            int y1 = world.getHighestBlockYAt(centerX + d, centerZ + d);
-            if (world.getBlockAt(centerX + d, y1, centerZ + d).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ + d)) {
                 return true;
             }
-            int y2 = world.getHighestBlockYAt(centerX + d, centerZ - d);
-            if (world.getBlockAt(centerX + d, y2, centerZ - d).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ - d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y2, centerZ - d)) {
                 return true;
             }
         }
@@ -473,29 +422,75 @@ public class VillageWorldgenAdapter implements Listener {
         int structureRadius = 20; // Covers 18-block structure + 2-block margin
         for (int x = -structureRadius; x <= structureRadius; x += 3) {
             // Top edge
-            int y1 = world.getHighestBlockYAt(centerX + x, centerZ - structureRadius);
-            if (world.getBlockAt(centerX + x, y1, centerZ - structureRadius).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ - structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y1, centerZ - structureRadius)) {
                 return true;
             }
             // Bottom edge
-            int y2 = world.getHighestBlockYAt(centerX + x, centerZ + structureRadius);
-            if (world.getBlockAt(centerX + x, y2, centerZ + structureRadius).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ + structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y2, centerZ + structureRadius)) {
                 return true;
             }
         }
         for (int z = -structureRadius; z <= structureRadius; z += 3) {
             // Left edge
-            int y1 = world.getHighestBlockYAt(centerX - structureRadius, centerZ + z);
-            if (world.getBlockAt(centerX - structureRadius, y1, centerZ + z).getType() == Material.WATER) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX - structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX - structureRadius, y1, centerZ + z)) {
                 return true;
             }
             // Right edge
-            int y2 = world.getHighestBlockYAt(centerX + structureRadius, centerZ + z);
-            if (world.getBlockAt(centerX + structureRadius, y2, centerZ + z).getType() == Material.WATER) {
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX + structureRadius, y2, centerZ + z)) {
                 return true;
             }
         }
         
+        return false;
+    }
+    
+    /**
+     * Check if a material is water or a frozen water surface (ice variants).
+     * Frozen water appears as ice on top of water - buildings placed here would
+     * end up underwater because SurfaceSolver skips ice to find the actual ground.
+     * 
+     * @param type Material to check
+     * @return true if water or any ice variant
+     */
+    private boolean isWaterOrFrozenWater(Material type) {
+        return type == Material.WATER ||
+               type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
+    }
+
+    private boolean isWaterOrFrozenWaterSurface(World world, int x, int groundY, int z) {
+        Material surface = world.getBlockAt(x, groundY + 1, z).getType();
+        return isWaterOrFrozenWater(surface);
+    }
+
+    private boolean hasExistingVillages(World world, VillageMetadataStore metadataStore) {
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (village.getOrigin().getWorld().equals(world)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean violatesInterVillageSpacing(World world, int x, int y, int z, int minVillageSpacing,
+                                                VillageMetadataStore metadataStore) {
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+                x, x, z, z);
+        for (VillageMetadataStore.VillageMetadata existingVillage : metadataStore.getAllVillages()) {
+            if (!existingVillage.getOrigin().getWorld().equals(world)) {
+                continue;
+            }
+            int distance = proposedBorder.getDistanceTo(existingVillage.getBorder());
+            if (distance < minVillageSpacing) {
+                return true;
+            }
+        }
         return false;
     }
     
