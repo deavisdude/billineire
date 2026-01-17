@@ -133,14 +133,16 @@ public class SurfaceSolver {
         // Basic vegetation check to find "true" ground
         // This matches logic in PathServiceImpl.findGroundLevel
         String name = type.name();
-        return name.contains("LEAVES") || 
-               (name.contains("GRASS") && type != Material.GRASS_BLOCK) || 
-               name.contains("FERN") ||
-               type == Material.VINE ||
-               type == Material.SUNFLOWER ||
-               type == Material.LILAC ||
-               type == Material.ROSE_BUSH ||
-               type == Material.PEONY;
+         return name.contains("LEAVES") ||
+             name.endsWith("_LOG") ||
+             name.endsWith("_STEM") ||
+             (name.contains("GRASS") && type != Material.GRASS_BLOCK) ||
+             name.contains("FERN") ||
+             type == Material.VINE ||
+             type == Material.SUNFLOWER ||
+             type == Material.LILAC ||
+             type == Material.ROSE_BUSH ||
+             type == Material.PEONY;
     }
     
     /**

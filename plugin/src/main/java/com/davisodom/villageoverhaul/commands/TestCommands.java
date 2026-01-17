@@ -103,8 +103,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     UUID target = UUID.fromString(args[1]);
                     com.davisodom.villageoverhaul.villages.VillageMetadataStore store = plugin.getMetadataStore();
                     // write existing counters or zero if missing
-                    com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters counters =
-                            store.getPlacementRejectionCounters(target).orElse(new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0));
+                        com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters counters =
+                            store.getPlacementRejectionCounters(target).orElse(new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0,0,0));
                     store.recordPlacementRejectionCounters(target, counters);
                     sender.sendMessage("§aPlacement counters written for village: " + target.toString());
                 } catch (Exception ex) {
@@ -1093,7 +1093,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         metadataStore.registerVillage(village.getId(), "roman", new org.bukkit.Location(world, baseX, baseY, baseZ), seed);
         // Ensure placement rejection counters artifact exists for fixed-layout test villages
         try {
-            metadataStore.recordPlacementRejectionCounters(village.getId(), new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0));
+            metadataStore.recordPlacementRejectionCounters(village.getId(), new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0,0,0));
         } catch (Exception ex) {
             plugin.getLogger().warning("[STRUCT][DIAG] Failed to create placement counters artifact for fixed-layout village: " + ex.getMessage());
         }

@@ -198,7 +198,9 @@ public class VillageMetadataStoreTest {
                 8,   // spacing
                 2,   // overlap
                 1,   // chunkNotReady
-                200  // candidates
+            12,  // siteValidationRejects
+            6,   // terraformRejects
+            200  // candidates
         );
 
         store.recordPlacementRejectionCounters(villageId, counters);

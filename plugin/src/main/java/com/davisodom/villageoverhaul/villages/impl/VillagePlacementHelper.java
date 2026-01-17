@@ -42,29 +42,34 @@ public class VillagePlacementHelper {
         }
         
         // Rotate each corner around origin (0,0,0) using Y-axis rotation matrix
+        // Must match WorldEdit's AffineTransform.rotateY() behavior
         int[][] rotatedCorners = new int[8][3];
         for (int i = 0; i < 8; i++) {
             int x = corners[i][0];
             int y = corners[i][1];
             int z = corners[i][2];
             
-            // Apply Y-axis rotation (clockwise when viewed from above)
+            // Apply Y-axis rotation matching WorldEdit's AffineTransform.rotateY()
+            // WorldEdit uses: x' = x*cos + z*sin, z' = -x*sin + z*cos
+            // For 90°:  (x,z) -> (z, -x)   [clockwise when Y is up, looking down]
+            // For 180°: (x,z) -> (-x, -z)
+            // For 270°: (x,z) -> (-z, x)
             switch (rotation) {
                 case 0:
                     rotatedCorners[i][0] = x;
                     rotatedCorners[i][2] = z;
                     break;
                 case 90:
-                    rotatedCorners[i][0] = -z;
-                    rotatedCorners[i][2] = x;
+                    rotatedCorners[i][0] = z;
+                    rotatedCorners[i][2] = -x;
                     break;
                 case 180:
                     rotatedCorners[i][0] = -x;
                     rotatedCorners[i][2] = -z;
                     break;
                 case 270:
-                    rotatedCorners[i][0] = z;
-                    rotatedCorners[i][2] = -x;
+                    rotatedCorners[i][0] = -z;
+                    rotatedCorners[i][2] = x;
                     break;
             }
             rotatedCorners[i][1] = y; // Y unchanged

@@ -1475,7 +1475,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - A failed candidate results in a new (x,z,rotation) within bounds until the search budget is exhausted.
     - Logs include `[STRUCT][BOUNDS]` with bounds, candidates tried, and coverage stats.
 
-- [ ] T078 [P1] Terraforming resilience inside bounds
+- [X] T078 [P1] Terraforming resilience inside bounds
   - Story: Structure generation resilience / terraforming
   - Description: When site validation passes but TerraformingPlan fails (water patches, blocked), retry with alternate candidates within bounds before aborting the structure. Add a bounded retry budget and ensure failures count toward diagnostics without ending the whole structure placement.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`
@@ -1621,7 +1621,27 @@ Removed (duplicate):
     - 0 floating slabs/stairs; complements headless test T026f.
     - Emitted blocks restricted to natural whitelist.
 
-Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
+- [ ] T081 [P1] Fix terraforming to respect local surface materials
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+  - Description: Ensure terraforming operations (grading/filling) detect and use the dominant local surface material (e.g., SAND in deserts, MYCELIUM in mushroom fields, PODZOL in taigas) instead of defaulting to grass/dirt.
+  - Acceptance: Buildings placed on non-grass surfaces have foundations that match the surrounding terrain (e.g., sand foundations in deserts).
+
+- [ ] T082 [P1] Fix embedded structures (1-2 blocks too deep) in high-slope terrain
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Investigate and fix cases where buildings are placed 1-2 blocks too deep into terrain. This occurred in a recent playtest (accessible but awkward).
+  - Acceptance: Natural-looking placement depth with entrance accessibility and no awkward embedding.
+
+- [ ] T083 [P0] Add footprint chunk-readiness check before SurfaceSolver sampling
+  - Story: Performance and Non-blocking Placement
+  - Description: Before SurfaceSolver performs height sampling for a structure footprint, implement a check to ensure all affected chunks are loaded/ready. Skip the footprint (candidate) if any chunk is unloaded to prevent synchronous loading on the main thread. This prevents the "freeze" issue during the site validation phase.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Acceptance:
+    - SurfaceSolver.isFootprintReady(World, AABB) returns false if any chunk in the box is missing.
+    - StructureServiceImpl skips candidates that fail this check.
+    - Zero synchronous chunk loads during `/votest` generation in unloaded areas.
+    - Log diagnostic: `[STRUCT] candidate rejected: chunk-not-ready`.
+
+Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T083) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
 
@@ -1867,7 +1887,7 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
 
 ---
 
-## Triage & Backlog (In Progress)
+## Temporary Triage & Backlog
 
 - [X] T073-foundation-fix [P1] Investigate Y-level foundation placement mismatches (floating/embedded structures)
   - **Files**: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
@@ -1904,16 +1924,6 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
     2. Create unit test for TerraformingUtil.gradeFoundation() to verify solid block placement
     3. Run harness 2–3 times with different seeds to confirm all structures have solid corners
     4. If issue persists, add fallback: force backfilling of non-solid foundation blocks with dirt after paste
-
-- [ ] T081 [P1] Fix terraforming to respect local surface materials
-  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
-  - Description: Ensure terraforming operations (grading/filling) detect and use the dominant local surface material (e.g., SAND in deserts, MYCELIUM in mushroom fields, PODZOL in taigas) instead of defaulting to grass/dirt.
-  - Acceptance: Buildings placed on non-grass surfaces have foundations that match the surrounding terrain (e.g., sand foundations in deserts).
-
-- [ ] T082 [P1] Fix embedded structures (1-2 blocks too deep) in high-slope terrain
-  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
-  - Description: Investigate and fix cases where buildings are placed 1-2 blocks too deep into terrain. This occurred in a recent playtest (accessible but awkward).
-  - Acceptance: Natural-looking placement depth with entrance accessibility and no awkward embedding.
 
 ---
 

@@ -212,8 +212,8 @@ public class TerrainClassifier {
     private static int findGroundLevel(World world, int x, int z) {
         int startY = world.getHighestBlockYAt(x, z);
         
-        // Search downward up to 20 blocks to find solid ground beneath vegetation
-        for (int y = startY; y > startY - 20 && y > world.getMinHeight(); y--) {
+        // Search downward up to 64 blocks to find solid ground beneath vegetation
+        for (int y = startY; y > startY - 64 && y > world.getMinHeight(); y--) {
             Block block = world.getBlockAt(x, y, z);
             Block below = world.getBlockAt(x, y - 1, z);
             

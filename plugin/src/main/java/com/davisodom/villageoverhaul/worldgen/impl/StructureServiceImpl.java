@@ -355,7 +355,7 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
                     structureId, seed));
             if (attemptDiagnostics != null) {
-                attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+                attemptDiagnostics.merge("siteValidationRejects", 1, Integer::sum);
                 // Try to capture fluid counts if available via last site validation - best-effort
                 // We don't have direct access to the ValidationResult here, but attemptSinglePlacementAndGetLocation
                 // records specific diagnostics into the map when it fails. This is a fallback increment.
@@ -462,13 +462,13 @@ public class StructureServiceImpl implements StructureService {
             template.id, formatLocation(origin), seed));
         if (attemptDiagnostics != null) attemptDiagnostics.merge("placementAttempts", 1, Integer::sum);
         
-        // T057g: Ensure all chunks covering structure footprint are loaded BEFORE validation
-        // This prevents false "blocked" rejections when blocks return AIR due to unloaded chunks
+        // T057g/T083: Ensure all chunks covering structure footprint are loaded BEFORE validation
+        // Avoid synchronous chunk loads on the main thread; skip candidates if any chunk is missing.
         int width = template.dimensions[0];
         int depth = template.dimensions[2];
         if (!ensureFootprintChunksLoaded(world, origin, width, depth)) {
-            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Chunk loading failed for '%s' at %s - aborting placement",
-                    template.id, formatLocation(origin)));
+            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Chunk not ready for '%s' at %s - skipping candidate",
+                template.id, formatLocation(origin)));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("chunkNotReady", 1, Integer::sum);
             return Optional.empty();
         }
@@ -509,8 +509,8 @@ public class StructureServiceImpl implements StructureService {
             double maxSlopeDelta = steepFrac * template.dimensions[1]; // rough estimate
 
             // Get effective thresholds from validator (these are configurable)
-            // We'll use the default values for now since SiteValidator doesn't expose them
-            double maxSteepThreshold = 0.40;  // from SiteValidator.maxSteepFraction default
+            // Updated to match SiteValidator defaults (Jan 2026)
+            double maxSteepThreshold = 0.60;  // from SiteValidator.maxSteepFraction default
             double maxBlockedThreshold = 0.30; // from SiteValidator.maxBlockedFraction default
 
             LOGGER.info(String.format(
@@ -527,7 +527,7 @@ public class StructureServiceImpl implements StructureService {
             ));
             
             if (attemptDiagnostics != null) {
-                attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+                attemptDiagnostics.merge("siteValidationRejects", 1, Integer::sum);
                 if (siteValidation.classificationResult != null) {
                     attemptDiagnostics.merge("fluid", siteValidation.classificationResult.fluid, Integer::sum);
                     attemptDiagnostics.merge("steep", siteValidation.classificationResult.steep, Integer::sum);
@@ -578,7 +578,10 @@ public class StructureServiceImpl implements StructureService {
         if (!planValid) {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Terraforming plan failed: %s - no blocks modified", 
                     terraformPlan.getRejectionReason()));
-            if (attemptDiagnostics != null) attemptDiagnostics.merge("terrainInvalid", 1, Integer::sum);
+            if (attemptDiagnostics != null) {
+                attemptDiagnostics.merge("terraformRejects", 1, Integer::sum);
+                attemptDiagnostics.merge("terraformPlanFailed", 1, Integer::sum);
+            }
             // T051: Emit diagnostic artifact for failed terraforming plans (not committed, not rolled back)
             emitTerraformingDiagnostic(template.id, bounds, terraformPlan, false, false);
             return Optional.empty();
@@ -608,7 +611,8 @@ public class StructureServiceImpl implements StructureService {
              LOGGER.warning(String.format("[STRUCT] Terraforming commit aborted for '%s' at %s",
                  template.id, formatLocation(origin)));
              if (attemptDiagnostics != null) {
-             attemptDiagnostics.merge("terraformCommitFailed", 1, Integer::sum);
+                 attemptDiagnostics.merge("terraformRejects", 1, Integer::sum);
+                 attemptDiagnostics.merge("terraformCommitFailed", 1, Integer::sum);
              }
              emitTerraformingDiagnostic(template.id, bounds, terraformPlan, terraformPlan.isCommitted(), terraformPlan.isRolledBack());
              return Optional.empty();
@@ -629,7 +633,7 @@ public class StructureServiceImpl implements StructureService {
         // Now perform structure placement on the prepared foundation
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
                 template.id, formatLocation(origin)));
-        boolean placed = performActualPlacement(template, world, origin, seed, attemptDiagnostics);
+        boolean placed = performActualPlacement(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement returned %b for '%s'",
                 placed, template.id));
         
@@ -797,27 +801,31 @@ public class StructureServiceImpl implements StructureService {
      * Perform the actual structure placement.
      * Uses FAWE/WorldEdit if available and schematic is loaded, otherwise falls back to Paper API.
      */
-    private boolean performActualPlacement(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
+    private boolean performActualPlacement(StructureTemplate template, World world, Location origin, long seed,
+                                           int rotationDegrees,
+                                           java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: performActualPlacement - clipboard=%s, faweAvailable=%b",
                 (template.clipboard != null ? "present" : "null"), faweAvailable));
         
         // If template has a schematic loaded, use WorldEdit/FAWE placement
         if (template.clipboard != null && faweAvailable) {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeWorldEdit for '%s'", template.id));
-            return placeWorldEdit(template, world, origin, seed, attemptDiagnostics);
+            return placeWorldEdit(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
         } else if (faweAvailable) {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placeFAWE for '%s'", template.id));
-            return placeFAWE(template, world, origin, seed, attemptDiagnostics);
+            return placeFAWE(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
         } else {
             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Routing to placePaperAPI for '%s'", template.id));
-                return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
+                return placePaperAPI(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
         }
     }
     
     /**
      * Place structure using WorldEdit/FAWE with actual schematic data.
      */
-    private boolean placeWorldEdit(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
+    private boolean placeWorldEdit(StructureTemplate template, World world, Location origin, long seed,
+                                   int rotationDegrees,
+                                   java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: placeWorldEdit ENTRY for '%s' at %s", 
                 template.id, formatLocation(origin)));
         
@@ -844,9 +852,7 @@ public class StructureServiceImpl implements StructureService {
                  LOGGER.info("[STRUCT] DIAGNOSTIC: Creating ClipboardHolder");
                  ClipboardHolder holder = new ClipboardHolder(template.clipboard);
                  
-                 // Apply deterministic rotation based on seed
-                 Random random = new Random(seed);
-                 int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+                 // Apply deterministic rotation based on candidate selection
                  LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Rotation=%d degrees", rotationDegrees));
                  if (rotationDegrees > 0) {
                      AffineTransform transform = new AffineTransform();
@@ -905,14 +911,16 @@ public class StructureServiceImpl implements StructureService {
              LOGGER.warning(String.format("[STRUCT] WorldEdit placement failed for '%s': %s", 
                      template.id, e.getMessage()));
              e.printStackTrace();
-             return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
+             return placePaperAPI(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
          }
     }
     
     /**
      * Place structure using FAWE (fast async world edit).
      */
-    private boolean placeFAWE(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
+    private boolean placeFAWE(StructureTemplate template, World world, Location origin, long seed,
+                              int rotationDegrees,
+                              java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.fine(String.format("[STRUCT] Using FAWE placement for '%s'", template.id));
         
         try {
@@ -977,12 +985,12 @@ public class StructureServiceImpl implements StructureService {
             
             // Until FAWE dependency is added, fall back to Paper API
             LOGGER.fine("[STRUCT] FAWE implementation pending, using Paper API fallback");
-            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
+            return placePaperAPI(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
             
         } catch (Exception e) {
             LOGGER.warning(String.format("[STRUCT] FAWE placement failed for '%s': %s", 
                     template.id, e.getMessage()));
-            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
+            return placePaperAPI(template, world, origin, seed, rotationDegrees, attemptDiagnostics);
         }
     }
     
@@ -990,7 +998,9 @@ public class StructureServiceImpl implements StructureService {
      * Place structure using Paper API block-by-block.
      * Generates Roman-style architecture based on template ID.
      */
-    private boolean placePaperAPI(StructureTemplate template, World world, Location origin, long seed, java.util.Map<String, Integer> attemptDiagnostics) {
+    private boolean placePaperAPI(StructureTemplate template, World world, Location origin, long seed,
+                                  int rotationDegrees,
+                                  java.util.Map<String, Integer> attemptDiagnostics) {
         LOGGER.fine(String.format("[STRUCT] Using Paper API placement for '%s'", template.id));
         
         // T026d4: Ensure all chunks in the structure's footprint are loaded before placement
@@ -1473,23 +1483,27 @@ public class StructureServiceImpl implements StructureService {
                 int y = corners[i][1];
                 int z = corners[i][2];
                 
-                // Apply Y-axis rotation (clockwise when viewed from above)
+                // Apply Y-axis rotation matching WorldEdit's AffineTransform.rotateY()
+                // WorldEdit uses: x' = x*cos + z*sin, z' = -x*sin + z*cos
+                // For 90°:  (x,z) -> (z, -x)   [clockwise when Y is up, looking down]
+                // For 180°: (x,z) -> (-x, -z)
+                // For 270°: (x,z) -> (-z, x)
                 switch (rotation) {
                     case 0:
                         rotatedCorners[i][0] = x;
                         rotatedCorners[i][2] = z;
                         break;
                     case 90:
-                        rotatedCorners[i][0] = -z;
-                        rotatedCorners[i][2] = x;
+                        rotatedCorners[i][0] = z;
+                        rotatedCorners[i][2] = -x;
                         break;
                     case 180:
                         rotatedCorners[i][0] = -x;
                         rotatedCorners[i][2] = -z;
                         break;
                     case 270:
-                        rotatedCorners[i][0] = z;
-                        rotatedCorners[i][2] = -x;
+                        rotatedCorners[i][0] = -z;
+                        rotatedCorners[i][2] = x;
                         break;
                 }
                 rotatedCorners[i][1] = y; // Y unchanged
@@ -1637,12 +1651,8 @@ public class StructureServiceImpl implements StructureService {
     }
     
     /**
-    /**
-     * T057g: Ensure all chunks covering a structure's footprint are loaded.
-     * This prevents false "blocked" rejections when world.getBlockAt() returns AIR
-     * for blocks in unloaded chunks.
-     * 
-     * Called from main thread (via GenerateCommand) so synchronous chunk loading is safe.
+     * T057g/T083: Ensure all chunks covering a structure's footprint are ready.
+     * This avoids synchronous chunk loading during validation.
      * 
      * @param world Target world
      * @param origin Structure origin (southwest corner)
@@ -1653,44 +1663,42 @@ public class StructureServiceImpl implements StructureService {
     private boolean ensureFootprintChunksLoaded(World world, Location origin, int width, int depth) {
         int originX = origin.getBlockX();
         int originZ = origin.getBlockZ();
-        
-        // Calculate chunk range needed to cover the structure footprint
-        int minChunkX = originX >> 4;
-        int maxChunkX = (originX + width - 1) >> 4;
-        int minChunkZ = originZ >> 4;
-        int maxChunkZ = (originZ + depth - 1) >> 4;
-        
-        // Count of chunks loaded/already loaded
-        int loaded = 0;
+
+        // Expand by 1 block to cover 3x3 slope sampling in TerrainClassifier
+        int minX = originX - 1;
+        int maxX = originX + width;
+        int minZ = originZ - 1;
+        int maxZ = originZ + depth;
+
+        int minChunkX = minX >> 4;
+        int maxChunkX = maxX >> 4;
+        int minChunkZ = minZ >> 4;
+        int maxChunkZ = maxZ >> 4;
+
+        int ready = 0;
         int total = 0;
-        
+
         for (int cx = minChunkX; cx <= maxChunkX; cx++) {
             for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
                 total++;
-                
-                // Check if already loaded
-                if (world.isChunkLoaded(cx, cz)) {
-                    loaded++;
-                    continue;
-                }
-                
-                // Try to load the chunk - this is safe from main thread
-                // Use getChunkAt which will generate if necessary
-                try {
-                    world.getChunkAt(cx, cz);
-                    loaded++;
-                    LOGGER.fine(String.format("[STRUCT][CHUNK] Loaded chunk (%d, %d) for structure footprint", cx, cz));
-                } catch (Exception e) {
-                    LOGGER.warning(String.format("[STRUCT][CHUNK] Failed to load chunk (%d, %d): %s", cx, cz, e.getMessage()));
-                    return false;
+                boolean generated = world.isChunkGenerated(cx, cz);
+                boolean loaded = world.isChunkLoaded(cx, cz);
+                // Accept chunks that are EITHER generated (saved) OR loaded (in memory)
+                if (generated || loaded) {
+                    ready++;
+                } else {
+                    LOGGER.fine(String.format("[STRUCT][CHUNK] Not ready (%d,%d) generated=%b loaded=%b",
+                            cx, cz, generated, loaded));
                 }
             }
         }
-        
-        LOGGER.fine(String.format("[STRUCT][CHUNK] Footprint chunks: %d/%d loaded for %dx%d structure at %s",
-                loaded, total, width, depth, formatLocation(origin)));
-        
-        return loaded == total;
+
+        if (ready != total) {
+            LOGGER.warning(String.format("[STRUCT][CHUNK] Footprint chunks not ready: %d/%d for %dx%d at %s",
+                    ready, total, width, depth, formatLocation(origin)));
+        }
+
+        return ready == total;
     }
     
     /**
@@ -1795,8 +1803,11 @@ public class StructureServiceImpl implements StructureService {
         List<String> reasons = new ArrayList<>();
         
         if (!result.foundationOk) {
-            // Check classification result for specific terrain issues
-            if (result.classificationResult != null) {
+            // Prefer detailed rejection reasons from SiteValidator if available
+            List<String> detailedReasons = result.getRejectionReasons();
+            if (detailedReasons != null && !detailedReasons.isEmpty()) {
+                reasons.addAll(detailedReasons);
+            } else if (result.classificationResult != null) {
                 if (result.classificationResult.fluid > 0) {
                     reasons.add(String.format("fluid (water/lava: %d tiles)", result.classificationResult.fluid));
                 }

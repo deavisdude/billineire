@@ -279,6 +279,9 @@ public class TickBudgetedGenerationQueue {
     private void processTerrainSearch(long tickStart, long remainingMs) {
         // If we already found terrain, move to next phase
         if (currentState.suitableLocation != null) {
+            if (!ensurePreloadReady(currentState.suitableLocation)) {
+                return;
+            }
             currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.VILLAGE_CREATION);
             logProgress();
             return;
@@ -338,6 +341,10 @@ public class TickBudgetedGenerationQueue {
         
         currentRequest.sendMessage(Component.text("Found suitable terrain at " + 
                 formatLocation(currentState.suitableLocation), NamedTextColor.GREEN));
+
+        if (!ensurePreloadReady(currentState.suitableLocation)) {
+            return;
+        }
         
         currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.VILLAGE_CREATION);
         logProgress();
@@ -386,6 +393,9 @@ public class TickBudgetedGenerationQueue {
      * Process structure placement phase (budgeted, one structure at a time).
      */
     private void processStructurePlacement(long tickStart, long remainingMs) {
+        if (currentState.suitableLocation != null && !ensurePreloadReady(currentState.suitableLocation)) {
+            return;
+        }
         // If not started, initiate placement
         if (currentState.placementFuture == null) {
             initiateStructurePlacement();
@@ -474,6 +484,8 @@ public class TickBudgetedGenerationQueue {
         if (currentRequest == null) {
             return;
         }
+
+        releaseChunkTickets();
         
         LOGGER.info(String.format("[GEN-QUEUE] Finished: %s (phase=%s, elapsed=%dms)", 
                 currentRequest, currentRequest.getCurrentPhase(), currentRequest.getTotalElapsedMs()));
@@ -499,6 +511,154 @@ public class TickBudgetedGenerationQueue {
             ticksSinceLastProgress = 0;
         }
     }
+
+    private boolean ensurePreloadReady(Location center) {
+        if (currentState == null || center == null) {
+            return true;
+        }
+
+        if (currentState.preloadFuture == null) {
+            currentState.preloadCenterX = center.getBlockX();
+            currentState.preloadCenterZ = center.getBlockZ();
+            currentState.preloadRadiusBlocks = plugin.getMaxBoundsRadiusBlocks() + 32;
+            currentState.preloadFuture = preloadPlacementChunks(center.getWorld(),
+                    currentState.preloadCenterX, currentState.preloadCenterZ, currentState.preloadRadiusBlocks);
+            currentRequest.sendMessage(Component.text("Pre-loading chunks for placement area...",
+                    NamedTextColor.GRAY));
+            return false;
+        }
+
+        if (!currentState.preloadFuture.isDone()) {
+            return false;
+        }
+
+        if (currentState.preloadResult == null) {
+            currentState.preloadResult = currentState.preloadFuture.join();
+            logPreloadResult(currentState.preloadResult);
+        }
+
+        if (!currentState.chunkTicketsApplied) {
+            currentState.chunkTicketsApplied = reserveChunkTickets(center.getWorld(),
+                    currentState.preloadCenterX, currentState.preloadCenterZ, currentState.preloadRadiusBlocks);
+        }
+
+        return true;
+    }
+
+    private CompletableFuture<ChunkPreloadResult> preloadPlacementChunks(World world, int centerX, int centerZ, int radiusBlocks) {
+        if (world == null) {
+            return CompletableFuture.completedFuture(new ChunkPreloadResult(0, 0, 0, "World not available"));
+        }
+
+        int chunkRadius = (radiusBlocks / 16) + 1;
+        int centerChunkX = centerX >> 4;
+        int centerChunkZ = centerZ >> 4;
+
+        List<CompletableFuture<org.bukkit.Chunk>> futures = new ArrayList<>();
+        int totalChunks = 0;
+        int alreadyLoaded = 0;
+
+        for (int cx = centerChunkX - chunkRadius; cx <= centerChunkX + chunkRadius; cx++) {
+            for (int cz = centerChunkZ - chunkRadius; cz <= centerChunkZ + chunkRadius; cz++) {
+                totalChunks++;
+                if (world.isChunkLoaded(cx, cz)) {
+                    alreadyLoaded++;
+                    continue;
+                }
+
+                try {
+                    futures.add(world.getChunkAtAsync(cx, cz));
+                } catch (Exception e) {
+                    return CompletableFuture.completedFuture(new ChunkPreloadResult(0, alreadyLoaded, totalChunks,
+                            "Chunk async load failed: " + e.getMessage()));
+                }
+            }
+        }
+
+        if (futures.isEmpty()) {
+            return CompletableFuture.completedFuture(new ChunkPreloadResult(0, alreadyLoaded, totalChunks, null));
+        }
+
+        final int finalAlreadyLoaded = alreadyLoaded;
+        final int finalTotalChunks = totalChunks;
+
+        CompletableFuture<Void> all = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        return all.handle((ignored, error) -> {
+            String errorMessage = error != null ? error.getMessage() : null;
+            return new ChunkPreloadResult(futures.size(), finalAlreadyLoaded, finalTotalChunks, errorMessage);
+        });
+    }
+
+    private void logPreloadResult(ChunkPreloadResult result) {
+        if (result == null) {
+            return;
+        }
+        if (result.errorMessage != null) {
+            LOGGER.warning(String.format("[GEN-QUEUE] Chunk pre-load encountered errors: %s", result.errorMessage));
+        }
+        if (result.totalChunks == 0) {
+            return;
+        }
+        LOGGER.info(String.format("[GEN-QUEUE] Pre-loaded %d chunks for placement area (%d were already loaded, %d total)",
+                result.loadedNow, result.alreadyLoaded, result.totalChunks));
+    }
+
+    private boolean reserveChunkTickets(World world, int centerX, int centerZ, int radiusBlocks) {
+        if (world == null || currentState == null) {
+            return false;
+        }
+
+        int chunkRadius = (radiusBlocks / 16) + 1;
+        int centerChunkX = centerX >> 4;
+        int centerChunkZ = centerZ >> 4;
+
+        currentState.chunkTicketMinX = centerChunkX - chunkRadius;
+        currentState.chunkTicketMaxX = centerChunkX + chunkRadius;
+        currentState.chunkTicketMinZ = centerChunkZ - chunkRadius;
+        currentState.chunkTicketMaxZ = centerChunkZ + chunkRadius;
+
+        int applied = 0;
+        for (int cx = currentState.chunkTicketMinX; cx <= currentState.chunkTicketMaxX; cx++) {
+            for (int cz = currentState.chunkTicketMinZ; cz <= currentState.chunkTicketMaxZ; cz++) {
+                try {
+                    if (world.addPluginChunkTicket(cx, cz, plugin)) {
+                        applied++;
+                    }
+                } catch (Exception e) {
+                    LOGGER.warning(String.format("[GEN-QUEUE] Failed to add chunk ticket (%d,%d): %s", cx, cz, e.getMessage()));
+                }
+            }
+        }
+
+        LOGGER.info(String.format("[GEN-QUEUE] Applied %d chunk tickets for placement area", applied));
+        return true;
+    }
+
+    private void releaseChunkTickets() {
+        if (currentState == null || !currentState.chunkTicketsApplied) {
+            return;
+        }
+
+        World world = currentState.world;
+        if (world == null) {
+            return;
+        }
+
+        int removed = 0;
+        for (int cx = currentState.chunkTicketMinX; cx <= currentState.chunkTicketMaxX; cx++) {
+            for (int cz = currentState.chunkTicketMinZ; cz <= currentState.chunkTicketMaxZ; cz++) {
+                try {
+                    if (world.removePluginChunkTicket(cx, cz, plugin)) {
+                        removed++;
+                    }
+                } catch (Exception e) {
+                    LOGGER.warning(String.format("[GEN-QUEUE] Failed to remove chunk ticket (%d,%d): %s", cx, cz, e.getMessage()));
+                }
+            }
+        }
+
+        LOGGER.info(String.format("[GEN-QUEUE] Released %d chunk tickets for placement area", removed));
+    }
     
     /**
      * Format location for display.
@@ -520,6 +680,30 @@ public class TickBudgetedGenerationQueue {
         VillagePlacementServiceImpl placementService;
         CompletableFuture<PlacementOutcome> placementFuture;
         boolean existingVillageRequest;
+        CompletableFuture<ChunkPreloadResult> preloadFuture;
+        ChunkPreloadResult preloadResult;
+        int preloadCenterX;
+        int preloadCenterZ;
+        int preloadRadiusBlocks;
+        boolean chunkTicketsApplied;
+        int chunkTicketMinX;
+        int chunkTicketMaxX;
+        int chunkTicketMinZ;
+        int chunkTicketMaxZ;
+    }
+
+    private static class ChunkPreloadResult {
+        private final int loadedNow;
+        private final int alreadyLoaded;
+        private final int totalChunks;
+        private final String errorMessage;
+
+        private ChunkPreloadResult(int loadedNow, int alreadyLoaded, int totalChunks, String errorMessage) {
+            this.loadedNow = loadedNow;
+            this.alreadyLoaded = alreadyLoaded;
+            this.totalChunks = totalChunks;
+            this.errorMessage = errorMessage;
+        }
     }
 
         private long resolveExistingVillageSeed(CommandGenerationRequest request) {

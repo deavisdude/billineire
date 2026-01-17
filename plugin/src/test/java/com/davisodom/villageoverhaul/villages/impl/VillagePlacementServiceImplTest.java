@@ -166,6 +166,10 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(63);
         Mockito.when(world.getMinHeight()).thenReturn(0);
@@ -253,6 +257,8 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(63);
         Mockito.when(world.getMinHeight()).thenReturn(0);
@@ -300,6 +306,12 @@ public class VillagePlacementServiceImplTest {
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt()))
+            .thenAnswer(inv -> {
+                int cx = inv.getArgument(0);
+                int cz = inv.getArgument(1);
+                return Math.abs(cx) <= 1 && Math.abs(cz) <= 1;
+            });
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt()))
             .thenAnswer(inv -> {
                 int cx = inv.getArgument(0);
                 int cz = inv.getArgument(1);
@@ -469,6 +481,7 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
         Mockito.when(world.getMinHeight()).thenReturn(0);
@@ -599,6 +612,8 @@ public class VillagePlacementServiceImplTest {
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
 
         World world = Mockito.mock(World.class);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
         Mockito.when(world.getMinHeight()).thenReturn(0);
@@ -648,6 +663,7 @@ public class VillagePlacementServiceImplTest {
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
 
         World world = Mockito.mock(World.class);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
         Mockito.when(world.getMinHeight()).thenReturn(0);
@@ -775,6 +791,7 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
         Mockito.when(world.getMinHeight()).thenReturn(0);

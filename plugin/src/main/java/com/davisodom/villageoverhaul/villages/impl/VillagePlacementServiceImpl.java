@@ -264,21 +264,23 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
                 // Persist an empty failure summary so harness can pick up structured artifacts
                 VillageMetadataStore.PlacementFailureSummary summary = new VillageMetadataStore.PlacementFailureSummary(
-                        rejectionTracker.totalAttempts,
-                        rejectionTracker.fluidRejections,
-                        rejectionTracker.steepRejections,
-                        rejectionTracker.blockedRejections,
-                        rejectionTracker.spacingRejections,
-                        rejectionTracker.overlapRejections,
-                        rejectionTracker.chunkNotReady,
-                        seed,
-                        placementSeed,
-                        rejectionTracker.totalAttempts
+                    rejectionTracker.totalAttempts,
+                    rejectionTracker.fluidRejections,
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
+                    seed,
+                    placementSeed,
+                    rejectionTracker.totalAttempts
                 );
 
                 try {
                     metadataStore.recordPlacementFailureSummary(villageId, summary);
-                    VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                        VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
                             rejectionTracker.totalAttempts,
                             rejectionTracker.fluidRejections,
                             rejectionTracker.steepRejections,
@@ -286,8 +288,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             rejectionTracker.spacingRejections,
                             rejectionTracker.overlapRejections,
                             rejectionTracker.chunkNotReady,
+                            rejectionTracker.siteValidationRejects,
+                            rejectionTracker.terraformRejects,
                             rejectionTracker.totalAttempts
-                    );
+                        );
                     metadataStore.recordPlacementRejectionCounters(villageId, counters);
                 } catch (Exception e) {
                     LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record forced zero-placement summary: %s", e.getMessage()));
@@ -314,8 +318,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
 
         // T070: Maximum number of candidate positions to try per structure before giving up
-        // This ensures we don't silently move to the next structure when terrain validation fails
-        final int maxCandidatesPerStructure = 20;
+        // Increased to reduce false zero-placement on rough terrain while keeping attempts bounded.
+        final int maxCandidatesPerStructure = 240;
         
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
@@ -398,7 +402,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     // Aggregate diagnostics from failed attempt
                     if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
                         rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
-                        rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
+                        int siteValidationRejects = attemptDiagnostics.getOrDefault("siteValidationRejects",
+                            attemptDiagnostics.getOrDefault("terrainInvalid", 0));
+                        int terraformRejects = attemptDiagnostics.getOrDefault("terraformRejects", 0);
+                        if (terraformRejects == 0) {
+                            terraformRejects = attemptDiagnostics.getOrDefault("terraformCommitFailed", 0);
+                        }
+                        rejectionTracker.terrainRejections += siteValidationRejects;
+                        rejectionTracker.siteValidationRejects += siteValidationRejects;
+                        rejectionTracker.terraformRejects += terraformRejects;
                         rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
                         rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
                         int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
@@ -438,7 +450,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.info(diag);
 
             // Persist lightweight summary so harness/CI can attach structured artifacts later (T026d11)
-            VillageMetadataStore.PlacementFailureSummary summary = new VillageMetadataStore.PlacementFailureSummary(
+                VillageMetadataStore.PlacementFailureSummary summary = new VillageMetadataStore.PlacementFailureSummary(
                     rejectionTracker.totalAttempts,
                     rejectionTracker.fluidRejections,
                     rejectionTracker.steepRejections,
@@ -446,23 +458,27 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     rejectionTracker.spacingRejections,
                     rejectionTracker.overlapRejections,
                     rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
                     seed,
                     placementSeed,
                     rejectionTracker.totalAttempts
-            );
+                );
 
             try {
                 metadataStore.recordPlacementFailureSummary(villageId, summary);
                 // Persist per-attempt counters for offline analysis (T026d12)
                 VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
-                        rejectionTracker.totalAttempts,
-                        rejectionTracker.fluidRejections,
-                        rejectionTracker.steepRejections,
-                        rejectionTracker.blockedRejections,
-                        rejectionTracker.spacingRejections,
-                        rejectionTracker.overlapRejections,
-                        rejectionTracker.chunkNotReady,
-                        rejectionTracker.totalAttempts
+                    rejectionTracker.totalAttempts,
+                    rejectionTracker.fluidRejections,
+                    rejectionTracker.steepRejections,
+                    rejectionTracker.blockedRejections,
+                    rejectionTracker.spacingRejections,
+                    rejectionTracker.overlapRejections,
+                    rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
+                    rejectionTracker.totalAttempts
                 );
 
                 metadataStore.recordPlacementRejectionCounters(villageId, counters);
@@ -553,7 +569,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
         // Persist per-attempt rejection counters so harnesses can analyze placement rejections (T026d12)
         try {
-            VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
                     rejectionTracker.totalAttempts,
                     rejectionTracker.fluidRejections,
                     rejectionTracker.steepRejections,
@@ -561,8 +577,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     rejectionTracker.spacingRejections,
                     rejectionTracker.overlapRejections,
                     rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
                     rejectionTracker.totalAttempts
-            );
+                );
             metadataStore.recordPlacementRejectionCounters(villageId, counters);
         } catch (Exception e) {
             LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record placement rejection counters for village %s: %s", villageId, e.getMessage()));
@@ -786,7 +804,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 } else {
                     if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
                         rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
-                        rejectionTracker.terrainRejections += attemptDiagnostics.getOrDefault("terrainInvalid", 0);
+                        int siteValidationRejects = attemptDiagnostics.getOrDefault("siteValidationRejects",
+                            attemptDiagnostics.getOrDefault("terrainInvalid", 0));
+                        int terraformRejects = attemptDiagnostics.getOrDefault("terraformRejects", 0);
+                        if (terraformRejects == 0) {
+                            terraformRejects = attemptDiagnostics.getOrDefault("terraformCommitFailed", 0);
+                        }
+                        rejectionTracker.terrainRejections += siteValidationRejects;
+                        rejectionTracker.siteValidationRejects += siteValidationRejects;
+                        rejectionTracker.terraformRejects += terraformRejects;
                         rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
                         rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
                         int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
@@ -819,6 +845,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         rejectionTracker.spacingRejections,
                         rejectionTracker.overlapRejections,
                         rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
                         rejectionTracker.totalAttempts
                 );
                 metadataStore.recordPlacementRejectionCounters(villageId, counters);
@@ -846,7 +874,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 villageId, existingBuildings.size(), placedBuildings.size(), existingBuildings.size() + placedBuildings.size()));
 
         try {
-            VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
+                VillageMetadataStore.PlacementRejectionCounters counters = new VillageMetadataStore.PlacementRejectionCounters(
                     rejectionTracker.totalAttempts,
                     rejectionTracker.fluidRejections,
                     rejectionTracker.steepRejections,
@@ -854,8 +882,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     rejectionTracker.spacingRejections,
                     rejectionTracker.overlapRejections,
                     rejectionTracker.chunkNotReady,
+                    rejectionTracker.siteValidationRejects,
+                    rejectionTracker.terraformRejects,
                     rejectionTracker.totalAttempts
-            );
+                );
             metadataStore.recordPlacementRejectionCounters(villageId, counters);
         } catch (Exception e) {
             LOGGER.warning(String.format("[STRUCT][DIAG] Failed to record placement rejection counters for village %s: %s", villageId, e.getMessage()));
@@ -1113,6 +1143,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         // R009: Use SurfaceSolver to find footprint-aware ground level
                         // Compute the minimum surface height under the rotated footprint
                         int[] xzBounds = computeRotatedXZBounds(candidateX, candidateZ, width, depth, rotation);
+                        if (!isFootprintChunkReady(world, xzBounds[0], xzBounds[1], xzBounds[2], xzBounds[3], 1)) {
+                            if (tracker != null) tracker.recordChunkNotReady();
+                            continue;
+                        }
                         int baseY = computeFootprintBaseY(surfaceSolver, xzBounds[0], xzBounds[1], xzBounds[2], xzBounds[3]);
                         int candidateY = baseY + 1;
 
@@ -1389,17 +1423,22 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     }
 
     /**
-     * Compute the minimum surface height across a footprint bounds in XZ.
-     * Samples corners and a grid of intermediate points to balance accuracy and performance.
+     * Compute the reference surface height across a footprint bounds in XZ.
+     * Uses MEDIAN height to avoid outliers (like frozen water over deep pools) 
+     * dragging structures underground. Samples corners and a grid of intermediate 
+     * points to balance accuracy and performance.
+     * 
+     * Previous approach used MIN height which caused structures to be placed at the
+     * lowest corner's ground level, burying them if one corner was over water/ice.
      */
     private int computeFootprintBaseY(SurfaceSolver surfaceSolver, int minX, int maxX, int minZ, int maxZ) {
-        int minY = Integer.MAX_VALUE;
+        java.util.List<Integer> samples = new java.util.ArrayList<>();
         
         // Sample corners
-        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, minZ));
-        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, minZ));
-        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, maxZ));
-        minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, maxZ));
+        samples.add(surfaceSolver.getSurfaceHeight(minX, minZ));
+        samples.add(surfaceSolver.getSurfaceHeight(maxX, minZ));
+        samples.add(surfaceSolver.getSurfaceHeight(minX, maxZ));
+        samples.add(surfaceSolver.getSurfaceHeight(maxX, maxZ));
         
         // Sample a 3x3 grid of intermediate points for larger footprints
         int width = maxX - minX;
@@ -1409,16 +1448,52 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int midZ = minZ + depth / 2;
             
             // Sample midpoints along edges
-            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, minZ));
-            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(maxX, midZ));
-            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, maxZ));
-            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(minX, midZ));
+            samples.add(surfaceSolver.getSurfaceHeight(midX, minZ));
+            samples.add(surfaceSolver.getSurfaceHeight(maxX, midZ));
+            samples.add(surfaceSolver.getSurfaceHeight(midX, maxZ));
+            samples.add(surfaceSolver.getSurfaceHeight(minX, midZ));
             
             // Sample center
-            minY = Math.min(minY, surfaceSolver.getSurfaceHeight(midX, midZ));
+            samples.add(surfaceSolver.getSurfaceHeight(midX, midZ));
         }
 
-        return minY == Integer.MAX_VALUE ? surfaceSolver.getSurfaceHeight(minX, minZ) : minY;
+        if (samples.isEmpty()) {
+            return surfaceSolver.getSurfaceHeight(minX, minZ);
+        }
+        
+        // Sort and return median value
+        // Median is more robust against outliers than min or mean
+        java.util.Collections.sort(samples);
+        int medianIndex = samples.size() / 2;
+        return samples.get(medianIndex);
+    }
+
+    /**
+     * Check if all chunks covering a footprint (with optional buffer) are ready.
+     * Avoids synchronous chunk loads during candidate search.
+     */
+    private boolean isFootprintChunkReady(World world, int minX, int maxX, int minZ, int maxZ, int buffer) {
+        int bufferedMinX = minX - buffer;
+        int bufferedMaxX = maxX + buffer;
+        int bufferedMinZ = minZ - buffer;
+        int bufferedMaxZ = maxZ + buffer;
+
+        int minChunkX = bufferedMinX >> 4;
+        int maxChunkX = bufferedMaxX >> 4;
+        int minChunkZ = bufferedMinZ >> 4;
+        int maxChunkZ = bufferedMaxZ >> 4;
+
+        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                // Accept chunks that are EITHER generated (saved) OR loaded (in memory)
+                boolean chunkReady = world.isChunkGenerated(cx, cz) || world.isChunkLoaded(cx, cz);
+                if (!chunkReady) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
     
     /**
@@ -1916,6 +1991,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         int overlapRejections = 0;
         int chunkNotReady = 0;
         int totalAttempts = 0;
+
+        int siteValidationRejects = 0;
+        int terraformRejects = 0;
         
         // Detailed terrain breakdown
         int fluidRejections = 0;
@@ -1944,16 +2022,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         
         @Override
         public String toString() {
-            return String.format("attempts=%d, rejected: terrain=%d (fluid=%d, steep=%d, blocked=%d), spacing=%d, overlap=%d",
-                    totalAttempts, terrainRejections, fluidRejections, steepRejections, blockedRejections, 
-                    spacingRejections, overlapRejections);
+            return String.format("attempts=%d, rejected: siteValidation=%d, terraform=%d, spacing=%d, overlap=%d, chunkNotReady=%d, terrainBreakdown=(fluid=%d, steep=%d, blocked=%d)",
+                totalAttempts, siteValidationRejects, terraformRejects, spacingRejections, overlapRejections,
+                chunkNotReady, fluidRejections, steepRejections, blockedRejections);
         }
         
         /**
          * Calculate average rejected attempts.
          */
         double getAverageRejectedAttempts() {
-            int totalRejections = terrainRejections + spacingRejections + overlapRejections;
+            int totalRejections = siteValidationRejects + terraformRejects + spacingRejections + overlapRejections;
             return totalAttempts > 0 ? (double) totalRejections / totalAttempts : 0.0;
         }
     }

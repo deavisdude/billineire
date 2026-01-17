@@ -56,13 +56,14 @@ public class VillagePlacementHelperTest {
         
         int[] bounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 90);
         
-        // After 90° rotation: X extent = -depth to 0, Z extent = 0 to width
-        assertEquals(85, bounds[0], "minX should be origin X - depth");
-        assertEquals(99, bounds[1], "maxX should be origin X - 1");
+        // After 90° rotation (WorldEdit rotateY): (x,z) -> (z, -x)
+        // Original corners (0,0,0) to (10,8,15) become X=0..15, Z=-10..0
+        assertEquals(100, bounds[0], "minX should be origin X");
+        assertEquals(114, bounds[1], "maxX should be origin X + depth - 1");
         assertEquals(64, bounds[2], "minY unchanged");
         assertEquals(71, bounds[3], "maxY unchanged");
-        assertEquals(200, bounds[4], "minZ should equal origin Z");
-        assertEquals(209, bounds[5], "maxZ should be origin Z + width - 1");
+        assertEquals(190, bounds[4], "minZ should be origin Z - width");
+        assertEquals(199, bounds[5], "maxZ should be origin Z - 1");
     }
     
     @Test
@@ -96,13 +97,14 @@ public class VillagePlacementHelperTest {
         
         int[] bounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 270);
         
-        // After 270° rotation: X extent = 0 to depth, Z extent = -width to 0
-        assertEquals(100, bounds[0], "minX should equal origin X");
-        assertEquals(114, bounds[1], "maxX should be origin X + depth - 1");
+        // After 270° rotation (WorldEdit rotateY): (x,z) -> (-z, x)
+        // Original corners (0,0,0) to (10,8,15) become X=-15..0, Z=0..10
+        assertEquals(85, bounds[0], "minX should be origin X - depth");
+        assertEquals(99, bounds[1], "maxX should be origin X - 1");
         assertEquals(64, bounds[2], "minY unchanged");
         assertEquals(71, bounds[3], "maxY unchanged");
-        assertEquals(190, bounds[4], "minZ should be origin Z - width");
-        assertEquals(199, bounds[5], "maxZ should be origin Z - 1");
+        assertEquals(200, bounds[4], "minZ should equal origin Z");
+        assertEquals(209, bounds[5], "maxZ should be origin Z + width - 1");
     }
     
     @Test

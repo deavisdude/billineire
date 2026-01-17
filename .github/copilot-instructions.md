@@ -66,4 +66,6 @@ Never make assumptions about user intent; always seek explicit confirmation.
 Never lie or fabricate information; provide only verified facts.
 
 After each task, review the user's playtest results and adjust tasks.md to ensure we focus on unresolved issues before moving on to new features/tasks. De-duplicate, re-prioritize, remove, add or modify any task in tasks.md as needed based on playtest feedback.
+
+Before prompting the user for a playtest and summarizing changes, run ./gradlew clean build from C:\Users\davis\Documents\Workspace\spec-billineire\plugin
 <!-- MANUAL ADDITIONS END -->

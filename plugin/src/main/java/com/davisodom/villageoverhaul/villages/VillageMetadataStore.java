@@ -74,7 +74,7 @@ public class VillageMetadataStore {
 
         // Ensure a placement rejection counters artifact exists for this village
         try {
-            PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0);
+            PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0,0,0);
             recordPlacementRejectionCounters(villageId, counters);
         } catch (Exception e) {
             logger.fine(String.format("[STRUCT][DIAG] failed to write initial placement counters for %s: %s", villageId, e.getMessage()));
@@ -212,7 +212,7 @@ public class VillageMetadataStore {
         // This guards fixed-layout and other flows that may add receipts after registerVillage
         if (!placementRejectionCounters.containsKey(villageId)) {
             try {
-                PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0);
+                PlacementRejectionCounters counters = new PlacementRejectionCounters(0,0,0,0,0,0,0,0,0,0);
                 recordPlacementRejectionCounters(villageId, counters);
             } catch (Exception e) {
                 logger.fine(String.format("[STRUCT][DIAG] failed to write initial counters on addPlacementReceipt for %s: %s", villageId, e.getMessage()));
@@ -1020,13 +1020,17 @@ public class VillageMetadataStore {
         public int spacing;
         public int overlap;
         public int chunkNotReady;
+        public int siteValidationRejects;
+        public int terraformRejects;
         public long villageSeed;
         public long placementSeed;
         public int candidates;
 
         public PlacementFailureSummary() {}
 
-        public PlacementFailureSummary(int attempts, int fluid, int steep, int blocked, int spacing, int overlap, int chunkNotReady, long villageSeed, long placementSeed, int candidates) {
+        public PlacementFailureSummary(int attempts, int fluid, int steep, int blocked, int spacing, int overlap,
+                                       int chunkNotReady, int siteValidationRejects, int terraformRejects,
+                                       long villageSeed, long placementSeed, int candidates) {
             this.attempts = attempts;
             this.fluid = fluid;
             this.steep = steep;
@@ -1034,6 +1038,8 @@ public class VillageMetadataStore {
             this.spacing = spacing;
             this.overlap = overlap;
             this.chunkNotReady = chunkNotReady;
+            this.siteValidationRejects = siteValidationRejects;
+            this.terraformRejects = terraformRejects;
             this.villageSeed = villageSeed;
             this.placementSeed = placementSeed;
             this.candidates = candidates;
@@ -1058,12 +1064,15 @@ public class VillageMetadataStore {
         public int spacing;
         public int overlap;
         public int chunkNotReady;
+        public int siteValidationRejects;
+        public int terraformRejects;
         public int candidates;
         public long recordedTimestamp;
 
         public PlacementRejectionCounters() {}
 
-        public PlacementRejectionCounters(int attempts, int fluid, int steep, int blocked, int spacing, int overlap, int chunkNotReady, int candidates) {
+        public PlacementRejectionCounters(int attempts, int fluid, int steep, int blocked, int spacing, int overlap,
+                                          int chunkNotReady, int siteValidationRejects, int terraformRejects, int candidates) {
             this.attempts = attempts;
             this.fluid = fluid;
             this.steep = steep;
@@ -1071,14 +1080,17 @@ public class VillageMetadataStore {
             this.spacing = spacing;
             this.overlap = overlap;
             this.chunkNotReady = chunkNotReady;
+            this.siteValidationRejects = siteValidationRejects;
+            this.terraformRejects = terraformRejects;
             this.candidates = candidates;
             this.recordedTimestamp = System.currentTimeMillis();
         }
 
         @Override
         public String toString() {
-            return String.format("attempts=%d,fluid=%d,steep=%d,blocked=%d,spacing=%d,overlap=%d,chunkNotReady=%d,candidates=%d,timestamp=%d",
-                    attempts, fluid, steep, blocked, spacing, overlap, chunkNotReady, candidates, recordedTimestamp);
+            return String.format("attempts=%d,fluid=%d,steep=%d,blocked=%d,spacing=%d,overlap=%d,chunkNotReady=%d,siteValidationRejects=%d,terraformRejects=%d,candidates=%d,timestamp=%d",
+                attempts, fluid, steep, blocked, spacing, overlap, chunkNotReady, siteValidationRejects, terraformRejects,
+                candidates, recordedTimestamp);
         }
     }
 

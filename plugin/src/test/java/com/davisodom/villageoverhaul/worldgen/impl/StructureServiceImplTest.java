@@ -119,7 +119,7 @@ public class StructureServiceImplTest {
     }
 
     @Test
-    @DisplayName("placeStructureAndGetReceipt increments diagnostics when terraforming plan rejects site")
+    @DisplayName("placeStructureAndGetReceipt increments diagnostics when site validation rejects fluids")
     public void testTerraformPlanFailureProducesDiagnostics() {
         FakeWorld fake = new FakeWorld();
         World world = fake.getWorld();
@@ -152,8 +152,9 @@ public class StructureServiceImplTest {
         Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
                 svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, villageId, null, 0, diagnostics);
 
-        assertFalse(receipt.isPresent(), "Receipt should be empty when terraform plan rejects site");
-        assertTrue(diagnostics.getOrDefault("terrainInvalid", 0) > 0, "Diagnostics should report terrainInvalid on terraform failure");
+        assertFalse(receipt.isPresent(), "Receipt should be empty when site validation rejects fluids");
+        assertTrue(diagnostics.getOrDefault("siteValidationRejects", 0) > 0,
+            "Diagnostics should report siteValidationRejects on fluid rejection");
     }
 
     // Chunk readiness behavior is exercised indirectly by higher-level placement flows

@@ -35,9 +35,13 @@ public class SiteValidator {
     
     /**
      * Maximum allowed slope for foundation (blocks per horizontal distance).
-     * Default: 0.6 (relaxed from 0.25 to allow mild slopes; terraforming can level)
+     * Default: 2.0 (relaxed significantly to allow hillsides; terraforming can level)
+     * 
+     * Example: For an 18-block wide structure, slope=2.0 allows up to 36 blocks
+     * of height difference across the footprint. This is permissive because
+     * terraforming will level the ground before structure placement.
      */
-    private double maxFoundationSlope = 0.6;
+    private double maxFoundationSlope = 2.0;
     
     /**
      * Minimum percentage of solid+vegetation blocks required in foundation.
@@ -48,9 +52,12 @@ public class SiteValidator {
     
     /**
      * Maximum fraction of steep tiles allowed (0.0-1.0).
-     * Default: 0.40 (40% steep tiles allowed; terraforming handles them)
+     * Default: 0.60 (60% steep tiles allowed; terraforming handles them)
+     * 
+     * Increased from 0.40 to 0.60 because hilly terrain commonly has 40-60%
+     * steep tiles, and terraforming will level the ground anyway.
      */
-    private double maxSteepFraction = 0.40;
+    private double maxSteepFraction = 0.60;
     
     /**
      * Maximum fraction of blocked tiles allowed (0.0-1.0).
@@ -66,9 +73,9 @@ public class SiteValidator {
     private static final int MAX_SMALL_WATER_PATCH_DEPTH = 3;
     
     // Legacy constants for backward compatibility (used if not configured)
-    private static final double DEFAULT_MAX_SLOPE = 0.6;
+    private static final double DEFAULT_MAX_SLOPE = 2.0;
     private static final double DEFAULT_MIN_SOLIDITY = 0.60;
-    private static final double DEFAULT_MAX_STEEP = 0.40;
+    private static final double DEFAULT_MAX_STEEP = 0.60;
     private static final double DEFAULT_MAX_BLOCKED = 0.30;
     
     /**
@@ -272,17 +279,37 @@ public class SiteValidator {
      * for ALL tiles, causing massive false BLOCKED rejections on sloped terrain
      * where the actual ground varies in height.
      * 
+     * BUG FIX (Jan 2026): The previous implementation failed when the highest block
+     * was already the ground (solid block with air above). It would then descend into
+     * caves/underground and return wildly incorrect Y values, causing slope calculations
+     * to show 30-40+ block differences on flat terrain.
+     * 
      * @param world The world to search in
      * @param x X coordinate
      * @param z Z coordinate  
-     * @param hintY A hint Y level to start near (used if lower than highest block)
+     * @param hintY A hint Y level to start near (used for sanity bounds)
      * @return The Y coordinate of the ground (solid block beneath air/vegetation)
      */
     private int findGroundLevelAt(World world, int x, int z, int hintY) {
-        int startY = world.getHighestBlockYAt(x, z);
+        int highestY = world.getHighestBlockYAt(x, z);
+        
+        // Check if the highest block itself is the ground (solid with air above)
+        // This is the common case for normal terrain without trees
+        Block highestBlock = world.getBlockAt(x, highestY, z);
+        Block aboveHighest = world.getBlockAt(x, highestY + 1, z);
+        Classification highestClass = TerrainClassifier.classify(highestBlock);
+        Classification aboveClass = TerrainClassifier.classify(aboveHighest);
+        
+        // If highest block is solid ground and above is air, we found ground
+        if (highestClass == Classification.ACCEPTABLE && 
+            (aboveClass == Classification.BLOCKED || aboveClass == Classification.VEGETATION)) {
+            return highestY;
+        }
         
         // Search downward to find solid ground beneath air/vegetation
-        for (int y = startY; y > startY - 30 && y > world.getMinHeight(); y--) {
+        // Start from highest block and search down, but constrain to reasonable range
+        int maxSearchDepth = 32; // Don't search too deep - prevents cave detection
+        for (int y = highestY; y > highestY - maxSearchDepth && y > world.getMinHeight(); y--) {
             Block block = world.getBlockAt(x, y, z);
             Block below = world.getBlockAt(x, y - 1, z);
             
@@ -299,8 +326,9 @@ public class SiteValidator {
             }
         }
         
-        // Fallback: return the hint Y minus 1 (original behavior) if nothing found
-        return hintY - 1;
+        // Fallback: use the highest block Y (best guess for surface)
+        // Don't use hintY-1 as that could be underground
+        return highestY;
     }
 
     private FluidPatchCheckResult checkSmallWaterPatches(World world, Location origin, int width, int depth) {
