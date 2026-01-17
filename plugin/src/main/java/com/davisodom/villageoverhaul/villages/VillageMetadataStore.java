@@ -47,6 +47,8 @@ public class VillageMetadataStore {
     private final Map<UUID, PlacementFailureSummary> lastPlacementFailureSummary = new ConcurrentHashMap<>();
     // T026d12: Persisted per-run placement rejection counters (villageId -> counters)
     private final Map<UUID, PlacementRejectionCounters> placementRejectionCounters = new ConcurrentHashMap<>();
+    // T077: Persisted candidate coverage summaries (villageId -> coverage)
+    private final Map<UUID, CandidateCoverageSummary> candidateCoverageSummaries = new ConcurrentHashMap<>();
     
     public VillageMetadataStore(Plugin plugin) {
         this.plugin = plugin;
@@ -100,6 +102,23 @@ public class VillageMetadataStore {
      */
     public List<Building> getVillageBuildings(UUID villageId) {
         return new ArrayList<>(villageBuildings.getOrDefault(villageId, Collections.emptyList()));
+    }
+
+    /**
+     * Record candidate coverage summary for a village placement run.
+     */
+    public void recordCandidateCoverageSummary(UUID villageId, CandidateCoverageSummary summary) {
+        if (villageId == null || summary == null) {
+            return;
+        }
+        candidateCoverageSummaries.put(villageId, summary);
+    }
+
+    /**
+     * Get candidate coverage summary for a village.
+     */
+    public Optional<CandidateCoverageSummary> getCandidateCoverageSummary(UUID villageId) {
+        return Optional.ofNullable(candidateCoverageSummaries.get(villageId));
     }
 
     /**
@@ -370,6 +389,11 @@ public class VillageMetadataStore {
                 dto.placementRejectionCounters = counters;
             }
 
+            // T077: Persist candidate coverage summary into village DTO
+            if (candidateCoverageSummaries.containsKey(villageId)) {
+                dto.candidateCoverage = candidateCoverageSummaries.get(villageId);
+            }
+
             if (villageVillagers.containsKey(villageId)) {
                 dto.villagerRecords = new ArrayList<>(villageVillagers.get(villageId));
             }
@@ -479,6 +503,11 @@ public class VillageMetadataStore {
                     logger.fine(String.format("[STRUCT][DIAG] Restored placement rejection counters for village %s", villageId));
                 }
 
+                if (dto.candidateCoverage != null) {
+                    candidateCoverageSummaries.put(villageId, dto.candidateCoverage);
+                    logger.fine(String.format("[STRUCT][BOUNDS] Restored candidate coverage for village %s", villageId));
+                }
+
                 if (dto.villagerRecords != null) {
                     villageVillagers.put(villageId, new ArrayList<>(dto.villagerRecords));
                 }
@@ -507,6 +536,7 @@ public class VillageMetadataStore {
         volumeMasks.clear(); // R002
         lastPlacementFailureSummary.clear(); // T026d11
         placementRejectionCounters.clear(); // T026d12
+        candidateCoverageSummaries.clear(); // T077
         logger.info("[STRUCT] Cleared all village metadata");
     }
     
@@ -832,6 +862,7 @@ public class VillageMetadataStore {
         public List<PlacementReceiptDTO> placementReceipts; // R001: Nullable, added for ground-truth persistence
         public List<VolumeMaskDTO> volumeMasks; // R002: Nullable, added for verified 3D volume persistence
         public PlacementRejectionCounters placementRejectionCounters; // T026d12: per-run rejection counters
+        public CandidateCoverageSummary candidateCoverage; // T077: candidate coverage summary
         public List<VillagerRecord> villagerRecords; // T074: persisted villagers
         
         public VillageDataDTO() {} // For Jackson
@@ -1048,6 +1079,62 @@ public class VillageMetadataStore {
         public String toString() {
             return String.format("attempts=%d,fluid=%d,steep=%d,blocked=%d,spacing=%d,overlap=%d,chunkNotReady=%d,candidates=%d,timestamp=%d",
                     attempts, fluid, steep, blocked, spacing, overlap, chunkNotReady, candidates, recordedTimestamp);
+        }
+    }
+
+    /**
+     * T077: Candidate sampling coverage summary for placement search within bounds.
+     */
+    public static class CandidateCoverageSummary {
+        public String structureId;
+        public int originX;
+        public int originZ;
+        public int radiusBlocks;
+        public int boundsMinX;
+        public int boundsMaxX;
+        public int boundsMinZ;
+        public int boundsMaxZ;
+        public int gridSize;
+        public int rotationCount;
+        public int gridPointsTotal;
+        public int gridPointsLoaded;
+        public int candidatesChecked;
+        public int validCandidates;
+        public int chunksSkipped;
+        public long seed;
+        public long recordedTimestamp;
+
+        public CandidateCoverageSummary() {}
+
+        public CandidateCoverageSummary(String structureId, int originX, int originZ, int radiusBlocks,
+                                        int boundsMinX, int boundsMaxX, int boundsMinZ, int boundsMaxZ,
+                                        int gridSize, int rotationCount, int gridPointsTotal, int gridPointsLoaded,
+                                        int candidatesChecked, int validCandidates, int chunksSkipped, long seed) {
+            this.structureId = structureId;
+            this.originX = originX;
+            this.originZ = originZ;
+            this.radiusBlocks = radiusBlocks;
+            this.boundsMinX = boundsMinX;
+            this.boundsMaxX = boundsMaxX;
+            this.boundsMinZ = boundsMinZ;
+            this.boundsMaxZ = boundsMaxZ;
+            this.gridSize = gridSize;
+            this.rotationCount = rotationCount;
+            this.gridPointsTotal = gridPointsTotal;
+            this.gridPointsLoaded = gridPointsLoaded;
+            this.candidatesChecked = candidatesChecked;
+            this.validCandidates = validCandidates;
+            this.chunksSkipped = chunksSkipped;
+            this.seed = seed;
+            this.recordedTimestamp = System.currentTimeMillis();
+        }
+
+        @Override
+        public String toString() {
+            return String.format("structure=%s origin=(%d,%d) radius=%d bounds=[%d..%d,%d..%d] gridSize=%d rotations=%d gridPoints=%d loaded=%d candidates=%d valid=%d chunksSkipped=%d seed=%d timestamp=%d",
+                    structureId, originX, originZ, radiusBlocks, boundsMinX, boundsMaxX, boundsMinZ, boundsMaxZ,
+                    gridSize, rotationCount, gridPointsTotal, gridPointsLoaded, candidatesChecked, validCandidates,
+                    chunksSkipped, seed, recordedTimestamp);
         }
     }
 }

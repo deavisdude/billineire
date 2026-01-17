@@ -310,11 +310,22 @@ public class StructureServiceImpl implements StructureService {
     }
     
     @Override
-        public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
+    public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
             String structureId, World world, Location origin, long seed, UUID villageId,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
             int minBuildingSpacing,
             java.util.Map<String, Integer> attemptDiagnostics) {
+        return placeStructureAndGetReceipt(structureId, world, origin, seed, villageId,
+                existingMasks, minBuildingSpacing, attemptDiagnostics, null);
+    }
+
+    @Override
+    public Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> placeStructureAndGetReceipt(
+            String structureId, World world, Location origin, long seed, UUID villageId,
+            java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+            int minBuildingSpacing,
+            java.util.Map<String, Integer> attemptDiagnostics,
+            Integer rotationOverride) {
         StructureTemplate template = loadedStructures.get(structureId);
         
         if (template == null) {
@@ -325,9 +336,14 @@ public class StructureServiceImpl implements StructureService {
         LOGGER.info(String.format("[STRUCT] Begin placement (with receipt): structureId=%s, origin=%s, seed=%d, world=%s",
                 structureId, formatLocation(origin), seed, world.getName()));
         
-        // Calculate rotation BEFORE placement (deterministic from seed)
-        Random random = new Random(seed);
-        int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+        // Calculate rotation BEFORE placement (deterministic from seed unless overridden)
+        int rotationDegrees;
+        if (rotationOverride != null) {
+            rotationDegrees = normalizeRotation(rotationOverride);
+        } else {
+            Random random = new Random(seed);
+            rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+        }
         
         // R011b: Single placement attempt with collision detection
         // VillagePlacementServiceImpl handles site search and candidate selection
@@ -403,6 +419,22 @@ public class StructureServiceImpl implements StructureService {
                 structureId, formatLocation(placedOrigin), rotationDegrees, seed));
         
         return Optional.of(receipt);
+    }
+
+    private int normalizeRotation(int rotationDegrees) {
+        int normalized = rotationDegrees % 360;
+        if (normalized < 0) {
+            normalized += 360;
+        }
+        switch (normalized) {
+            case 0:
+            case 90:
+            case 180:
+            case 270:
+                return normalized;
+            default:
+                return 0;
+        }
     }
     
     @Override

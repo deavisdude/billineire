@@ -233,6 +233,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         sender.sendMessage("§aStructure generation enqueued for village: " + village.getName());
         sender.sendMessage("§7Fill-in mode: existing village detected; missing structures will be attempted.");
+        sender.sendMessage("§7Max village bounds radius: " + plugin.getMaxBoundsRadiusBlocks() + " blocks");
         sender.sendMessage("§7Generation will occur over multiple ticks - watch for [GEN-PROGRESS] logs");
         
         return true;

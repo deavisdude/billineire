@@ -90,6 +90,8 @@ public class GenerateCommand {
         sender.sendMessage(Component.text("OK Village generation command received", NamedTextColor.GREEN));
         sender.sendMessage(Component.text("  Culture: ", NamedTextColor.GRAY).append(Component.text(cultureId, NamedTextColor.WHITE)));
         sender.sendMessage(Component.text("  Name: ", NamedTextColor.GRAY).append(Component.text(villageName, NamedTextColor.WHITE)));
+        sender.sendMessage(Component.text("  Max bounds radius: ", NamedTextColor.GRAY)
+            .append(Component.text(plugin.getMaxBoundsRadiusBlocks() + " blocks", NamedTextColor.WHITE)));
         if (seedArg != null) {
             sender.sendMessage(Component.text("  Seed: ", NamedTextColor.GRAY).append(Component.text(String.valueOf(seedArg), NamedTextColor.WHITE)));
         }

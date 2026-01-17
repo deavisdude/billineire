@@ -1466,7 +1466,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Implementation (2026-01-16): Added `village.maxBoundsRadiusBlocks` and `village.spacingMultiplier` and derived `minVillageSpacing` when config value is 0. Service wiring uses plugin getters for spacing to ensure derived values flow into placement.
   - Validation (2026-01-16): `scripts/ci/sim/run-scenario.ps1 -Ticks 400 -Seed 12345` shows config log `minVillageSpacing=200` with new max bounds + multiplier values. Derived spacing uses `maxBoundsRadiusBlocks=160` and `spacingMultiplier=1.25` when `minVillageSpacing=0` (set in config).
 
-- [ ] T077 [P0] Candidate search within max village bounds (rotate + reseat)
+- [X] T077 [P0] Candidate search within max village bounds (rotate + reseat)
   - Story: Structure generation resilience / site selection
   - Description: When `/votest generate-structures` or `/vo generate` runs, search for placement candidates (including rotations) within the configured max village bounds around the village origin. Ensure failed placements advance to the next candidate within bounds rather than repeating the same origin. Persist and log candidate sampling coverage (count, radius, bounds).
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
@@ -1483,6 +1483,22 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Terraforming failures do not immediately abort the structure; next candidate is attempted within bounds.
     - Diagnostics track `terraformRejects` separately from `siteValidationRejects`.
     - Placement succeeds in seeds where terraform rejects occur at some candidates.
+
+- [ ] T083 [P0] Spawn seeding retries after zero-placement
+  - Story: Spawn village failed to generate on steep terrain
+  - Description: If the async spawn seeding ends with `ZERO-PLACEMENT` (rootCause steep/blocked), re-run terrain search with a new candidate origin (e.g., offset or expanded radius) and optionally validate the chosen origin using a structure-scale slope/solidity probe before committing. Cap retries (e.g., 3) and log `[STRUCT][SPAWN-RETRY] attempt=N reason=<rootCause> origin=(x,y,z)`.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TickBudgetedGenerationQueue.java`
+  - Acceptance:
+    - Spawn seeding performs bounded retries after `ZERO-PLACEMENT` and either places >=1 structure or logs an explicit "exhausted retries" result.
+    - Logs show the retry attempts with origin changes and the final outcome.
+
+- [ ] T084 [P1] Generation queue summary must reflect actual placements
+  - Story: Queue summary reported 0 buildings despite 3 receipts
+  - Description: Ensure `TickBudgetedGenerationQueue` (and the final "Successfully generated" log) uses the authoritative placed count from `VillageMetadataStore`/receipts after placement completes. Update `GenerationRequest.placed` and summary logging accordingly.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TickBudgetedGenerationQueue.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
+  - Acceptance:
+    - Queue summary log matches `[STRUCT] village: id=... buildings=N` for the same run.
+    - `GenerationRequest` finished state records the same placed count.
 
 - [ ] T079 [P1] Remove village caps on buildings and villagers
   - Story: Village growth scalability
@@ -1548,6 +1564,12 @@ Removed (superseded):
 - [ ] T021d [P1] [US2] Path ground detection excluding vegetation
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
   - Description: Update `findGroundLevel()` to treat leaves/logs/any VEGETATION classification as non-surface; descend until solid non-vegetation ground or abort node if descent limit exceeded. `PathEmitter` adds `isValidPathSurface()` whitelist (grass, dirt, stone, sand, gravel, snow variants). Skip or reroute nodes landing on vegetation. Optionally clear a single vegetation layer (not trees) before emission.
+  - Triage Note (2026-01-17): Jungle canopy interference
+    - Observation: Recent spawn failures occurred in a jungle biome containing very large trees. Canopy/leaf/log blocks are likely being mistaken as ground by `findGroundLevel()`/`SurfaceSolver`, inflating `blocked`/`steep` metrics and causing false rejections.
+    - Recommended actions:
+      - Ensure `findGroundLevel()` and `SurfaceSolver` treat vegetation (leaves/logs) as non-ground and descend to the nearest solid surface before slope/solidity checks.
+      - Add a headless jungle-seed test to reproduce the zero-placement case and validate fixes.
+      - Coordinate this work with `T057` (SiteValidator tuning) and `T069` diagnostics.
   - Acceptance:
     - 0 path blocks placed on leaves/logs across smoke test seeds.
     - Logs include `skippedVegetationNodes=N` and `reroutedNodes=M` metrics.

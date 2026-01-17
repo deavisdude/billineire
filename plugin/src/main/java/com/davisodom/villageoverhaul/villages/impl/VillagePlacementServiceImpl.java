@@ -43,6 +43,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     // Default minimum spacing between villages (border-to-border, blocks)
     private static final int DEFAULT_VILLAGE_SPACING = 200;
 
+    // Default max bounds radius for village placement search (blocks)
+    private static final int DEFAULT_MAX_BOUNDS_RADIUS = 160;
+
     // Default villagers per structure ratio
     private static final double DEFAULT_VILLAGERS_PER_STRUCTURE = 2.0;
     private static final int MIN_INITIAL_VILLAGERS = 1;
@@ -50,6 +53,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     // Configured spacing values (loaded from plugin config)
     private final int minBuildingSpacing;
     private final int minVillageSpacing;
+    private final int maxBoundsRadiusBlocks;
     private final double villagersPerStructure;
     
     // Structure service for building placement
@@ -126,6 +130,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.maxBoundsRadiusBlocks = DEFAULT_MAX_BOUNDS_RADIUS;
         this.villagersPerStructure = DEFAULT_VILLAGERS_PER_STRUCTURE;
         this.customVillagerService = null;
         this.villagerAppearanceAdapter = null;
@@ -152,6 +157,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.minVillageSpacing = voPlugin != null
             ? voPlugin.getMinVillageSpacing()
             : plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
+        this.maxBoundsRadiusBlocks = voPlugin != null
+            ? voPlugin.getMaxBoundsRadiusBlocks()
+            : plugin.getConfig().getInt("village.maxBoundsRadiusBlocks", DEFAULT_MAX_BOUNDS_RADIUS);
         this.villagersPerStructure = plugin.getConfig().getDouble("worldgen.spawn.villagersPerStructure", DEFAULT_VILLAGERS_PER_STRUCTURE);
         this.customVillagerService = voPlugin != null ? voPlugin.getCustomVillagerService() : null;
         this.villagerAppearanceAdapter = voPlugin != null ? voPlugin.getVillagerAppearanceAdapter() : null;
@@ -169,6 +177,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.maxBoundsRadiusBlocks = DEFAULT_MAX_BOUNDS_RADIUS;
         this.villagersPerStructure = DEFAULT_VILLAGERS_PER_STRUCTURE;
         this.customVillagerService = null;
         this.villagerAppearanceAdapter = null;
@@ -189,6 +198,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
         this.minBuildingSpacing = DEFAULT_BUILDING_SPACING;
         this.minVillageSpacing = DEFAULT_VILLAGE_SPACING;
+        this.maxBoundsRadiusBlocks = DEFAULT_MAX_BOUNDS_RADIUS;
         this.villagersPerStructure = villagersPerStructure;
         this.customVillagerService = customVillagerService;
         this.villagerAppearanceAdapter = villagerAppearanceAdapter;
@@ -331,7 +341,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // T070: Get ALL non-overlapping candidate positions (sorted by distance)
             List<CandidateSite> candidatePositions = findCandidatePositions(
                 world, origin, width, depth, height, buildingSeed,
-                existingMasks, surfaceSolver, rejectionTracker);
+                existingMasks, surfaceSolver, rejectionTracker, villageId, structureId);
             
             if (candidatePositions.isEmpty()) {
                 LOGGER.info(String.format("[STRUCT][T070] No collision-free candidates for %s, skipping structure", structureId));
@@ -352,8 +362,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 java.util.Map<String, Integer> attemptDiagnostics = new java.util.HashMap<>();
                 // T057f: Pass minBuildingSpacing from config to StructureService for collision checks
                 Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
-                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks, 
-                    minBuildingSpacing, attemptDiagnostics);
+                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks,
+                    minBuildingSpacing, attemptDiagnostics, candidate.rotationDegrees);
             
                 if (receiptOpt.isPresent()) {
                     PlacementReceipt receipt = receiptOpt.get();
@@ -397,8 +407,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
                     }
                     // T070: Log candidate rejection and continue to next candidate
-                    LOGGER.fine(String.format("[STRUCT][T070] Candidate %d/%d rejected for %s at (%d,%d,%d)", 
-                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z));
+                        LOGGER.fine(String.format("[STRUCT][T070] Candidate %d/%d rejected for %s at (%d,%d,%d) rot=%d", 
+                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z,
+                            candidate.rotationDegrees));
                 }
             }
             
@@ -719,9 +730,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
             List<VolumeMask> existingMasks = metadataStore.getVolumeMasks(villageId);
 
-            List<CandidateSite> candidatePositions = findCandidatePositions(
+                List<CandidateSite> candidatePositions = findCandidatePositions(
                     world, origin, width, depth, height, buildingSeed,
-                    existingMasks, surfaceSolver, rejectionTracker);
+                    existingMasks, surfaceSolver, rejectionTracker, villageId, structureId);
 
             if (candidatePositions.isEmpty()) {
                 LOGGER.info(String.format("[STRUCT][T072] No collision-free candidates for %s, skipping structure", structureId));
@@ -740,8 +751,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
                 java.util.Map<String, Integer> attemptDiagnostics = new java.util.HashMap<>();
                 Optional<PlacementReceipt> receiptOpt = structureService.placeStructureAndGetReceipt(
-                        structureId, world, buildingLocation, buildingSeed, villageId, existingMasks,
-                        minBuildingSpacing, attemptDiagnostics);
+                    structureId, world, buildingLocation, buildingSeed, villageId, existingMasks,
+                    minBuildingSpacing, attemptDiagnostics, candidate.rotationDegrees);
 
                 if (receiptOpt.isPresent()) {
                     PlacementReceipt receipt = receiptOpt.get();
@@ -783,8 +794,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
                         rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
                     }
-                    LOGGER.fine(String.format("[STRUCT][T072] Candidate %d/%d rejected for %s at (%d,%d,%d)",
-                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z));
+                        LOGGER.fine(String.format("[STRUCT][T072] Candidate %d/%d rejected for %s at (%d,%d,%d) rot=%d",
+                            candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z,
+                            candidate.rotationDegrees));
                 }
             }
 
@@ -1003,10 +1015,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         @Deprecated
         private Optional<Location> findSuitablePlacementPosition(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
-            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker) {
-        
-        List<CandidateSite> candidates = findCandidatePositions(world, origin, width, depth, height, 
-                buildingSeed, existingMasks, surfaceSolver, tracker);
+            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker,
+            UUID villageId, String structureId) {
+
+        List<CandidateSite> candidates = findCandidatePositions(world, origin, width, depth, height,
+                buildingSeed, existingMasks, surfaceSolver, tracker, villageId, structureId);
         
         if (candidates.isEmpty()) {
             return Optional.empty();
@@ -1034,21 +1047,32 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     private List<CandidateSite> findCandidatePositions(
             World world, Location origin, int width, int depth, int height, long buildingSeed,
-            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker) {
-        
-        // Increase search radius and density: helps find more valid spots in constrained terrain
-        final int maxRadius = 256;
+            List<VolumeMask> existingMasks, SurfaceSolver surfaceSolver, PlacementRejectionTracker tracker,
+            UUID villageId, String structureId) {
+
+        // T077: Enforce candidate search within configured max village bounds
+        final int maxRadius = maxBoundsRadiusBlocks;
         final int gridSize = 4;
-        
+        final int boundsMinX = origin.getBlockX() - maxRadius;
+        final int boundsMaxX = origin.getBlockX() + maxRadius;
+        final int boundsMinZ = origin.getBlockZ() - maxRadius;
+        final int boundsMaxZ = origin.getBlockZ() + maxRadius;
+
         // T071: Track chunks that were skipped (not loaded) for diagnostics
         int chunksSkipped = 0;
-        
+        int gridPointsVisited = 0;
+        int gridPointsLoaded = 0;
+
+        int steps = maxRadius / gridSize;
+        int gridPointsTotal = (steps * 2 + 1);
+        gridPointsTotal = gridPointsTotal * gridPointsTotal;
+
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
 
-        // R011b: Determine rotation deterministically from building seed
-        int rotation = new Random(buildingSeed).nextInt(4) * 90; // 0, 90, 180, or 270
-        
+        // T077: Enumerate rotations deterministically per building seed
+        int[] rotationOrder = getRotationOrder(buildingSeed);
+
         // Spiral search pattern: start at origin, expand outward
         for (int radius = 0; radius <= maxRadius; radius += gridSize) {
             // For each ring, collect all candidate positions
@@ -1058,13 +1082,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     if (radius > 0 && Math.abs(dx) < radius && Math.abs(dz) < radius) {
                         continue;
                     }
-                    
+
                     int candidateX = origin.getBlockX() + dx;
                     int candidateZ = origin.getBlockZ() + dz;
-                    
+
+                    gridPointsVisited++;
+
                     int chunkX = candidateX >> 4;
                     int chunkZ = candidateZ >> 4;
-                    
+
                     // T071: Skip unloaded chunks instead of loading them synchronously
                     // Previous approach (T057h) loaded 700+ chunks synchronously causing 19s freezes.
                     // Now we only consider already-loaded chunks for placement candidates.
@@ -1075,18 +1101,24 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                         chunksSkipped++; // Track skipped chunks for diagnostics
                         continue; // Skip this candidate - chunk not ready
                     }
-                    
-                    // R009: Use SurfaceSolver to find footprint-aware ground level
-                    // Compute the minimum surface height under the rotated footprint
-                    int[] xzBounds = computeRotatedXZBounds(candidateX, candidateZ, width, depth, rotation);
-                    int baseY = computeFootprintBaseY(surfaceSolver, xzBounds[0], xzBounds[1], xzBounds[2], xzBounds[3]);
-                    int candidateY = baseY + 1;
-                    
+
+                    gridPointsLoaded++;
+
                     // Calculate distance from origin for sorting
                     int distanceSquared = dx * dx + dz * dz;
-                    
-                    allCandidates.add(new CandidateSite(candidateX, candidateY, candidateZ, 
-                            distanceSquared, dx, dz));
+
+                    for (int rotationIndex = 0; rotationIndex < rotationOrder.length; rotationIndex++) {
+                        int rotation = rotationOrder[rotationIndex];
+
+                        // R009: Use SurfaceSolver to find footprint-aware ground level
+                        // Compute the minimum surface height under the rotated footprint
+                        int[] xzBounds = computeRotatedXZBounds(candidateX, candidateZ, width, depth, rotation);
+                        int baseY = computeFootprintBaseY(surfaceSolver, xzBounds[0], xzBounds[1], xzBounds[2], xzBounds[3]);
+                        int candidateY = baseY + 1;
+
+                        allCandidates.add(new CandidateSite(candidateX, candidateY, candidateZ,
+                                distanceSquared, dx, dz, rotation, rotationIndex));
+                    }
                 }
             }
         }
@@ -1096,7 +1128,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.info(String.format("[STRUCT][CHUNK-DIAG] Skipped %d unloaded chunks during candidate search", chunksSkipped));
         }
         
-        // T026d2: Sort candidates by deterministic key: distance, then X, then Z
+        // T026d2: Sort candidates by deterministic key: distance, then X, then Z, then rotation order
         // This ensures same-seed runs produce identical candidate sequences
         allCandidates.sort((a, b) -> {
             // Primary: distance from origin (closer sites first)
@@ -1108,7 +1140,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             if (xCompare != 0) return xCompare;
             
             // Tertiary: Z coordinate (final tie-breaker)
-            return Integer.compare(a.z, b.z);
+            int zCompare = Integer.compare(a.z, b.z);
+            if (zCompare != 0) return zCompare;
+
+            return Integer.compare(a.rotationOrderIndex, b.rotationOrderIndex);
         });
         
         // T070: Collect all collision-free candidates instead of returning first one
@@ -1123,7 +1158,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             // Compute rotated AABB for this candidate location with determined rotation
             Location candidateLoc = new Location(world, candidate.x, candidate.y, candidate.z);
-            int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, rotation);
+            int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, candidate.rotationDegrees);
             
             // Filter 1: Check collision with existing masks (including spacing buffer)
             boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
@@ -1162,8 +1197,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             // Log deterministic candidate sequence info
             LOGGER.fine(String.format("[STRUCT] findCandidates: Valid candidate at offset=(%d,%d) " +
-                "pos=(%d,%d,%d) dist²=%d validCount=%d rejected=%d seed=%d", 
-                candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z,
+                "pos=(%d,%d,%d) rot=%d dist²=%d validCount=%d rejected=%d seed=%d", 
+                candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z, candidate.rotationDegrees,
                 candidate.distanceSquared, validCandidates.size(), collisionRejections, buildingSeed));
         }
         
@@ -1179,7 +1214,30 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             LOGGER.info(String.format("[STRUCT][T070] Found %d collision-free candidates (checked=%d, rejected=%d, seed=%d)",
                 validCandidates.size(), allCandidates.size(), collisionRejections, buildingSeed));
         }
-        
+
+        // T077: Log and persist candidate sampling coverage
+        int rotationCount = rotationOrder.length;
+        int candidatesChecked = allCandidates.size();
+        String boundsLog = String.format("[STRUCT][BOUNDS] structure=%s origin=(%d,%d,%d) radius=%d bounds=[%d..%d,%d..%d] " +
+                        "gridSize=%d gridPoints=%d loaded=%d rotations=%d candidates=%d valid=%d skippedChunks=%d",
+                structureId,
+                origin.getBlockX(), origin.getBlockY(), origin.getBlockZ(),
+                maxRadius, boundsMinX, boundsMaxX, boundsMinZ, boundsMaxZ,
+                gridSize, gridPointsTotal, gridPointsLoaded, rotationCount,
+                candidatesChecked, validCandidates.size(), chunksSkipped);
+        LOGGER.info(boundsLog);
+
+        if (villageId != null) {
+            VillageMetadataStore.CandidateCoverageSummary coverage =
+                    new VillageMetadataStore.CandidateCoverageSummary(
+                            structureId,
+                            origin.getBlockX(), origin.getBlockZ(), maxRadius,
+                            boundsMinX, boundsMaxX, boundsMinZ, boundsMaxZ,
+                            gridSize, rotationCount, gridPointsTotal, gridPointsLoaded,
+                            candidatesChecked, validCandidates.size(), chunksSkipped, buildingSeed);
+            metadataStore.recordCandidateCoverageSummary(villageId, coverage);
+        }
+
         return validCandidates;
     }
     
@@ -1766,6 +1824,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             default: return "Unknown";
         }
     }
+
+    private int[] getRotationOrder(long buildingSeed) {
+        List<Integer> rotations = new ArrayList<>(Arrays.asList(0, 90, 180, 270));
+        Collections.shuffle(rotations, new Random(buildingSeed));
+        int[] order = new int[rotations.size()];
+        for (int i = 0; i < rotations.size(); i++) {
+            order[i] = rotations.get(i);
+        }
+        return order;
+    }
     
     // ==================== Inner Classes ====================
     
@@ -1780,14 +1848,19 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         final int distanceSquared;  // Distance² from origin (for sorting)
         final int dx;          // X offset from origin
         final int dz;          // Z offset from origin
+        final int rotationDegrees; // Rotation to apply at this candidate
+        final int rotationOrderIndex; // Rotation ordering key for determinism
         
-        CandidateSite(int x, int y, int z, int distanceSquared, int dx, int dz) {
+        CandidateSite(int x, int y, int z, int distanceSquared, int dx, int dz,
+                      int rotationDegrees, int rotationOrderIndex) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.distanceSquared = distanceSquared;
             this.dx = dx;
             this.dz = dz;
+            this.rotationDegrees = rotationDegrees;
+            this.rotationOrderIndex = rotationOrderIndex;
         }
     }
     
@@ -1898,13 +1971,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             MessageDigest md = MessageDigest.getInstance("MD5");
             StringBuilder coordString = new StringBuilder();
             
-            // Build ordered coordinate string: "x1,y1,z1;x2,y2,z2;..."
+            // Build ordered coordinate string: "x1,y1,z1,rot1;x2,y2,z2,rot2;..."
             for (int i = 0; i < candidates.size(); i++) {
                 CandidateSite c = candidates.get(i);
                 if (i > 0) {
                     coordString.append(";");
                 }
-                coordString.append(c.x).append(",").append(c.y).append(",").append(c.z);
+                coordString.append(c.x).append(",").append(c.y).append(",").append(c.z)
+                    .append(",").append(c.rotationDegrees);
             }
             
             // Compute MD5 hash

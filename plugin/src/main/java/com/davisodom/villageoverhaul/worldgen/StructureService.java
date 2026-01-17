@@ -88,6 +88,28 @@ public interface StructureService {
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
             int minBuildingSpacing,
             java.util.Map<String, Integer> attemptDiagnostics);
+
+            /**
+             * Place structure and return a PlacementReceipt, with optional rotation override.
+             * Used for deterministic candidate search when rotation variants are enumerated.
+             *
+             * @param structureId Structure ID to place
+             * @param world Target world
+             * @param origin Initial placement origin
+             * @param seed Deterministic seed
+             * @param villageId Village ID for receipt
+             * @param existingMasks List of existing VolumeMasks to check for collisions (can be null/empty)
+             * @param minBuildingSpacing Minimum spacing in blocks between structures (from config)
+             * @param attemptDiagnostics Mutable map for placement diagnostics (can be null)
+             * @param rotationOverride Optional rotation (0/90/180/270). When null, rotation derives from seed.
+             * @return Optional PlacementReceipt with exact bounds and corner samples
+             */
+            Optional<PlacementReceipt> placeStructureAndGetReceipt(
+                String structureId, World world, Location origin, long seed, UUID villageId,
+                java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
+                int minBuildingSpacing,
+                java.util.Map<String, Integer> attemptDiagnostics,
+                Integer rotationOverride);
     
     /**
      * Get the dimensions of a loaded structure.

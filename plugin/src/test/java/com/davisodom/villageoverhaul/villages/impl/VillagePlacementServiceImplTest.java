@@ -187,8 +187,8 @@ public class VillagePlacementServiceImplTest {
             .thenReturn(entity);
 
         Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world),
-                Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
-                Mockito.anyInt(), Mockito.anyMap()))
+            Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
+            Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
             .thenAnswer(inv -> {
                 String sid = inv.getArgument(0);
                 UUID vid = inv.getArgument(4);
@@ -247,8 +247,8 @@ public class VillagePlacementServiceImplTest {
 
         Mockito.when(mockStructure.getStructureDimensions("house")).thenReturn(Optional.of(new int[]{3,3,3}));
         Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.any(World.class),
-                Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
-                Mockito.anyInt(), Mockito.anyMap()))
+            Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(),
+            Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
             .thenReturn(Optional.empty());
 
         World world = Mockito.mock(World.class);
@@ -317,7 +317,7 @@ public class VillagePlacementServiceImplTest {
         // Return a placement receipt based on a deterministic increasing offset to ensure no overlaps
         // Updated for T057f: placeStructureAndGetReceipt now takes minBuildingSpacing parameter
         final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(0);
-        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world), Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(Mockito.anyString(), Mockito.eq(world), Mockito.any(Location.class), Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
             .thenAnswer(inv -> {
                 String sid = inv.getArgument(0);
                 UUID vid = inv.getArgument(4);
@@ -453,8 +453,8 @@ public class VillagePlacementServiceImplTest {
         java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger(0);
         
         Mockito.when(mockStructure.placeStructureAndGetReceipt(
-                Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
-                Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
+            Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+            Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
             .thenAnswer(inv -> {
                 callCount.incrementAndGet();
                 @SuppressWarnings("unchecked")
@@ -627,7 +627,7 @@ public class VillagePlacementServiceImplTest {
 
         SurfaceSolver solver = new SurfaceSolver(world, List.of(blocking));
 
-        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, List.of(blocking), solver, null);
+        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, List.of(blocking), solver, null, vid, "blocker");
 
         assertFalse(res.isPresent(), "Expected no placement when masks block the area");
         }
@@ -669,7 +669,7 @@ public class VillagePlacementServiceImplTest {
 
         SurfaceSolver solver = new SurfaceSolver(world, new ArrayList<>());
 
-        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, new ArrayList<>(), solver, null);
+        Optional<Location> res = (Optional<Location>) m.invoke(svc, world, new Location(world, 0, 64, 0), 3, 3, 3, 100L, new ArrayList<>(), solver, null, UUID.randomUUID(), "house");
 
         assertTrue(res.isPresent(), "Expected a valid placement location to be found");
         Location loc = res.get();
@@ -733,8 +733,8 @@ public class VillagePlacementServiceImplTest {
         final int successOnAttempt = 5;
         
         Mockito.when(mockStructure.placeStructureAndGetReceipt(
-                Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
-                Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap()))
+            Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+            Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
             .thenAnswer(inv -> {
                 int currentAttempt = attemptCount.incrementAndGet();
                 Location loc = inv.getArgument(2);
