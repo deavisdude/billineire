@@ -1041,6 +1041,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         int maxLayoutX = baseX + (Math.max(0, count - 1) * fixedSpacing) + fixedWidth + 2;
         int minLayoutZ = baseZ + entranceOffset - corridorHalfWidth - 2;
         int maxLayoutZ = baseZ + fixedDepth + 2;
+        int debugProbeX = baseX + fixedWidth / 2;
+        int debugProbeZ = baseZ + entranceOffset;
         int preloadMargin = 16;
         for (int chunkX = (minLayoutX - preloadMargin) >> 4; chunkX <= (maxLayoutX + preloadMargin) >> 4; chunkX++) {
             for (int chunkZ = (minLayoutZ - preloadMargin) >> 4; chunkZ <= (maxLayoutZ + preloadMargin) >> 4; chunkZ++) {
@@ -1050,8 +1052,17 @@ public class TestCommands implements CommandExecutor, TabCompleter {
 
         // Ensure a flat walkable base so pathfinding has consistent support.
         int baseGroundY = baseY - 1;
+        int subGroundY = baseGroundY - 1;
+        int minWorldY = world.getMinHeight();
+        int maxWorldY = world.getMaxHeight();
         for (int x = minLayoutX; x <= maxLayoutX; x++) {
             for (int z = minLayoutZ; z <= maxLayoutZ; z++) {
+                for (int clearY = minWorldY; clearY <= maxWorldY; clearY++) {
+                    world.getBlockAt(x, clearY, z).setType(org.bukkit.Material.AIR);
+                }
+                if (subGroundY >= minWorldY) {
+                    world.getBlockAt(x, subGroundY, z).setType(org.bukkit.Material.DIRT);
+                }
                 world.getBlockAt(x, baseGroundY, z).setType(org.bukkit.Material.DIRT);
                 world.getBlockAt(x, baseGroundY + 1, z).setType(org.bukkit.Material.AIR);
             }
@@ -1199,20 +1210,20 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             }
 
             int groundY = baseY - 1;
+            int corridorSubGroundY = groundY - 1;
             int minClearY = world.getMinHeight();
             int maxClearY = world.getMaxHeight();
             for (int cx = minX - 2; cx <= maxX + 2; cx++) {
                 for (int cz = corridorZ - 1; cz <= corridorZ + 1; cz++) {
                     try {
-                        // Clear area above and below to ensure clean corridor
                         for (int clearY = minClearY; clearY <= maxClearY; clearY++) {
                             world.getBlockAt(cx, clearY, cz).setType(org.bukkit.Material.AIR);
                         }
 
-                        // Place solid ground block unconditionally
+                        if (corridorSubGroundY >= minClearY) {
+                            world.getBlockAt(cx, corridorSubGroundY, cz).setType(org.bukkit.Material.DIRT);
+                        }
                         world.getBlockAt(cx, groundY, cz).setType(org.bukkit.Material.DIRT);
-
-                        // Ensure air above for walkable space
                         world.getBlockAt(cx, groundY + 1, cz).setType(org.bukkit.Material.AIR);
                     } catch (Exception e) {
                         plugin.getLogger().warning("[STRUCT][TEST] Corridor placement failed at " + cx + "," + cz + ": " + e.getMessage());
@@ -1222,8 +1233,21 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
 
 
+        int debugHighestY;
+        org.bukkit.Material debugSurfaceType;
+        try {
+            debugHighestY = world.getHighestBlockYAt(debugProbeX, debugProbeZ);
+            debugSurfaceType = world.getBlockAt(debugProbeX, debugHighestY, debugProbeZ).getType();
+        } catch (Exception e) {
+            debugHighestY = baseY - 1;
+            debugSurfaceType = org.bukkit.Material.AIR;
+        }
+
         sender.sendMessage(String.format("§aCreated fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout village=%s buildings=%d seed=%d", village.getId(), count, seed));
+        plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout probe=(%d,%d) highestY=%d type=%s baseY=%d",
+            debugProbeX, debugProbeZ, debugHighestY, debugSurfaceType, baseY));
+
 
         // Do not auto-run path generation here; allow harness to request path generation explicitly
         return true;

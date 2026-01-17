@@ -529,9 +529,7 @@ Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
 $jvmArgs = @("-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
 if ($FixedLayout) {
     $jvmArgs += "-Dvo.suppress.worldgen=true"
-    $jvmArgs += "-Dvo.test.bypassPathSupport=true"
     Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
-    Write-Host "Fixed-layout mode: bypassing path support checks via -Dvo.test.bypassPathSupport=true" -ForegroundColor Cyan
 }
 
 
@@ -724,10 +722,14 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
             # Try to extract UUID from response (support both create-village and fixed-layout formats)
             if ($rconRespClean -match '([a-f0-9]{8}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{12})') {
                 $villageId = $Matches[1]
-                Write-Host "    Detected created village ID: $villageId - requesting generate-structures and generate-paths" -ForegroundColor Cyan
-                $genResp = Send-RconCommand -Password $rconPassword -Command "votest generate-structures $villageId"
-                if ($genResp) { Write-Host "      generate-structures response: $(if ($genResp.Length -gt 200) { $genResp.Substring(0,200) + '...' } else { $genResp })" -ForegroundColor Gray }
-                Start-Sleep -Seconds 1
+                if ($FixedLayout) {
+                    Write-Host "    Detected created village ID: $villageId - requesting generate-paths only (fixed-layout)" -ForegroundColor Cyan
+                } else {
+                    Write-Host "    Detected created village ID: $villageId - requesting generate-structures and generate-paths" -ForegroundColor Cyan
+                    $genResp = Send-RconCommand -Password $rconPassword -Command "votest generate-structures $villageId"
+                    if ($genResp) { Write-Host "      generate-structures response: $(if ($genResp.Length -gt 200) { $genResp.Substring(0,200) + '...' } else { $genResp })" -ForegroundColor Gray }
+                    Start-Sleep -Seconds 1
+                }
                 $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
                 if ($pathsResp) {
                     $pathsRespClean = Sanitize-Text $pathsResp
@@ -741,6 +743,7 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
                 Write-Host "    Could not parse village ID from create-village response" -ForegroundColor Yellow
             }
         }
+
 
         Start-Sleep -Seconds 2
     }
@@ -835,11 +838,15 @@ if (!$serverProcess.HasExited) {
                     # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
                     #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
                     
+                    # Strip any lingering color prefixes after sanitization
+                    $responseLines = $response -split "`n" | ForEach-Object { $_ -replace '^([a-z0-9]{1,3})?(PASS|FAIL):', '$2:' }
+                    $responseClean = $responseLines -join "`n"
+
                     # Extract per-structure summaries (optional detail logging)
-                    $structureLines = $response -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    $structureLines = $responseClean -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
                     
                     # Extract final summary
-                    $summaryLine = ($response -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    $summaryLine = ($responseClean -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
                     
                     if ($summaryLine) {
                         Write-Host "  $summaryLine" -ForegroundColor Gray
@@ -877,6 +884,7 @@ if (!$serverProcess.HasExited) {
                     Write-Host "  X No response from RCON" -ForegroundColor Red
                     $failedVillages++
                 }
+
                 
                 Start-Sleep -Seconds 1
                 # Harvest placement rejection counters artifact if plugin wrote it
@@ -953,17 +961,20 @@ if (!$serverProcess.HasExited) {
                 # Sanitize and trim leading non-alphanumeric junk that can break summary parsing
                 $response = Sanitize-Text $response
                 $response = ($response -split "`n" | ForEach-Object { $_ -replace '^[^A-Za-z0-9]+','' }) -join "`n"
-                
                 if ($response) {
                     # R011c: Parse concise summary format
                     # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
                     #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
                     
+                    # Strip any lingering color prefixes after sanitization
+                    $responseLines = $response -split "`n" | ForEach-Object { $_ -replace '^([a-z0-9]{1,3})?(PASS|FAIL):', '$2:' }
+                    $responseClean = $responseLines -join "`n"
+
                     # Extract per-structure summaries (optional detail logging)
-                    $structureLines = $response -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    $structureLines = $responseClean -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
                     
                     # Extract final summary
-                    $summaryLine = ($response -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    $summaryLine = ($responseClean -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
                     
                     if ($summaryLine) {
                         Write-Host "  $summaryLine" -ForegroundColor Gray
@@ -1001,6 +1012,7 @@ if (!$serverProcess.HasExited) {
                     Write-Host "  X No response from RCON" -ForegroundColor Red
                     $failedVillages++
                 }
+
                 
                 Start-Sleep -Seconds 1
             }
@@ -1140,19 +1152,36 @@ if ($emitMatches.Count -eq 0) {
     Write-Host "! No path emission results found in logs" -ForegroundColor Yellow
 } else {
     $mismatchCount = 0
+    $supportMismatch = 0
     foreach ($match in $emitMatches) {
         $placed = [int]$match.Groups[1].Value
         $verified = [int]$match.Groups[2].Value
+        $skippedSupport = [int]$match.Groups[4].Value
         if ($verified -lt $placed) {
             $mismatchCount++
             Write-Host "X Path emission mismatch (placed=$placed, verified=$verified)" -ForegroundColor Red
         }
+        if ($FixedLayout) {
+            if ($placed -le 0) {
+                $supportMismatch++
+                Write-Host "X Fixed-layout path emission placed=0 (expected >0)" -ForegroundColor Red
+            }
+            if ($skippedSupport -gt 0) {
+                $supportMismatch++
+                Write-Host "X Fixed-layout path emission skipped(noSupport)=$skippedSupport" -ForegroundColor Red
+            }
+        }
     }
 
-    if ($mismatchCount -eq 0) {
+    if ($mismatchCount -eq 0 -and $supportMismatch -eq 0) {
         Write-Host "OK All path emissions verified" -ForegroundColor Green
     } else {
-        Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+        if ($mismatchCount -gt 0) {
+            Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+        }
+        if ($supportMismatch -gt 0) {
+            Write-Host "X $supportMismatch fixed-layout path support issue(s)" -ForegroundColor Red
+        }
         if ($env:CI -eq 'true') {
             exit 5
         }

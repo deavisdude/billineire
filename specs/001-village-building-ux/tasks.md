@@ -528,7 +528,7 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
   - Acceptance:
     - Zero floating slabs in smoke test; zero placements inside VolumeMask.
 
-- [ ] R008b [QA] Fix fixed-layout path support for headless emission
+- [X] R008b [QA] Fix fixed-layout path support for headless emission
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`, `scripts/ci/sim/run-scenario.ps1`
   - Description: Ensure fixed-layout scenarios provide reliable ground support so path emission places blocks (not skipped for noSupport). If test-only bypasses are used, document and implement a deterministic terrain scaffold for paths.
   - Acceptance:
@@ -1428,7 +1428,8 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance: Headless integration asserts that for any logged `spawned=<N>` the world contains the same number of path blocks at expected coords.
 
 
-- [ ] T061 [P1] Reconcile placement receipts vs summary counts
+- [X] T061 [P1] Reconcile placement receipts vs summary counts
+
   - Story: Summary lines sometimes report `buildings=0` despite successful `Seat successful` lines earlier; command output can also contradict the in-plugin summary.
   - Description: Ensure the village summary/`[STRUCT] village: id=.. buildings=N` is derived from authoritative persisted `PlacementReceipt` / `VolumeMask` store only after commit success. Add assertions that increment count only after commit+receipt persistence.
   - Files: `VillagePlacementServiceImpl.java`, `VillageMetadataStore.java`, logging summary code.
@@ -1829,6 +1830,42 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
 - [ ] T039 Performance profiling hooks for structure/path ticks in `plugin/src/main/java/com/davisodom/villageoverhaul/metrics/PerfCounters.java`
 - [ ] T040 [P] Security review of admin/test commands in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
 - [ ] T041 Ensure CI scripts remain PS 5.1-compatible and ASCII-only in `scripts/ci/sim/*.ps1`
+
+---
+
+## Triage & Backlog (In Progress)
+
+- [ ] T073 [P1] Investigate Y-level foundation placement mismatches (floating/embedded structures)
+  - **Files**: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
+  - **Reproduce**: Using test world at `C:\Users\davis\Documents\Workspace\billineire-test-server\world` or run harness with seed 999 for natural village generation
+  - **Symptoms (from playtest & diagnostics)**:
+    - Structure origin Y is set to terraformed foundation level (e.g., Y=63)
+    - Some corner blocks at minY are LEAF_LITTER, AIR, or GRASS_BLOCK instead of solid support blocks
+    - Structure appears to float ~1–3 blocks above visible ground in many places; in other places, mostly underground (only roof visible)
+    - Example from logs: house_roman_medium at (11, 63, -5) has corner blocks at minY(63)=LEAF_LITTER and GRASS_BLOCK → warning issued
+    - TerraformingPlan.commit() applies 135/135 ops successfully, but corner solidity not guaranteed post-commit
+  - **Root Cause Analysis (from diagnostic logs Jan 16 22:08:38)**:
+    1. ✓ Terraform commit succeeds (appliedOps=135, skippedOps=0)
+    2. ✓ Receipt minY matches origin Y (both Y=63)
+    3. ⚠️ **Foundation corners not solid**: Pre-commit corner 2 at (23, 62, -5) has atMinY=AIR, Post-commit same corner atMinY=GRASS_BLOCK (improved but still not solid building block)
+    4. ⚠️ **Mixed block types at minY**: Combination of LEAF_LITTER, GRASS_BLOCK, and AIR found on foundation
+    5. ⚠️ **SurfaceSolver / Ground Detection mismatch**: The YLevel chosen by SurfaceSolver for placement may not match the actual solid ground after terraforming
+  - **Hypothesis**: TerraformingPlan pads the foundation with lowest-cost materials (grass, leaves) rather than solid support blocks (stone, dirt). When FAWE/placePaperAPI places the structure at Y=63, it rests on non-solid or partially-solid blocks.
+  - **Acceptance Criteria**:
+    1. Run harness with seed 999 (3000 ticks) and verify all 3 placed structures have solid block types at all minY corners
+    2. No foundation corner warnings in logs: "[STRUCT][RECEIPT] WARNING: Some foundation corners are not solid blocks"
+    3. All placed structures show valid receipt with all 4 corners == solid block type (STONE, DIRT, GRANITE, etc.)
+    4. Optional: Add regression test in `StructureServiceImplTest` to verify corner block types post-placement
+  - **Implementation Notes**:
+    - Check TerraformingPlan/TerraformingUtil: verify grading/filling logic replaces leaves/air with solid blocks
+    - Consider SurfaceSolver.nearestWalkable() Y-level selection: ensure it accounts for non-solid blocks above ground
+    - Verify FAWE paste origin computation matches receipt minY exactly
+    - Review PlacementReceipt.verifyFoundationCorners() logic (currently warns but allows placement)
+  - **Next Steps**:
+    1. Add conditional debug logging to TerraformingPlan to show block types applied to each foundation corner
+    2. Create unit test for TerraformingUtil.gradeFoundation() to verify solid block placement
+    3. Run harness 2–3 times with different seeds to confirm all structures have solid corners
+    4. If issue persists, add fallback: force backfilling of non-solid foundation blocks with dirt after paste
 
 ---
 

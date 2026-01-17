@@ -532,8 +532,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Emit a parseable seed-chain summary for harness verification (T026d7)
         LOGGER.info(String.format("[SEED] village=%d placement=%d path=%d", seed, placementSeed, pathBaseSeed));
 
+        int persistedBuildingCount = metadataStore.getPlacementReceipts(villageId).size();
         LOGGER.info(String.format("[STRUCT] village: id=%s buildings=%d",
-            villageId, placedBuildings.size()));
+            villageId, persistedBuildingCount));
+
 
         // Persist per-attempt rejection counters so harnesses can analyze placement rejections (T026d12)
         try {

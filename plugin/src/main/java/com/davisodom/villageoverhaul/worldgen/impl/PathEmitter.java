@@ -104,30 +104,31 @@ public class PathEmitter {
                 skippedChunk++;
                 continue;
             }
-            // Get the actual ground level at this X,Z position. Some test worlds (MockBukkit)
-            // don't implement getHighestBlockYAt and will throw — fall back to the
-            // supplied pathBlock Y in that case so unit tests remain deterministic.
-            int groundY;
+            int groundY = pathBlock.getY();
+            Integer heightmapY = null;
             try {
-                groundY = world.getHighestBlockYAt(x, z);
-            } catch (RuntimeException e) {
-                groundY = pathBlock.getY();
+                heightmapY = world.getHighestBlockYAt(x, z);
+            } catch (RuntimeException ignored) {
+                heightmapY = null;
+            }
+
+            if (heightmapY != null && Math.abs(heightmapY - groundY) > 2) {
+                groundY = heightmapY;
+            }
+
+            if (!shouldBypassSupportChecks()) {
+                int supportedY = findSupportedGroundY(world, x, z, groundY, heightmapY);
+                if (supportedY == Integer.MIN_VALUE) {
+                    skippedSupport++;
+                    continue;
+                }
+                groundY = supportedY;
             }
 
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {
                 skippedMask++;
                 continue;
-            }
-
-            // Check support: block below must be solid natural ground
-            if (!shouldBypassSupportChecks()) {
-                Block foundation = world.getBlockAt(x, groundY - 1, z);
-                if (!foundation.getType().isSolid()) {
-                    // R008: Never place when support is missing
-                    skippedSupport++;
-                    continue;
-                }
             }
 
             // REPLACE the surface block with path material (at groundY)
@@ -270,6 +271,31 @@ public class PathEmitter {
         }
         
         return widened;
+    }
+
+    private int findSupportedGroundY(World world, int x, int z, int groundY, Integer heightmapY) {
+        int[] candidates = new int[] { groundY, groundY + 1, groundY - 1 };
+        for (int candidate : candidates) {
+            if (isSupported(world, x, candidate, z)) {
+                return candidate;
+            }
+        }
+
+        if (heightmapY != null && heightmapY != groundY) {
+            int[] heightmapCandidates = new int[] { heightmapY, heightmapY + 1, heightmapY - 1 };
+            for (int candidate : heightmapCandidates) {
+                if (isSupported(world, x, candidate, z)) {
+                    return candidate;
+                }
+            }
+        }
+
+        return Integer.MIN_VALUE;
+    }
+
+    private boolean isSupported(World world, int x, int y, int z) {
+        Block foundation = world.getBlockAt(x, y - 1, z);
+        return foundation.getType().isSolid();
     }
 
     private int countExpectedBlocks(Set<Block> expectedBlocks, Material pathMaterial) {

@@ -509,21 +509,47 @@ public class StructureServiceImpl implements StructureService {
             return Optional.empty();
         }
         
-        // T057e: Commit terraforming BEFORE structure placement
-        // Terraforming creates the foundation pad; structure is then placed on top
-        // This fixes empty pads caused by WorldEdit modifying blocks before terraforming commit
-        LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming BEFORE placement for '%s' at %s",
-                template.id, formatLocation(origin)));
-        boolean commitOk = terraformPlan.commit();
-        if (!commitOk) {
-            LOGGER.warning(String.format("[STRUCT] Terraforming commit aborted for '%s' at %s",
-                template.id, formatLocation(origin)));
-            if (attemptDiagnostics != null) {
-            attemptDiagnostics.merge("terraformCommitFailed", 1, Integer::sum);
-            }
-            emitTerraformingDiagnostic(template.id, bounds, terraformPlan, terraformPlan.isCommitted(), terraformPlan.isRolledBack());
-            return Optional.empty();
-        }
+         // T057e: Commit terraforming BEFORE structure placement
+         // Terraforming creates the foundation pad; structure is then placed on top
+         // This fixes empty pads caused by WorldEdit modifying blocks before terraforming commit
+         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Committing terraforming BEFORE placement for '%s' at %s",
+                 template.id, formatLocation(origin)));
+         
+         // Sample foundation corners BEFORE terraform commit
+         LOGGER.info(String.format("[DIAG-PLACEMENT] preCommit bounds=(%d,%d,%d) to (%d,%d,%d)",
+                 bounds[0], bounds[2], bounds[4], bounds[1], bounds[3], bounds[5]));
+         for (int sample = 0; sample < 4; sample++) {
+             int sx = (sample < 2) ? bounds[0] : bounds[1];
+             int sz = (sample % 2 == 0) ? bounds[4] : bounds[5];
+             int preY = world.getHighestBlockYAt(sx, sz);
+             org.bukkit.Material preType = world.getBlockAt(sx, preY, sz).getType();
+             org.bukkit.Material preAtMinY = world.getBlockAt(sx, bounds[2], sz).getType();
+             LOGGER.info(String.format("[DIAG-PLACEMENT] preCommit sample corner=%d pos=(%d,%d,%d) highestY=%d type=%s atMinY=%s",
+                     sample, sx, preY, sz, preY, preType, preAtMinY));
+         }
+         
+         boolean commitOk = terraformPlan.commit();
+         if (!commitOk) {
+             LOGGER.warning(String.format("[STRUCT] Terraforming commit aborted for '%s' at %s",
+                 template.id, formatLocation(origin)));
+             if (attemptDiagnostics != null) {
+             attemptDiagnostics.merge("terraformCommitFailed", 1, Integer::sum);
+             }
+             emitTerraformingDiagnostic(template.id, bounds, terraformPlan, terraformPlan.isCommitted(), terraformPlan.isRolledBack());
+             return Optional.empty();
+         }
+         
+         // Sample foundation corners AFTER terraform commit
+         LOGGER.info("[DIAG-PLACEMENT] postCommit sampling");
+         for (int sample = 0; sample < 4; sample++) {
+             int sx = (sample < 2) ? bounds[0] : bounds[1];
+             int sz = (sample % 2 == 0) ? bounds[4] : bounds[5];
+             int postY = world.getHighestBlockYAt(sx, sz);
+             org.bukkit.Material postType = world.getBlockAt(sx, postY, sz).getType();
+             org.bukkit.Material postAtMinY = world.getBlockAt(sx, bounds[2], sz).getType();
+             LOGGER.info(String.format("[DIAG-PLACEMENT] postCommit sample corner=%d pos=(%d,%d,%d) highestY=%d type=%s atMinY=%s",
+                     sample, sx, postY, sz, postY, postType, postAtMinY));
+         }
         
         // Now perform structure placement on the prepared foundation
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Calling performActualPlacement for '%s' at %s",
@@ -626,67 +652,83 @@ public class StructureServiceImpl implements StructureService {
         }
         
         try {
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Adapting world to WorldEdit");
-            com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(world);
-            
-            // Use the validated and terraformed origin Y coordinate directly
-            // (Do NOT recalculate ground level - that would ignore our site preparation)
-            BlockVector3 weOrigin = BlockVector3.at(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ());
-            LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: weOrigin=%s", weOrigin));
-            
-            LOGGER.info("[STRUCT] DIAGNOSTIC: Creating EditSession");
-            try (EditSession editSession = WorldEdit.getInstance().newEditSession(weWorld)) {
-                LOGGER.info("[STRUCT] DIAGNOSTIC: Creating ClipboardHolder");
-                ClipboardHolder holder = new ClipboardHolder(template.clipboard);
-                
-                // Apply deterministic rotation based on seed
-                Random random = new Random(seed);
-                int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
-                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Rotation=%d degrees", rotationDegrees));
-                if (rotationDegrees > 0) {
-                    AffineTransform transform = new AffineTransform();
-                    holder.setTransform(holder.getTransform().combine(transform.rotateY(rotationDegrees)));
-                }
-                
-                LOGGER.info("[STRUCT] DIAGNOSTIC: Building paste operation");
-                // Paste structure
-                Operation operation = holder.createPaste(editSession)
-                    .to(weOrigin)
-                    .ignoreAirBlocks(false)
-                    .build();
-                
-                LOGGER.info("[STRUCT] DIAGNOSTIC: Calling Operations.complete()");
-                Operations.complete(operation);
-                LOGGER.info("[STRUCT] DIAGNOSTIC: Operations.complete() finished successfully");
-                
-                LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
-                
-                // Foundation backfilling disabled - let structures sit naturally on terrain
-                // Previous aggressive backfilling created visible dirt walls and terracing
-                /*
-                int backfilled = TerraformingUtil.backfillFoundation(
-                    world,
-                    new Location(world, weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()),
-                    template.dimensions[0],
-                    template.dimensions[2],
-                    Material.DIRT
-                );
-                
-                LOGGER.fine(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
-                */
-                
-                LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
-                return true;
-            }
-            
-        } catch (Exception e) {
-            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Exception caught in placeWorldEdit: %s", 
-                    e.getClass().getName()));
-            LOGGER.warning(String.format("[STRUCT] WorldEdit placement failed for '%s': %s", 
-                    template.id, e.getMessage()));
-            e.printStackTrace();
-            return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
-        }
+             LOGGER.info("[STRUCT] DIAGNOSTIC: Adapting world to WorldEdit");
+             com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(world);
+             
+             // Use the validated and terraformed origin Y coordinate directly
+             // (Do NOT recalculate ground level - that would ignore our site preparation)
+             BlockVector3 weOrigin = BlockVector3.at(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ());
+             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: weOrigin=%s", weOrigin));
+             LOGGER.info(String.format("[DIAG-PLACEMENT] weOrigin=(%d,%d,%d)", weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()));
+             
+             LOGGER.info("[STRUCT] DIAGNOSTIC: Creating EditSession");
+             try (EditSession editSession = WorldEdit.getInstance().newEditSession(weWorld)) {
+                 LOGGER.info("[STRUCT] DIAGNOSTIC: Creating ClipboardHolder");
+                 ClipboardHolder holder = new ClipboardHolder(template.clipboard);
+                 
+                 // Apply deterministic rotation based on seed
+                 Random random = new Random(seed);
+                 int rotationDegrees = random.nextInt(4) * 90; // 0, 90, 180, or 270
+                 LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Rotation=%d degrees", rotationDegrees));
+                 if (rotationDegrees > 0) {
+                     AffineTransform transform = new AffineTransform();
+                     holder.setTransform(holder.getTransform().combine(transform.rotateY(rotationDegrees)));
+                 }
+                 
+                 LOGGER.info("[STRUCT] DIAGNOSTIC: Building paste operation");
+                 // Paste structure
+                 Operation operation = holder.createPaste(editSession)
+                     .to(weOrigin)
+                     .ignoreAirBlocks(false)
+                     .build();
+                 
+                 LOGGER.info("[STRUCT] DIAGNOSTIC: Calling Operations.complete()");
+                 Operations.complete(operation);
+                 LOGGER.info("[STRUCT] DIAGNOSTIC: Operations.complete() finished successfully");
+                 
+                 // Sample foundation corners AFTER paste
+                 LOGGER.info("[DIAG-PLACEMENT] postPaste sampling");
+                 int[] sampleBounds = template.clipboard != null 
+                     ? computeAABB(origin, template.clipboard, template.dimensions[0], template.dimensions[2], template.dimensions[1], rotationDegrees)
+                     : new int[]{origin.getBlockX(), origin.getBlockX(), origin.getBlockY(), origin.getBlockY(), origin.getBlockZ(), origin.getBlockZ()};
+                 for (int sample = 0; sample < 4; sample++) {
+                     int sx = (sample < 2) ? sampleBounds[0] : sampleBounds[1];
+                     int sz = (sample % 2 == 0) ? sampleBounds[4] : sampleBounds[5];
+                     int postY = world.getHighestBlockYAt(sx, sz);
+                     org.bukkit.Material postType = world.getBlockAt(sx, postY, sz).getType();
+                     org.bukkit.Material postAtMinY = world.getBlockAt(sx, sampleBounds[2], sz).getType();
+                     LOGGER.info(String.format("[DIAG-PLACEMENT] postPaste sample corner=%d pos=(%d,%d,%d) highestY=%d type=%s atMinY=%s",
+                             sample, sx, postY, sz, postY, postType, postAtMinY));
+                 }
+                 
+                 LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
+                 
+                 // Foundation backfilling disabled - let structures sit naturally on terrain
+                 // Previous aggressive backfilling created visible dirt walls and terracing
+                 /*
+                 int backfilled = TerraformingUtil.backfillFoundation(
+                     world,
+                     new Location(world, weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()),
+                     template.dimensions[0],
+                     template.dimensions[2],
+                     Material.DIRT
+                 );
+                 
+                 LOGGER.fine(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
+                 */
+                 
+                 LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
+                 return true;
+             }
+             
+         } catch (Exception e) {
+             LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Exception caught in placeWorldEdit: %s", 
+                     e.getClass().getName()));
+             LOGGER.warning(String.format("[STRUCT] WorldEdit placement failed for '%s': %s", 
+                     template.id, e.getMessage()));
+             e.printStackTrace();
+             return placePaperAPI(template, world, origin, seed, attemptDiagnostics);
+         }
     }
     
     /**

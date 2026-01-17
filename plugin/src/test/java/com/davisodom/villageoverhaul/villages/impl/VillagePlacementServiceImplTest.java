@@ -796,10 +796,13 @@ public class VillagePlacementServiceImplTest {
         assertTrue(attemptCount.get() >= successOnAttempt, 
             "T070: Should have tried at least " + successOnAttempt + " candidates, got " + attemptCount.get());
         
-        // Verify a building was placed
+        // Verify a building was placed and receipt persisted
         UUID villageId = result.get();
         List<com.davisodom.villageoverhaul.model.Building> buildings = store.getVillageBuildings(villageId);
         assertEquals(1, buildings.size(), "T070: One building should be placed after retry succeeded");
+        assertEquals(1, store.getPlacementReceipts(villageId).size(),
+            "T061: Receipt count should match placement count for summary logging");
+
     }
 
 }
