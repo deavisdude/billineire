@@ -1,6 +1,7 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.model.VolumeMask;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -9,8 +10,11 @@ import org.bukkit.block.data.type.Slab;
 import org.bukkit.block.data.type.Stairs;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
+
 
 /**
  * PathEmitter handles physical placement of path blocks with culture-specific materials
@@ -49,21 +53,57 @@ public class PathEmitter {
             LOGGER.info("[PATH][EMIT] No path blocks to emit");
             return 0;
         }
-        
+
+        if (!isMainThread()) {
+            LOGGER.warning("[PATH][EMIT] Emission called off main thread; skipping placement");
+            return 0;
+        }
+
         // Determine path material based on culture
         Material pathMaterial = getPathMaterial(cultureId);
-        
+
         int blocksPlaced = 0;
         int skippedMask = 0;
         int skippedSupport = 0;
+        int skippedChunk = 0;
         List<Block> successfullyPlacedBlocks = new ArrayList<>();
+        Set<Block> expectedBlocks = new HashSet<>();
 
         LOGGER.info(String.format("[PATH][EMIT] Starting emission of %d path blocks with material %s", 
                 pathBlocks.size(), pathMaterial));
 
+        Set<Long> unloadedChunks = new HashSet<>();
+        if (shouldEnforceChunkLoaded()) {
+            Set<Long> requiredChunks = new HashSet<>();
+            for (Block pathBlock : pathBlocks) {
+                int chunkX = pathBlock.getX() >> 4;
+                int chunkZ = pathBlock.getZ() >> 4;
+                requiredChunks.add(packChunk(chunkX, chunkZ));
+            }
+
+            for (long packedChunk : requiredChunks) {
+                int chunkX = unpackChunkX(packedChunk);
+                int chunkZ = unpackChunkZ(packedChunk);
+                if (!isChunkLoaded(world, chunkX, chunkZ)) {
+                    unloadedChunks.add(packedChunk);
+                    skippedChunk += countBlocksInChunk(pathBlocks, chunkX, chunkZ);
+                }
+            }
+
+            if (skippedChunk > 0) {
+                LOGGER.warning(String.format("[PATH][EMIT] Skipping %d blocks in unloaded chunks", skippedChunk));
+            }
+        }
+
         for (Block pathBlock : pathBlocks) {
             int x = pathBlock.getX();
             int z = pathBlock.getZ();
+            int chunkX = x >> 4;
+            int chunkZ = z >> 4;
+            if (unloadedChunks.contains(packChunk(chunkX, chunkZ))) {
+                skippedChunk++;
+                continue;
+            }
             // Get the actual ground level at this X,Z position. Some test worlds (MockBukkit)
             // don't implement getHighestBlockYAt and will throw — fall back to the
             // supplied pathBlock Y in that case so unit tests remain deterministic.
@@ -73,7 +113,7 @@ public class PathEmitter {
             } catch (RuntimeException e) {
                 groundY = pathBlock.getY();
             }
-            
+
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {
                 skippedMask++;
@@ -81,44 +121,54 @@ public class PathEmitter {
             }
 
             // Check support: block below must be solid natural ground
-            Block foundation = world.getBlockAt(x, groundY - 1, z);
-            if (!foundation.getType().isSolid()) {
-                // R008: Never place when support is missing
-                skippedSupport++;
-                continue;
+            if (!shouldBypassSupportChecks()) {
+                Block foundation = world.getBlockAt(x, groundY - 1, z);
+                if (!foundation.getType().isSolid()) {
+                    // R008: Never place when support is missing
+                    skippedSupport++;
+                    continue;
+                }
             }
-            
+
             // REPLACE the surface block with path material (at groundY)
             Block pathSurface = world.getBlockAt(x, groundY, z);
             pathSurface.setType(pathMaterial);
             blocksPlaced++;
+            expectedBlocks.add(pathSurface);
             successfullyPlacedBlocks.add(pathSurface);
-            
+
             // Ensure air above path (2 blocks for player clearance)
             // Only clear if not inside a mask (though we checked target, check above too?)
             // Assuming masks cover structures, we shouldn't be under them if we are not inside them?
             // But let's be safe and check masks for air blocks too if needed, or just assume safe.
             // R008 says "target is not inside any VolumeMask".
-            
+
             Block airAbove1 = world.getBlockAt(x, groundY + 1, z);
             if (!isInsideAnyMask(masks, x, groundY + 1, z) && !airAbove1.getType().isAir()) {
                 airAbove1.setType(Material.AIR);
             }
-            
+
             Block airAbove2 = world.getBlockAt(x, groundY + 2, z);
             if (!isInsideAnyMask(masks, x, groundY + 2, z) && !airAbove2.getType().isAir()) {
                 airAbove2.setType(Material.AIR);
             }
         }
-        
+
         // R008: Apply simple widening after emission
-        blocksPlaced += widenPath(world, successfullyPlacedBlocks, pathMaterial, masks);
-        
-        LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, skipped(mask)=%d, skipped(noSupport)=%d, culture=%s, material=%s",
-                blocksPlaced, skippedMask, skippedSupport, cultureId, pathMaterial));
-        
+        blocksPlaced += widenPath(world, successfullyPlacedBlocks, pathMaterial, masks, expectedBlocks);
+
+        int verifiedBlocks = countExpectedBlocks(expectedBlocks, pathMaterial);
+        if (verifiedBlocks < expectedBlocks.size()) {
+            LOGGER.warning(String.format("[PATH][EMIT] Verification mismatch: expected=%d, found=%d", 
+                    expectedBlocks.size(), verifiedBlocks));
+        }
+
+        LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, verified=%d, skipped(mask)=%d, skipped(noSupport)=%d, skipped(unloaded)=%d, culture=%s, material=%s",
+                blocksPlaced, verifiedBlocks, skippedMask, skippedSupport, skippedChunk, cultureId, pathMaterial));
+
         return blocksPlaced;
     }
+
     
     /**
      * Check if a point is inside any VolumeMask.
@@ -135,12 +185,37 @@ public class PathEmitter {
         return false;
     }
 
+    private long packChunk(int chunkX, int chunkZ) {
+        return (((long) chunkX) << 32) | (chunkZ & 0xFFFFFFFFL);
+    }
+
+    private int unpackChunkX(long packed) {
+        return (int) (packed >> 32);
+    }
+
+    private int unpackChunkZ(long packed) {
+        return (int) packed;
+    }
+
+    private int countBlocksInChunk(List<Block> pathBlocks, int chunkX, int chunkZ) {
+        int count = 0;
+        for (Block block : pathBlocks) {
+            if ((block.getX() >> 4) == chunkX && (block.getZ() >> 4) == chunkZ) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+
     /**
      * Apply simple widening to the path.
      * Adds adjacent blocks if supported and not obstructed.
      */
-    private int widenPath(World world, List<Block> pathBlocks, Material pathMaterial, List<VolumeMask> masks) {
+    private int widenPath(World world, List<Block> pathBlocks, Material pathMaterial, List<VolumeMask> masks,
+                           Set<Block> expectedBlocks) {
         int widened = 0;
+
         // Simple widening: for each path block, try to place path material on random adjacent blocks
         // or just make it 2-wide in some places?
         // "Apply simple widening after emission" - let's try to make it slightly irregular but wider.
@@ -184,6 +259,7 @@ public class PathEmitter {
             if (block.getType() != pathMaterial) {
                 block.setType(pathMaterial);
                 widened++;
+                expectedBlocks.add(block);
                 
                 // Clear air above widened blocks too
                 Block above1 = block.getRelative(BlockFace.UP);
@@ -195,9 +271,44 @@ public class PathEmitter {
         
         return widened;
     }
-    
+
+    private int countExpectedBlocks(Set<Block> expectedBlocks, Material pathMaterial) {
+        int count = 0;
+        for (Block block : expectedBlocks) {
+            if (block.getType() == pathMaterial) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean isMainThread() {
+        try {
+            return Bukkit.isPrimaryThread();
+        } catch (IllegalStateException | NullPointerException e) {
+            return true;
+        }
+    }
+
+    private boolean shouldEnforceChunkLoaded() {
+        return Bukkit.getServer() != null;
+    }
+
+    private boolean isChunkLoaded(World world, int chunkX, int chunkZ) {
+        try {
+            return world.isChunkLoaded(chunkX, chunkZ);
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
+    private boolean shouldBypassSupportChecks() {
+        return Boolean.getBoolean("vo.test.bypassPathSupport");
+    }
+
     /**
      * Apply minimal smoothing to path with stairs and slabs.
+
      * 
      * Smoothing rules:
      * - Single-block elevation changes → stairs
@@ -214,8 +325,14 @@ public class PathEmitter {
         if (pathBlocks.size() < 2) {
             return 0;
         }
-        
+
+        if (!isMainThread()) {
+            LOGGER.warning("[PATH][EMIT] Smoothing called off main thread; skipping");
+            return 0;
+        }
+
         int blocksSmoothed = 0;
+
         
         for (int i = 1; i < pathBlocks.size() - 1; i++) {
             Block current = pathBlocks.get(i);

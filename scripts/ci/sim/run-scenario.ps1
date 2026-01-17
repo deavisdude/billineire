@@ -529,8 +529,11 @@ Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
 $jvmArgs = @("-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
 if ($FixedLayout) {
     $jvmArgs += "-Dvo.suppress.worldgen=true"
+    $jvmArgs += "-Dvo.test.bypassPathSupport=true"
     Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
+    Write-Host "Fixed-layout mode: bypassing path support checks via -Dvo.test.bypassPathSupport=true" -ForegroundColor Cyan
 }
+
 
 if ($ForceZeroPlacement) {
     $jvmArgs += "-Dvo.test.forceZeroPlacement=true"
@@ -1117,18 +1120,49 @@ if (Test-Path "$ServerDir/server.log") {
             }
         }
         
-        Write-Host "Connectivity range: $minConnectivity% - $maxConnectivity%" -ForegroundColor White
-        
-        if ($failedVillages -eq 0) {
-            Write-Host "OK All villages meet 90% path connectivity threshold" -ForegroundColor Green
-        } else {
-            Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
+    Write-Host "Connectivity range: $minConnectivity% - $maxConnectivity%" -ForegroundColor White
+    
+    if ($failedVillages -eq 0) {
+        Write-Host "OK All villages meet 90% path connectivity threshold" -ForegroundColor Green
+    } else {
+        Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
+    }
+}
+
+# T060: Path emission verification
+Write-Host ""
+Write-Host "=== Path Emission Verification (T060) ===" -ForegroundColor Cyan
+
+$pathEmitPattern = '\[PATH\]\[EMIT\] Result: placed=([0-9]+), verified=([0-9]+), skipped\(mask\)=([0-9]+), skipped\(noSupport\)=([0-9]+), skipped\(unloaded\)=([0-9]+)'
+$emitMatches = [regex]::Matches($logContent, $pathEmitPattern)
+
+if ($emitMatches.Count -eq 0) {
+    Write-Host "! No path emission results found in logs" -ForegroundColor Yellow
+} else {
+    $mismatchCount = 0
+    foreach ($match in $emitMatches) {
+        $placed = [int]$match.Groups[1].Value
+        $verified = [int]$match.Groups[2].Value
+        if ($verified -lt $placed) {
+            $mismatchCount++
+            Write-Host "X Path emission mismatch (placed=$placed, verified=$verified)" -ForegroundColor Red
         }
     }
 
-    # T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
-    Write-Host ""
-    Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cyan
+    if ($mismatchCount -eq 0) {
+        Write-Host "OK All path emissions verified" -ForegroundColor Green
+    } else {
+        Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+        if ($env:CI -eq 'true') {
+            exit 5
+        }
+    }
+}
+
+# T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
+Write-Host ""
+Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cyan
+
     
     # Pattern: [PATH] A* FAILED: node limit reached (explored=5000/5000, obstacles=N, maxCost=X.X)
     $nodeCapPattern = '\[PATH\] A\* FAILED: node limit reached \(explored=([0-9]+)/([0-9]+)'

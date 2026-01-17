@@ -1028,14 +1028,35 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         int baseZ = ((seedInt / 200) % 200) - 100;
         // T026d: Use fixed Y coordinate for deterministic testing (ignore terrain height)
         int baseY = 64;
-        
+        int fixedWidth = 7;
+        int fixedDepth = 7;
+        int fixedHeight = 6;
+        int fixedSpacing = 24;
+        int entranceOffset = -5;
+        int corridorHalfWidth = 1;
+
         // T026d: Pre-load chunks to ensure terrain is generated before block placement
         // This prevents race conditions where terrain generation interferes with fixed-layout placement
-        for (int chunkX = (baseX - 50) >> 4; chunkX <= (baseX + 50) >> 4; chunkX++) {
-            for (int chunkZ = (baseZ - 50) >> 4; chunkZ <= (baseZ + 50) >> 4; chunkZ++) {
+        int minLayoutX = baseX - 2;
+        int maxLayoutX = baseX + (Math.max(0, count - 1) * fixedSpacing) + fixedWidth + 2;
+        int minLayoutZ = baseZ + entranceOffset - corridorHalfWidth - 2;
+        int maxLayoutZ = baseZ + fixedDepth + 2;
+        int preloadMargin = 16;
+        for (int chunkX = (minLayoutX - preloadMargin) >> 4; chunkX <= (maxLayoutX + preloadMargin) >> 4; chunkX++) {
+            for (int chunkZ = (minLayoutZ - preloadMargin) >> 4; chunkZ <= (maxLayoutZ + preloadMargin) >> 4; chunkZ++) {
                 world.getChunkAt(chunkX, chunkZ);
             }
         }
+
+        // Ensure a flat walkable base so pathfinding has consistent support.
+        int baseGroundY = baseY - 1;
+        for (int x = minLayoutX; x <= maxLayoutX; x++) {
+            for (int z = minLayoutZ; z <= maxLayoutZ; z++) {
+                world.getBlockAt(x, baseGroundY, z).setType(org.bukkit.Material.DIRT);
+                world.getBlockAt(x, baseGroundY + 1, z).setType(org.bukkit.Material.AIR);
+            }
+        }
+
 
         String villageName = "fixed-" + Long.toString(seed);
         // Use deterministic village UUID derived from seed so fixed-layout runs are repeatable
@@ -1062,12 +1083,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         java.util.List<org.bukkit.Location> buildingLocations = new java.util.ArrayList<>();
 
         for (int i = 0; i < count; i++) {
-            int width = 7; int depth = 7; int height = 6;
-            int spacing = 12;
+            int width = fixedWidth;
+            int depth = fixedDepth;
+            int height = fixedHeight;
+            int spacing = fixedSpacing;
             int x = baseX + i * spacing;
             int z = baseZ;
             // T026d: Use fixed baseY for all buildings (ignore terrain)
             int y = baseY;
+
+
 
             // Deterministic building id derived from seed+index so repeated runs reproduce the same ids
             UUID buildingId = UUID.nameUUIDFromBytes(("fixed-layout-" + seed + "-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1076,8 +1101,10 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             // Use entrance-aligned origin for building locations so path generation
             // targets a walkable point outside the persisted footprint (entrance)
             // Place entrance further out than the expanded volume mask buffer (buffer=2)
-            // so the walkable node lies outside obstacles (use z - 3)
-            org.bukkit.Location origin = new org.bukkit.Location(world, x + width / 2, y, z - 3);
+            // so the walkable node lies outside obstacles (use z - 5)
+
+            org.bukkit.Location origin = new org.bukkit.Location(world, x + width / 2, y, z - 5);
+
             com.davisodom.villageoverhaul.model.Building building =
                 new com.davisodom.villageoverhaul.model.Building.Builder()
                     .buildingId(buildingId)
@@ -1114,7 +1141,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     .rotation(0)
                     .bounds(minX, maxX, minY, maxY, minZ, maxZ)
                     .dimensions(width, height, depth)
-                    .entrance(x + width / 2, y, z - 3)
+                    .entrance(x + width / 2, y, z - 5)
+
                     .foundationCorners(corners)
                     .build();
 
@@ -1127,14 +1155,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             // Unconditionally place blocks at exact coordinates (ignore existing terrain)
             try {
                 // First, clear all blocks in and above the receipt AABB to ensure deterministic placement
+                int minClearY = world.getMinHeight();
+                int maxClearY = world.getMaxHeight();
                 for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
                     for (int bz = receipt.getMinZ(); bz <= receipt.getMaxZ(); bz++) {
-                        // Clear from minY-5 up to ensure no floating blocks above
-                        for (int by = receipt.getMinY() - 5; by <= receipt.getMaxY() + 10; by++) {
+                        for (int by = minClearY; by <= maxClearY; by++) {
                             world.getBlockAt(bx, by, bz).setType(org.bukkit.Material.AIR);
                         }
                     }
                 }
+
                 
                 // Now place the structure blocks unconditionally
                 for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
@@ -1160,7 +1190,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         if (!buildingLocations.isEmpty()) {
             int minX = Integer.MAX_VALUE;
             int maxX = Integer.MIN_VALUE;
-            int corridorZ = baseZ - 3; // matches entrance Z
+            int corridorZ = baseZ - 5; // matches entrance Z
+
             for (org.bukkit.Location loc : buildingLocations) {
                 int ex = loc.getBlockX();
                 minX = Math.min(minX, ex);
@@ -1168,23 +1199,28 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             }
 
             int groundY = baseY - 1;
-            for (int cx = minX - 1; cx <= maxX + 1; cx++) {
-                try {
-                    // Clear area above and below to ensure clean corridor
-                    for (int clearY = groundY - 5; clearY <= groundY + 10; clearY++) {
-                        world.getBlockAt(cx, clearY, corridorZ).setType(org.bukkit.Material.AIR);
+            int minClearY = world.getMinHeight();
+            int maxClearY = world.getMaxHeight();
+            for (int cx = minX - 2; cx <= maxX + 2; cx++) {
+                for (int cz = corridorZ - 1; cz <= corridorZ + 1; cz++) {
+                    try {
+                        // Clear area above and below to ensure clean corridor
+                        for (int clearY = minClearY; clearY <= maxClearY; clearY++) {
+                            world.getBlockAt(cx, clearY, cz).setType(org.bukkit.Material.AIR);
+                        }
+
+                        // Place solid ground block unconditionally
+                        world.getBlockAt(cx, groundY, cz).setType(org.bukkit.Material.DIRT);
+
+                        // Ensure air above for walkable space
+                        world.getBlockAt(cx, groundY + 1, cz).setType(org.bukkit.Material.AIR);
+                    } catch (Exception e) {
+                        plugin.getLogger().warning("[STRUCT][TEST] Corridor placement failed at " + cx + "," + cz + ": " + e.getMessage());
                     }
-                    
-                    // Place solid ground block unconditionally
-                    world.getBlockAt(cx, groundY, corridorZ).setType(org.bukkit.Material.DIRT);
-                    
-                    // Ensure air above for walkable space
-                    world.getBlockAt(cx, groundY + 1, corridorZ).setType(org.bukkit.Material.AIR);
-                } catch (Exception e) {
-                    plugin.getLogger().warning("[STRUCT][TEST] Corridor placement failed at " + cx + "," + corridorZ + ": " + e.getMessage());
                 }
             }
         }
+
 
         sender.sendMessage(String.format("§aCreated fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout village=%s buildings=%d seed=%d", village.getId(), count, seed));

@@ -399,7 +399,38 @@ Helper functions for future bot player simulation (requires additional server-si
 - `state-snapshot.json` - T026/T026a scenario snapshot
 - `test-server/` - Server directory (auto-created)
 
+## T060: Path Emission Verification
+
+**Added**: 2026-01-16  
+**Status**: ✅ Implemented  
+**Location**: `scripts/ci/sim/run-scenario.ps1`, `PathEmitter.java`
+
+### What T060 Verifies
+
+Ensures logged path emission results match world state by verifying each emitted block has the expected
+path material immediately after placement.
+
+**Log Pattern**:
+```
+[PATH][EMIT] Result: placed=N, verified=V, skipped(mask)=M, skipped(noSupport)=S, skipped(unloaded)=U, culture=..., material=...
+```
+
+**Harness Validation**:
+- Parses the above line for every emission run.
+- Fails in CI if any `verified < placed` mismatch is detected.
+
+**Expected Output**:
+- `OK All path emissions verified` when matches are clean.
+- `X Path emission mismatch (placed=N, verified=V)` when mismatched.
+
+### Running the Test
+
+```powershell
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 3000
+```
+
 ## T026a: Pathfinding Concurrency Cap & Waypoint Cache Tests
+
 
 **Added**: 2025-11-09  
 **Status**: ✅ Implemented  

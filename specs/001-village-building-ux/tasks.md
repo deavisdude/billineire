@@ -528,6 +528,14 @@ Supersedes: T021b, T021c, T022a stabilization items. Keep for history but do not
   - Acceptance:
     - Zero floating slabs in smoke test; zero placements inside VolumeMask.
 
+- [ ] R008b [QA] Fix fixed-layout path support for headless emission
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`, `scripts/ci/sim/run-scenario.ps1`
+  - Description: Ensure fixed-layout scenarios provide reliable ground support so path emission places blocks (not skipped for noSupport). If test-only bypasses are used, document and implement a deterministic terrain scaffold for paths.
+  - Acceptance:
+    - Headless fixed-layout run emits path blocks with placed > 0 for each segment.
+    - `[PATH][EMIT]` results show noSupport=0 (or documented, intentional bypass) in fixed-layout mode.
+
+
 - [X] R009 [Migration] Replace old persistence and path calls
   - Files: `VillagePlacementServiceImpl`, `PathServiceImpl`, `StructureServiceImpl`
   - Description: Remove legacy footprint code, `findGroundLevel` heuristics, and any path code that probes world state without the SurfaceSolver. Wire the new pipeline end-to-end.
@@ -1413,11 +1421,12 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Fixed T065 regression: when planLightGrading and planGapFilling overlap at the same block with different target materials (e.g., DIRT vs GRASS_BLOCK), keep the first operation (grading) instead of failing. This resolves surface material preservation while maintaining duplicate-op safety.
     - Increased test heap to 1GB in build.gradle to prevent OOM in MockBukkit-heavy test suites.
 
-- [ ] T060 [P0] Ensure `PathEmitter` writes are persisted and visible
+- [x] T060 [P0] Ensure `PathEmitter` writes are persisted and visible
   - Story: Some villages show A* success and path-block counts in logs, but the in-world inspection shows no or incomplete path blocks.
   - Description: Audit `PathEmitter` and FAWE/WorldEdit writes: ensure writes run on the correct thread context and are completed/committed before logging success. Add headless check that reads world blocks at expected path coords after path emission.
   - Files: `PathEmitter.java`, `PathServiceImpl.java`, FAWE integration code, headless tests in `tests/HEADLESS-TESTING.md` and `scripts/ci/sim`.
   - Acceptance: Headless integration asserts that for any logged `spawned=<N>` the world contains the same number of path blocks at expected coords.
+
 
 - [ ] T061 [P1] Reconcile placement receipts vs summary counts
   - Story: Summary lines sometimes report `buildings=0` despite successful `Seat successful` lines earlier; command output can also contradict the in-plugin summary.
