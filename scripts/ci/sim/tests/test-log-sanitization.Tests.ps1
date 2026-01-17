@@ -2,7 +2,7 @@ Import-Module Pester -ErrorAction SilentlyContinue
 
 Describe 'Log sanitization helpers' {
     It 'Sanitize-Text strips ANSI sequences and non-ASCII characters' {
-        $raw = "`e[31mHELLO`e[0m World ☃ ñ ö\r\nLine2"
+        $raw = "`e[31mHELLO`e[0m World " + [char]0x2603 + " " + [char]0x00F1 + " " + [char]0x00F6 + "`r`nLine2"
         . (Join-Path $PSScriptRoot '..\log-utils.ps1')
         $out = Sanitize-Text $raw
         $out | Should Match 'HELLO.*World.*Line2'
@@ -14,13 +14,20 @@ Describe 'Log sanitization helpers' {
     It 'Read-And-Sanitize-LogFile normalizes line endings and strips control chars' {
         $tmp = Join-Path $PSScriptRoot 'tmp_log.txt'
         $esc = [char]27
-        $content = "First`r`nSecond" + $esc + "[32mGreen" + $esc + "[0m" + "αß"
+        $nonAscii = ([char]0x03B1) + ([char]0x00DF)
+        $content = "First`r`nSecond" + $esc + "[32mGreen" + $esc + "[0m" + $nonAscii
         Set-Content -Path $tmp -Value $content -Encoding UTF8
         . (Join-Path $PSScriptRoot '..\log-utils.ps1')
         $clean = Read-And-Sanitize-LogFile $tmp
         $clean | Should Match "First`nSecond"
         $clean | Should Not Match '\x1b\['
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'Sanitize-Text handles null input safely' {
+        . (Join-Path $PSScriptRoot '..\log-utils.ps1')
+        $out = Sanitize-Text $null
+        $out | Should Be ''
     }
 
     It 'Regex can extract determinism hash from sanitized log text' {

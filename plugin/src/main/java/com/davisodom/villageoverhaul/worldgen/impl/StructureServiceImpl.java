@@ -6,16 +6,18 @@ import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.TerraformingPlan;
 import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.sk89q.worldedit.WorldEdit;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormat;
 import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormats;
 import com.sk89q.worldedit.extent.clipboard.io.ClipboardReader;
-import com.sk89q.worldedit.math.BlockVector3;
-import com.sk89q.worldedit.math.transform.AffineTransform;
 import com.sk89q.worldedit.function.operation.Operation;
 import com.sk89q.worldedit.function.operation.Operations;
+import com.sk89q.worldedit.math.BlockVector3;
+import com.sk89q.worldedit.math.transform.AffineTransform;
 import com.sk89q.worldedit.session.ClipboardHolder;
 import com.sk89q.worldedit.EditSession;
 import org.bukkit.Location;
@@ -28,6 +30,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.*;
 import java.util.logging.Logger;
+
 
 /**
  * Implementation of StructureService with deterministic placement.
@@ -52,10 +55,43 @@ public class StructureServiceImpl implements StructureService {
     // FAWE availability flag
     private boolean faweAvailable = false;
     
+    private static final int TERRAFORM_ARTIFACT_VERSION = 1;
+    private static final java.util.EnumSet<Material> FOUNDATION_SUPPORT_MATERIALS = java.util.EnumSet.of(
+        Material.DIRT,
+        Material.STONE,
+        Material.GRANITE,
+        Material.ANDESITE,
+        Material.DIORITE,
+        Material.DEEPSLATE,
+        Material.COBBLESTONE,
+        Material.COBBLED_DEEPSLATE,
+        Material.COARSE_DIRT,
+        Material.PODZOL,
+        Material.GRAVEL,
+        Material.SAND,
+        Material.RED_SAND,
+        Material.SANDSTONE,
+        Material.RED_SANDSTONE,
+        Material.TERRACOTTA,
+        Material.CLAY
+    );
+
     // Plugin data folder for structure files
     private File structuresDirectory;
+    private File diagnosticsDirectory;
+    private final ObjectMapper artifactMapper;
+
+    private ObjectMapper createArtifactMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.enable(SerializationFeature.INDENT_OUTPUT);
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
     
     public StructureServiceImpl() {
+        this.diagnosticsDirectory = null;
+        this.artifactMapper = createArtifactMapper();
+
         // Check for FAWE availability on initialization
         checkFAWEAvailability();
         
@@ -70,11 +106,17 @@ public class StructureServiceImpl implements StructureService {
      */
     public StructureServiceImpl(File pluginDataFolder) {
         this.structuresDirectory = new File(pluginDataFolder, "structures");
-        
+        this.diagnosticsDirectory = new File(pluginDataFolder, "diagnostics");
+        this.artifactMapper = createArtifactMapper();
+
         // Create structures directory if it doesn't exist
         if (!structuresDirectory.exists()) {
             structuresDirectory.mkdirs();
             LOGGER.info(String.format("[STRUCT] Created structures directory: %s", structuresDirectory.getAbsolutePath()));
+        }
+
+        if (!diagnosticsDirectory.exists()) {
+            diagnosticsDirectory.mkdirs();
         }
         
         // Check for FAWE availability on initialization
@@ -90,6 +132,7 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info(String.format("[STRUCT] Loaded %d structure(s) from %s", loadedCount, structuresDirectory.getPath()));
         }
     }
+
     
     /**
      * Load all schematic files from the structures directory.
@@ -571,6 +614,12 @@ public class StructureServiceImpl implements StructureService {
             emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true, true);
             return Optional.empty();
         }
+
+        int solidifiedCorners = solidifyFoundationCorners(world, bounds);
+        if (solidifiedCorners > 0) {
+            LOGGER.info(String.format("[STRUCT] Solidified %d foundation corner(s) at y=%d for '%s'",
+                    solidifiedCorners, bounds[2], template.id));
+        }
         
         // T051: Emit diagnostic artifact showing successful terraforming aligned with placement
         emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true, false);
@@ -578,6 +627,27 @@ public class StructureServiceImpl implements StructureService {
         LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
                 template.id, formatLocation(origin), seed));
         return Optional.of(origin);
+    }
+
+    private int solidifyFoundationCorners(World world, int[] bounds) {
+        int fixed = 0;
+        int[][] corners = new int[][] {
+            { bounds[0], bounds[2], bounds[4] },
+            { bounds[1], bounds[2], bounds[4] },
+            { bounds[1], bounds[2], bounds[5] },
+            { bounds[0], bounds[2], bounds[5] }
+        };
+
+        for (int[] corner : corners) {
+            Block block = world.getBlockAt(corner[0], corner[1], corner[2]);
+            Material type = block.getType();
+            if (!type.isSolid() || !FOUNDATION_SUPPORT_MATERIALS.contains(type)) {
+                block.setType(Material.DIRT);
+                fixed++;
+            }
+        }
+
+        return fixed;
     }
     
     /**
@@ -598,7 +668,8 @@ public class StructureServiceImpl implements StructureService {
         } else {
             status = "ABANDONED";
         }
-        
+
+        String reason = plan.getRejectionReason() != null ? plan.getRejectionReason() : "none";
         // T058: Enhanced diagnostics with applied/skipped counts
         int opsTotal = plan.getPlannedOperations().size();
         double skippedRatio = opsTotal == 0 ? 0.0
@@ -607,8 +678,83 @@ public class StructureServiceImpl implements StructureService {
             structureId, status,
             bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
             plan.getAppliedOpsCount(), plan.getSkippedOpsCount(), opsTotal, skippedRatio,
-            plan.getRejectionReason() != null ? plan.getRejectionReason() : "none"));
+            reason));
+
+        writeTerraformingArtifact(structureId, status, bounds,
+            plan.getAppliedOpsCount(), plan.getSkippedOpsCount(), opsTotal, skippedRatio, reason);
     }
+
+    private void writeTerraformingArtifact(String structureId, String status, int[] bounds,
+                                           int appliedOps, int skippedOps, int opsTotal,
+                                           double skippedRatio, String reason) {
+        if (diagnosticsDirectory == null) {
+            return;
+        }
+        if (!diagnosticsDirectory.exists()) {
+            diagnosticsDirectory.mkdirs();
+        }
+
+        TerraformingCommitArtifact artifact = new TerraformingCommitArtifact(
+            TERRAFORM_ARTIFACT_VERSION,
+            structureId,
+            status,
+            bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
+            appliedOps,
+            skippedOps,
+            opsTotal,
+            skippedRatio,
+            reason
+        );
+
+        String safeStructureId = structureId == null ? "unknown" : structureId.replaceAll("[^A-Za-z0-9_-]", "_");
+        String filename = String.format("terraform_commit_%s_%d.json", safeStructureId, System.currentTimeMillis());
+        File artifactFile = new File(diagnosticsDirectory, filename);
+
+        try {
+            artifactMapper.writeValue(artifactFile, artifact);
+            LOGGER.info(String.format("[STRUCT][TERRAFORM-ARTIFACT] Wrote %s", artifactFile.getName()));
+        } catch (IOException e) {
+            LOGGER.warning(String.format("[STRUCT][TERRAFORM-ARTIFACT] Failed to write %s: %s", artifactFile.getName(), e.getMessage()));
+        }
+    }
+
+    private static final class TerraformingCommitArtifact {
+        public final int schemaVersion;
+        public final String structureId;
+        public final String status;
+        public final int minX;
+        public final int maxX;
+        public final int minY;
+        public final int maxY;
+        public final int minZ;
+        public final int maxZ;
+        public final int appliedOps;
+        public final int skippedOps;
+        public final int opsTotal;
+        public final double skippedRatio;
+        public final String reason;
+
+        private TerraformingCommitArtifact(int schemaVersion, String structureId, String status,
+                                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
+                                           int appliedOps, int skippedOps, int opsTotal, double skippedRatio,
+                                           String reason) {
+            this.schemaVersion = schemaVersion;
+            this.structureId = structureId;
+            this.status = status;
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minY = minY;
+            this.maxY = maxY;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+            this.appliedOps = appliedOps;
+            this.skippedOps = skippedOps;
+            this.opsTotal = opsTotal;
+            this.skippedRatio = skippedRatio;
+            this.reason = reason;
+        }
+    }
+
     
     /**
      * Find an alternative location for re-seating.

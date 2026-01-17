@@ -145,11 +145,14 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.metadataStore = metadataStore;
         this.cultureService = cultureService;
         this.mainBuildingSelector = new MainBuildingSelector(LOGGER, cultureService);
-        // Load spacing from plugin config
-        this.minBuildingSpacing = plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
-        this.minVillageSpacing = plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
-        this.villagersPerStructure = plugin.getConfig().getDouble("worldgen.spawn.villagersPerStructure", DEFAULT_VILLAGERS_PER_STRUCTURE);
         VillageOverhaulPlugin voPlugin = plugin instanceof VillageOverhaulPlugin ? (VillageOverhaulPlugin) plugin : null;
+        this.minBuildingSpacing = voPlugin != null
+            ? voPlugin.getMinBuildingSpacing()
+            : plugin.getConfig().getInt("village.minBuildingSpacing", DEFAULT_BUILDING_SPACING);
+        this.minVillageSpacing = voPlugin != null
+            ? voPlugin.getMinVillageSpacing()
+            : plugin.getConfig().getInt("village.minVillageSpacing", DEFAULT_VILLAGE_SPACING);
+        this.villagersPerStructure = plugin.getConfig().getDouble("worldgen.spawn.villagersPerStructure", DEFAULT_VILLAGERS_PER_STRUCTURE);
         this.customVillagerService = voPlugin != null ? voPlugin.getCustomVillagerService() : null;
         this.villagerAppearanceAdapter = voPlugin != null ? voPlugin.getVillagerAppearanceAdapter() : null;
     }

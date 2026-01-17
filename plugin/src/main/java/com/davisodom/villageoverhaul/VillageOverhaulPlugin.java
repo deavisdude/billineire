@@ -39,12 +39,15 @@ import java.util.logging.Logger;
  */
 public class VillageOverhaulPlugin extends JavaPlugin {
     
+    private static final int DEFAULT_VILLAGE_SPACING = 200;
     private static VillageOverhaulPlugin instance;
     private Logger logger;
     
     // Configuration values
     private int minBuildingSpacing;
     private int minVillageSpacing;
+    private int maxBoundsRadiusBlocks;
+    private double spacingMultiplier;
     private int spawnProximityRadius;
     private boolean allowMarkerFallback;
     private double villagersPerStructure;
@@ -83,7 +86,9 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Load configuration
         saveDefaultConfig();
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
-        minVillageSpacing = getConfig().getInt("village.minVillageSpacing", 200);
+        maxBoundsRadiusBlocks = getConfig().getInt("village.maxBoundsRadiusBlocks", 160);
+        spacingMultiplier = getConfig().getDouble("village.spacingMultiplier", 1.25);
+        minVillageSpacing = resolveMinVillageSpacing(getConfig().getInt("village.minVillageSpacing", 200));
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
         allowMarkerFallback = getConfig().getBoolean("worldgen.allowMarkerFallback", false);
         villagersPerStructure = getConfig().getDouble("worldgen.spawn.villagersPerStructure", 2.0);
@@ -100,7 +105,8 @@ public class VillageOverhaulPlugin extends JavaPlugin {
             logger.info("OK Debug logging configured (verbose=" + verboseLogging + ") - diagnostic logs will use INFO level");
         }
         
-    logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
+logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
+                ", maxBoundsRadiusBlocks=" + maxBoundsRadiusBlocks + ", spacingMultiplier=" + spacingMultiplier +
                 ", minVillageSpacing=" + minVillageSpacing + 
                 ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback + 
                 ", villagersPerStructure=" + villagersPerStructure + ")");
@@ -286,7 +292,19 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         
         logger.info("Village Overhaul enabled successfully!");
     }
-    
+
+    private int resolveMinVillageSpacing(int configuredSpacing) {
+        if (configuredSpacing > 0) {
+            return configuredSpacing;
+        }
+        int diameter = maxBoundsRadiusBlocks * 2;
+        int derived = (int) Math.ceil(diameter * spacingMultiplier);
+        if (derived <= 0) {
+            return DEFAULT_VILLAGE_SPACING;
+        }
+        return derived;
+    }
+
     /**
      * Get the plugin instance
      * @return Plugin singleton
@@ -353,18 +371,18 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         return minBuildingSpacing;
     }
     
-    /**
-     * Get configured minimum village spacing (border-to-border)
-     * @return Minimum spacing in blocks (default: 200)
-     */
     public int getMinVillageSpacing() {
         return minVillageSpacing;
     }
-    
-    /**
-     * Get configured spawn proximity radius for first village
-     * @return Maximum radius in blocks (default: 512)
-     */
+
+    public int getMaxBoundsRadiusBlocks() {
+        return maxBoundsRadiusBlocks;
+    }
+
+    public double getSpacingMultiplier() {
+        return spacingMultiplier;
+    }
+
     public int getSpawnProximityRadius() {
         return spawnProximityRadius;
     }

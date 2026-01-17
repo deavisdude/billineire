@@ -51,14 +51,20 @@ public class TestCommands implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, 
                             @NotNull String label, @NotNull String[] args) {
-        
+
+        if (!sender.hasPermission("villageoverhaul.test")) {
+            sender.sendMessage("§cYou do not have permission to use /votest.");
+            plugin.getLogger().warning("[TEST] Unauthorized /votest access attempt by " + sender.getName());
+            return true;
+        }
+
         if (args.length == 0) {
             sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
             return true;
         }
-        
+
         String subCommand = args[0].toLowerCase();
-        
+
         switch (subCommand) {
             case "create-village":
                 return handleCreateVillage(sender, args);
@@ -1245,6 +1251,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
 
         sender.sendMessage(String.format("§aCreated fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout village=%s buildings=%d seed=%d", village.getId(), count, seed));
+        int receiptCount = metadataStore.getPlacementReceipts(village.getId()).size();
+        plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout receipts=%d village=%s", receiptCount, village.getId()));
+        plugin.getLogger().info(String.format("[STRUCT] village: id=%s buildings=%d", village.getId(), receiptCount));
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout probe=(%d,%d) highestY=%d type=%s baseY=%d",
             debugProbeX, debugProbeZ, debugHighestY, debugSurfaceType, baseY));
 

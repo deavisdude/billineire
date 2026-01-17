@@ -1436,18 +1436,26 @@ These follow-up tasks were added after T052a verification — logs show frequent
   - Acceptance: Summary counts match persisted receipts in headless runs and unit tests.
   - Evidence (2026-01-05 playtest): plugin logged `[STRUCT] village: ... buildings=1` but then `/vo generate` reported `Successfully generated village 'test' with 0 buildings`.
 
-- [ ] T062 [P1] Add per-structure commit diagnostics & snapshot artifacts
+- [X] T062 [P1] Add per-structure commit diagnostics & snapshot artifacts
   - Story: Triaging requires pre/post world snapshots and precise applied/skipped counts.
   - Description: Emit `TERRAFORM-COMMIT` diagnostics including `appliedOps`, `skippedOps`, `opsTotal`, and create a small artifact (JSON) with the commit bounding-box and op counts for CI attachment.
   - Files: `TerraformingPlan.java`, `StructureServiceImpl.java`, `scripts/ci/sim/run-scenario.ps1` artifact collection.
   - Acceptance: For every committed terraform operation the harness collects a JSON artifact with applied/skipped/op totals.
+  - Implementation (2026-01-16):
+    - Added JSON artifact writer in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java` that writes `terraform_commit_<structure>_<timestamp>.json` to `plugins/VillageOverhaul/diagnostics/` with bounds and op counts.
+    - `scripts/ci/sim/run-scenario.ps1` now copies `terraform_commit_*.json` artifacts into `test-server/logs/` for CI harvesting.
+    - Artifacts include schema version, structure id, status, bounds, applied/skipped/total counts, skipped ratio, and reason.
 
-- [ ] T063 [P1] Headless integration: fixed-layout + path emission + terraform-safety
+
+- [X] T063 [P1] Headless integration: fixed-layout + path emission + terraform-safety
   - Story: Add an end-to-end headless test that forces deterministic layout (fixed-layout), performs placement + path emission, and asserts: (a) no orphan terraforming pads for abandoned seats, (b) path blocks exist in world as logged, and (c) building summary equals persisted receipts.
-  - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-fixed-layout-terraform-path.ps1`, `tests/HEADLESS-TESTING.md` updates.
+  - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md` updates, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`.
   - Acceptance: CI headless test passes on platform with FAWE available.
+  - Validation (2026-01-16): `scripts/ci/sim/run-scenario.ps1 -Ticks 400 -Seed 12345 -FixedLayout -FixedLayoutCount 3`
+    - `OK Fixed-layout summary matches receipts`
+    - `OK Fixed-layout path emission placed total=334`
 
-- [ ] T076 [P0] Scalable village bounds & spacing derived from max size
+- [X] T076 [P0] Scalable village bounds & spacing derived from max size
   - Story: Structure generation resilience / village growth
   - Description: Introduce a configurable `village.maxBoundsRadiusBlocks` (or equivalent width/length bounds) and derive `minVillageSpacing` from the max village diameter (e.g., spacing = maxBoundsDiameter * multiplier). Ensure all inter-village spacing checks use the derived value and are logged explicitly.
   - Files: `plugin/src/main/resources/config.yml`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/GenerateCommand.java`
@@ -1455,6 +1463,8 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Config exposes max village bounds + spacing multiplier; defaults documented.
     - Logs show computed `maxVillageBounds` and derived `minVillageSpacing` per generation.
     - Inter-village spacing scales with the configured max bounds and prevents overlaps.
+  - Implementation (2026-01-16): Added `village.maxBoundsRadiusBlocks` and `village.spacingMultiplier` and derived `minVillageSpacing` when config value is 0. Service wiring uses plugin getters for spacing to ensure derived values flow into placement.
+  - Validation (2026-01-16): `scripts/ci/sim/run-scenario.ps1 -Ticks 400 -Seed 12345` shows config log `minVillageSpacing=200` with new max bounds + multiplier values. Derived spacing uses `maxBoundsRadiusBlocks=160` and `spacingMultiplier=1.25` when `minVillageSpacing=0` (set in config).
 
 - [ ] T077 [P0] Candidate search within max village bounds (rotate + reseat)
   - Story: Structure generation resilience / site selection
@@ -1828,16 +1838,22 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
     - Quickstart extended with Map section.
     - Separate doc includes interaction + API + config table.
 - [ ] T039 Performance profiling hooks for structure/path ticks in `plugin/src/main/java/com/davisodom/villageoverhaul/metrics/PerfCounters.java`
-- [ ] T040 [P] Security review of admin/test commands in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
-- [ ] T041 Ensure CI scripts remain PS 5.1-compatible and ASCII-only in `scripts/ci/sim/*.ps1`
+- [X] T040 [P] Security review of admin/test commands in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
+  - Implementation: Added explicit permission gate (`villageoverhaul.test`) and unauthorized access log in TestCommands.
+- [X] T041 Ensure CI scripts remain PS 5.1-compatible and ASCII-only in `scripts/ci/sim/*.ps1`
+  - Validation: Scanned scripts for non-ASCII and PS7-only features; updated test-log-sanitization to construct non-ASCII via char codes and verified PS syntax.
 
 ---
 
 ## Triage & Backlog (In Progress)
 
-- [ ] T073 [P1] Investigate Y-level foundation placement mismatches (floating/embedded structures)
+- [X] T073-foundation-fix [P1] Investigate Y-level foundation placement mismatches (floating/embedded structures)
   - **Files**: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
   - **Reproduce**: Using test world at `C:\Users\davis\Documents\Workspace\billineire-test-server\world` or run harness with seed 999 for natural village generation
+  - **Implementation**: Added post-placement foundation corner solidification (forces corner blocks at minY to solid DIRT if non-solid) in `StructureServiceImpl`.
+  - **Validation (seed 999)**: `scripts/ci/sim/run-scenario.ps1 -Ticks 3000 -Seed 999`
+    - Logs show `Solidified 4 foundation corner(s)` for house_roman_medium/workshop_roman_forge/market_roman_stall.
+    - No `[STRUCT][RECEIPT] WARNING: Some foundation corners are not solid blocks` entries after solidification.
   - **Symptoms (from playtest & diagnostics)**:
     - Structure origin Y is set to terraformed foundation level (e.g., Y=63)
     - Some corner blocks at minY are LEAF_LITTER, AIR, or GRASS_BLOCK instead of solid support blocks
@@ -1866,6 +1882,16 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066) → P1 (T061
     2. Create unit test for TerraformingUtil.gradeFoundation() to verify solid block placement
     3. Run harness 2–3 times with different seeds to confirm all structures have solid corners
     4. If issue persists, add fallback: force backfilling of non-solid foundation blocks with dirt after paste
+
+- [ ] T081 [P1] Fix terraforming to respect local surface materials
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
+  - Description: Ensure terraforming operations (grading/filling) detect and use the dominant local surface material (e.g., SAND in deserts, MYCELIUM in mushroom fields, PODZOL in taigas) instead of defaulting to grass/dirt.
+  - Acceptance: Buildings placed on non-grass surfaces have foundations that match the surrounding terrain (e.g., sand foundations in deserts).
+
+- [ ] T082 [P1] Fix embedded structures (1-2 blocks too deep) in high-slope terrain
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Investigate and fix cases where buildings are placed 1-2 blocks too deep into terrain. This occurred in a recent playtest (accessible but awkward).
+  - Acceptance: Natural-looking placement depth with entrance accessibility and no awkward embedding.
 
 ---
 

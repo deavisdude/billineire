@@ -1141,54 +1141,129 @@ if (Test-Path "$ServerDir/server.log") {
     }
 }
 
-# T060: Path emission verification
-Write-Host ""
-Write-Host "=== Path Emission Verification (T060) ===" -ForegroundColor Cyan
+    # T060: Path emission verification
+    Write-Host ""
+    Write-Host "=== Path Emission Verification (T060) ===" -ForegroundColor Cyan
 
-$pathEmitPattern = '\[PATH\]\[EMIT\] Result: placed=([0-9]+), verified=([0-9]+), skipped\(mask\)=([0-9]+), skipped\(noSupport\)=([0-9]+), skipped\(unloaded\)=([0-9]+)'
-$emitMatches = [regex]::Matches($logContent, $pathEmitPattern)
+    $pathEmitPattern = '\[PATH\]\[EMIT\] Result: placed=([0-9]+), verified=([0-9]+), skipped\(mask\)=([0-9]+), skipped\(noSupport\)=([0-9]+), skipped\(unloaded\)=([0-9]+)'
+    $emitMatches = [regex]::Matches($logContent, $pathEmitPattern)
 
-if ($emitMatches.Count -eq 0) {
-    Write-Host "! No path emission results found in logs" -ForegroundColor Yellow
-} else {
-    $mismatchCount = 0
-    $supportMismatch = 0
-    foreach ($match in $emitMatches) {
-        $placed = [int]$match.Groups[1].Value
-        $verified = [int]$match.Groups[2].Value
-        $skippedSupport = [int]$match.Groups[4].Value
-        if ($verified -lt $placed) {
-            $mismatchCount++
-            Write-Host "X Path emission mismatch (placed=$placed, verified=$verified)" -ForegroundColor Red
-        }
-        if ($FixedLayout) {
-            if ($placed -le 0) {
-                $supportMismatch++
-                Write-Host "X Fixed-layout path emission placed=0 (expected >0)" -ForegroundColor Red
-            }
-            if ($skippedSupport -gt 0) {
-                $supportMismatch++
-                Write-Host "X Fixed-layout path emission skipped(noSupport)=$skippedSupport" -ForegroundColor Red
-            }
-        }
-    }
-
-    if ($mismatchCount -eq 0 -and $supportMismatch -eq 0) {
-        Write-Host "OK All path emissions verified" -ForegroundColor Green
+    if ($emitMatches.Count -eq 0) {
+        Write-Host "! No path emission results found in logs" -ForegroundColor Yellow
     } else {
-        if ($mismatchCount -gt 0) {
-            Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+        $mismatchCount = 0
+        $supportMismatch = 0
+        $totalPlaced = 0
+        foreach ($match in $emitMatches) {
+            $placed = [int]$match.Groups[1].Value
+            $verified = [int]$match.Groups[2].Value
+            $skippedSupport = [int]$match.Groups[4].Value
+            $totalPlaced += $placed
+            if ($verified -lt $placed) {
+                $mismatchCount++
+                Write-Host "X Path emission mismatch (placed=$placed, verified=$verified)" -ForegroundColor Red
+            }
+            if ($FixedLayout) {
+                if ($placed -le 0) {
+                    $supportMismatch++
+                    Write-Host "X Fixed-layout path emission placed=0 (expected >0)" -ForegroundColor Red
+                }
+                if ($skippedSupport -gt 0) {
+                    $supportMismatch++
+                    Write-Host "X Fixed-layout path emission skipped(noSupport)=$skippedSupport" -ForegroundColor Red
+                }
+            }
         }
-        if ($supportMismatch -gt 0) {
-            Write-Host "X $supportMismatch fixed-layout path support issue(s)" -ForegroundColor Red
+
+        if ($mismatchCount -eq 0 -and $supportMismatch -eq 0) {
+            Write-Host "OK All path emissions verified" -ForegroundColor Green
+        } else {
+            if ($mismatchCount -gt 0) {
+                Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+            }
+            if ($supportMismatch -gt 0) {
+                Write-Host "X $supportMismatch fixed-layout path support issue(s)" -ForegroundColor Red
+            }
+            if ($env:CI -eq 'true') {
+                exit 5
+            }
         }
-        if ($env:CI -eq 'true') {
-            exit 5
+
+        if ($FixedLayout) {
+            if ($totalPlaced -le 0) {
+                Write-Host "X Fixed-layout path emission placed total=0 (expected >0)" -ForegroundColor Red
+                if ($env:CI -eq 'true') { exit 5 }
+            } else {
+                Write-Host "OK Fixed-layout path emission placed total=$totalPlaced" -ForegroundColor Green
+            }
         }
     }
-}
 
-# T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
+    # T062: Terraforming commit artifact validation
+    Write-Host ""
+    Write-Host "=== Terraforming Commit Artifacts (T062) ===" -ForegroundColor Cyan
+
+    $terraformArtifacts = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\diagnostics') -Filter 'terraform_commit_*.json' -File -ErrorAction SilentlyContinue)
+    if ($terraformArtifacts.Count -gt 0) {
+        foreach ($artifact in $terraformArtifacts) {
+            try {
+                $dest = Join-Path $ServerDir "logs\$($artifact.Name)"
+                Copy-Item -Path $artifact.FullName -Destination $dest -Force
+                Write-Host "  Saved terraforming artifact: $dest" -ForegroundColor Cyan
+            } catch {
+                Write-Host "  ! Failed to copy terraforming artifact $($artifact.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "! No terraforming commit artifacts found" -ForegroundColor Yellow
+    }
+
+    # T063: Fixed-layout receipts vs summary validation
+    if ($FixedLayout) {
+        Write-Host ""
+        Write-Host "=== Fixed-Layout Receipt Validation (T063) ===" -ForegroundColor Cyan
+        $summaryPattern = '\[STRUCT\] village: id=([a-f0-9\-]+) buildings=([0-9]+)'
+        $summaryMatches = [regex]::Matches($logContent, $summaryPattern)
+        if ($summaryMatches.Count -eq 0) {
+            Write-Host "X No village summary found in logs" -ForegroundColor Red
+            if ($env:CI -eq 'true') { exit 6 }
+        } else {
+            $receiptPattern = '\[STRUCT\]\[TEST\] Fixed layout receipts=([0-9]+) village=([a-f0-9\-]+)'
+            $receiptMatches = [regex]::Matches($logContent, $receiptPattern)
+            $receiptMap = @{}
+            foreach ($match in $receiptMatches) {
+                $receiptCount = [int]$match.Groups[1].Value
+                $receiptVillageId = $match.Groups[2].Value
+                $receiptMap[$receiptVillageId] = $receiptCount
+            }
+
+            $summaryMismatch = 0
+            foreach ($match in $summaryMatches) {
+                $villageId = $match.Groups[1].Value
+                $summaryCount = [int]$match.Groups[2].Value
+                if ($receiptMap.ContainsKey($villageId)) {
+                    $receiptCount = [int]$receiptMap[$villageId]
+                    if ($summaryCount -ne $receiptCount) {
+                        $summaryMismatch++
+                        Write-Host "X Fixed-layout summary mismatch: village=$villageId summary=$summaryCount receipts=$receiptCount" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "X Fixed-layout receipts log missing for village $villageId" -ForegroundColor Red
+                    $summaryMismatch++
+                }
+            }
+
+            if ($summaryMismatch -eq 0) {
+                Write-Host "OK Fixed-layout summary matches receipts" -ForegroundColor Green
+            } else {
+                Write-Host "X $summaryMismatch fixed-layout summary mismatch(es)" -ForegroundColor Red
+                if ($env:CI -eq 'true') { exit 6 }
+            }
+        }
+    }
+
+    # T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
+
 Write-Host ""
 Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cyan
 

@@ -429,6 +429,38 @@ path material immediately after placement.
 .\scripts\ci\sim\run-scenario.ps1 -Ticks 3000
 ```
 
+## T063: Fixed-Layout Headless Integration (Structures + Paths + Terraform)
+
+**Added**: 2026-01-16  
+**Status**: ✅ Implemented  
+**Location**: `scripts/ci/sim/run-scenario.ps1`, `TestCommands.java`
+
+### What T063 Verifies
+
+End-to-end fixed-layout headless run that validates deterministic layout, path emission, and summary consistency:
+
+- `votest fixed-layout` creates deterministic structures and receipts.
+- Harness asserts path emission verified counts (T060) and total placed > 0 in fixed-layout mode.
+- Harness compares fixed-layout receipts count vs summary `[STRUCT] village: ... buildings=N`.
+- Terraforming artifacts copied for inspection (T062).
+
+**Log Patterns**:
+```
+[STRUCT][TEST] Fixed layout receipts=<N> village=<uuid>
+[STRUCT] village: id=<uuid> buildings=<N>
+[PATH][EMIT] Result: placed=..., verified=...
+```
+
+### Running the Test
+
+```powershell
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 400 -Seed 12345 -FixedLayout -FixedLayoutCount 3
+```
+
+Expected output:
+- `OK Fixed-layout summary matches receipts`
+- `OK Fixed-layout path emission placed total=<N>`
+
 ## T026a: Pathfinding Concurrency Cap & Waypoint Cache Tests
 
 
