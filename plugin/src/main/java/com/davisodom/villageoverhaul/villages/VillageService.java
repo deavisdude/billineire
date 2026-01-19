@@ -44,6 +44,13 @@ public class VillageService {
     public Collection<Village> getAllVillages() {
         return Collections.unmodifiableCollection(villages.values());
     }
+
+    /**
+     * Remove a village by ID.
+     */
+    public boolean removeVillage(UUID id) {
+        return villages.remove(id) != null;
+    }
     
     /**
      * Load village from persistence

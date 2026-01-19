@@ -35,6 +35,7 @@ public class VillageWorldgenAdapter implements Listener {
     private final VillageOverhaulPlugin plugin;
     private final Logger logger;
     private final AtomicBoolean seeded = new AtomicBoolean(false);
+    private static final int SPAWN_RETRY_LIMIT = 3;
 
     public VillageWorldgenAdapter(VillageOverhaulPlugin plugin) {
         this.plugin = plugin;
@@ -140,50 +141,84 @@ public class VillageWorldgenAdapter implements Listener {
             return;
         }
 
-        // Search for suitable terrain starting from spawn (async with yielding)
         Location spawn = world.getSpawnLocation();
-        int maxRadius = plugin.getSpawnProximityRadius();
-        Location suitableLocation = findSuitableVillageLocation(world, spawn, maxRadius);
-        
-        if (suitableLocation == null) {
-            logger.warning("Could not find suitable terrain for village placement; aborting spawn seeding");
-            maybePlaceMarkerPillar(world, spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ(),
-                "no suitable terrain found");
-            return;
-        }
-        
-        int baseX = suitableLocation.getBlockX();
-        int baseZ = suitableLocation.getBlockZ();
-        
-        // T052a: Pre-load chunks in the village area BEFORE switching to main thread
-        // This ensures the placement search has enough loaded chunks to work with
-        // without blocking the main thread with chunk loading calls
-        logger.info("Pre-loading chunks for village placement area...");
-        preloadVillageAreaChunks(world, baseX, baseZ, 256); // Load 256-block radius for placement search
-        
-        int y = world.getHighestBlockYAt(baseX, baseZ);
-
-        logger.info("Village placement selected: " + baseX + ", " + y + ", " + baseZ);
-
-        // Register village in service with culture fallback to first available (roman for now)
+        int baseRadius = Math.max(1, plugin.getSpawnProximityRadius());
         String cultureId = plugin.getCultureService().all().stream().findFirst()
-                .map(c -> c.getId()).orElse("roman");
-        String name = switch (cultureId) {
+            .map(c -> c.getId()).orElse("roman");
+        String villageName = switch (cultureId) {
             case "roman" -> "Roma I";
             default -> "Village I";
         };
 
-        // T026d14: Use deterministic UUID derived from world seed for reproducible CI runs
-        long worldSeed = world.getSeed();
-        UUID deterministicVillageId = UUID.nameUUIDFromBytes(
-            ("worldgen-village-" + worldSeed + "-" + baseX + "-" + baseZ).getBytes(StandardCharsets.UTF_8));
-        
-        // Village creation and structure placement must happen on main thread
-        // We're already async from terrain search, so schedule sync for block operations
-        final UUID villageId = deterministicVillageId;
-        final String villageName = name;
-        final int finalY = y;
-        
+        for (int attempt = 0; attempt <= SPAWN_RETRY_LIMIT; attempt++) {
+            Location searchOrigin = computeSpawnRetryOrigin(world, spawn, attempt, baseRadius);
+            int searchRadius = computeSpawnRetryRadius(baseRadius, attempt);
+
+            Location suitableLocation = findSuitableVillageLocation(world, searchOrigin, searchRadius);
+            if (suitableLocation == null) {
+                if (attempt >= SPAWN_RETRY_LIMIT) {
+                    logger.warning("Could not find suitable terrain for village placement; aborting spawn seeding");
+                    maybePlaceMarkerPillar(world, spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ(),
+                        "no suitable terrain found");
+                    return;
+                }
+                continue;
+            }
+
+            int baseX = suitableLocation.getBlockX();
+            int baseZ = suitableLocation.getBlockZ();
+
+            logger.info("Pre-loading chunks for village placement area...");
+            preloadVillageAreaChunks(world, baseX, baseZ, 256);
+
+            int y = world.getHighestBlockYAt(baseX, baseZ);
+            logger.info("Village placement selected: " + baseX + ", " + y + ", " + baseZ);
+
+            UUID deterministicVillageId = buildSpawnVillageId(world, baseX, baseZ, attempt);
+            long seed = world.getSeed() + deterministicVillageId.getMostSignificantBits();
+            Location villageOrigin = new Location(world, baseX, y, baseZ);
+
+            PlacementAttemptResult result = runSpawnPlacementAttempt(
+                world,
+                metadataStore,
+                villageOrigin,
+                cultureId,
+                villageName,
+                seed,
+                deterministicVillageId
+            );
+
+            if (result.success) {
+                return;
+            }
+
+            Optional<VillageMetadataStore.PlacementFailureSummary> summaryOpt =
+                metadataStore.getLastPlacementFailureSummary(deterministicVillageId);
+            String retryReason = resolveSpawnRetryReason(summaryOpt.orElse(null));
+            boolean shouldRetry = shouldSpawnRetry(summaryOpt.orElse(null));
+
+            if (attempt >= SPAWN_RETRY_LIMIT || !shouldRetry) {
+                logger.warning(String.format("[STRUCT][SPAWN-RETRY] exhausted retries after %d attempts reason=%s origin=(%d,%d,%d)",
+                    attempt + 1, retryReason, baseX, y, baseZ));
+                maybePlaceMarkerPillar(world, baseX, y, baseZ, "zero structure placements");
+                return;
+            }
+
+            logger.warning(String.format("[STRUCT][SPAWN-RETRY] attempt=%d reason=%s origin=(%d,%d,%d)",
+                attempt + 1, retryReason, baseX, y, baseZ));
+            metadataStore.removeVillage(deterministicVillageId);
+        }
+    }
+
+    private PlacementAttemptResult runSpawnPlacementAttempt(World world,
+                                                            VillageMetadataStore metadataStore,
+                                                            Location origin,
+                                                            String cultureId,
+                                                            String villageName,
+                                                            long seed,
+                                                            UUID villageId) {
+        java.util.concurrent.CompletableFuture<PlacementAttemptResult> future = new java.util.concurrent.CompletableFuture<>();
+
         Bukkit.getScheduler().runTask(plugin, () -> {
             VillagePlacementServiceImpl placementService;
             try {
@@ -193,42 +228,98 @@ public class VillageWorldgenAdapter implements Listener {
                 logger.severe("X Failed to initialize VillagePlacementServiceImpl: " + e.getMessage());
                 logger.severe("  This usually means WorldEdit is not installed or incompatible");
                 logger.severe("  Falling back to procedural structures without WorldEdit/FAWE");
-                
-                // Try fallback constructor without WorldEdit dependency
+
                 try {
                     placementService = new VillagePlacementServiceImpl(metadataStore, plugin.getCultureService());
                     logger.info("OK Using fallback placement service with procedural structures");
                 } catch (Exception ex) {
                     logger.severe("X Failed to initialize fallback placement service: " + ex.getMessage());
                     ex.printStackTrace();
-                    maybePlaceMarkerPillar(world, baseX, finalY, baseZ, "fallback placement service unavailable");
+                    future.complete(new PlacementAttemptResult(false));
                     return;
                 }
             }
-            
-            // Generate village structures using placement service
-            // T026d14: Pass deterministic UUID to ensure same village ID is used for structures
-            Location villageOrigin = new Location(world, baseX, finalY, baseZ);
-            long seed = world.getSeed() + villageId.getMostSignificantBits();
-            
+
+            int baseX = origin.getBlockX();
+            int baseY = origin.getBlockY();
+            int baseZ = origin.getBlockZ();
+
             logger.info("[STRUCT] Generating structures for village '" + villageName + "' (ID: " + villageId + ")");
-            Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed, villageId);
-            
+            Optional<UUID> placedVillageId = placementService.placeVillage(world, origin, cultureId, seed, villageId);
+
             if (placedVillageId.isPresent()) {
                 VillageService vs = plugin.getVillageService();
                 var village = vs.createVillage(villageId, cultureId, villageName, world.getName(),
-                        baseX, finalY + 1, baseZ);
+                    baseX, baseY + 1, baseZ);
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
-                        + world.getName() + " @ (" + baseX + "," + (finalY + 1) + "," + baseZ + ")");
+                    + world.getName() + " @ (" + baseX + "," + (baseY + 1) + "," + baseZ + ")");
                 if (plugin.getProjectGenerator() != null) {
                     plugin.getProjectGenerator().generateInitialProjects(village);
                 }
-            } else {
-                logger.warning("X Failed to place structures for village '" + villageName + "'");
-                maybePlaceMarkerPillar(world, baseX, finalY, baseZ, "zero structure placements");
+                future.complete(new PlacementAttemptResult(true));
+                return;
             }
-            
+
+            logger.warning("X Failed to place structures for village '" + villageName + "'");
+            future.complete(new PlacementAttemptResult(false));
         });
+
+        return future.join();
+    }
+
+    private UUID buildSpawnVillageId(World world, int baseX, int baseZ, int attempt) {
+        long worldSeed = world.getSeed();
+        return UUID.nameUUIDFromBytes(
+            ("worldgen-village-" + worldSeed + "-" + baseX + "-" + baseZ + "-" + attempt)
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    private int computeSpawnRetryRadius(int baseRadius, int attempt) {
+        return baseRadius + (attempt * baseRadius);
+    }
+
+    private Location computeSpawnRetryOrigin(World world, Location spawn, int attempt, int baseRadius) {
+        if (attempt <= 0) {
+            return spawn;
+        }
+        long seed = world.getSeed() + (long) attempt * 1640531513L;
+        java.util.Random random = new java.util.Random(seed);
+        double angle = random.nextDouble() * Math.PI * 2.0;
+        int radius = computeSpawnRetryRadius(baseRadius, attempt);
+        int offsetX = (int) Math.round(Math.cos(angle) * radius);
+        int offsetZ = (int) Math.round(Math.sin(angle) * radius);
+        return new Location(world,
+            spawn.getBlockX() + offsetX,
+            spawn.getBlockY(),
+            spawn.getBlockZ() + offsetZ);
+    }
+
+    private boolean shouldSpawnRetry(VillageMetadataStore.PlacementFailureSummary summary) {
+        if (summary == null) {
+            return false;
+        }
+        return summary.steep > 0 || summary.blocked > 0;
+    }
+
+    private String resolveSpawnRetryReason(VillageMetadataStore.PlacementFailureSummary summary) {
+        if (summary == null) {
+            return "unknown";
+        }
+        if (summary.steep >= summary.blocked && summary.steep > 0) {
+            return "steep";
+        }
+        if (summary.blocked > 0) {
+            return "blocked";
+        }
+        return "unknown";
+    }
+
+    private static class PlacementAttemptResult {
+        private final boolean success;
+
+        private PlacementAttemptResult(boolean success) {
+            this.success = success;
+        }
     }
     
     /**

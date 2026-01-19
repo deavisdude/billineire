@@ -34,6 +34,7 @@ import java.util.logging.Logger;
 public class TickBudgetedGenerationQueue {
     
     private static final Logger LOGGER = Logger.getLogger(TickBudgetedGenerationQueue.class.getName());
+    private static final int MAX_SPAWN_RETRY_ATTEMPTS = 3;
     
     // Per-tick time budget in milliseconds
     private static final long DEFAULT_TICK_BUDGET_MS = 10;
@@ -300,18 +301,20 @@ public class TickBudgetedGenerationQueue {
         // T071: Adjust search origin based on first/subsequent village logic
         boolean isFirstVillage = terrainSearcher.isFirstVillage(world);
         int spawnProximityRadius = plugin.getSpawnProximityRadius();
-        
-        if (isFirstVillage && spawnProximityRadius > 0) {
+
+        if (currentState.spawnRetryOrigin != null) {
+            searchOrigin = currentState.spawnRetryOrigin;
+        } else if (isFirstVillage && spawnProximityRadius > 0) {
             // First village: search near spawn
             searchOrigin = world.getSpawnLocation();
-            currentRequest.sendMessage(Component.text("First village: searching within " + spawnProximityRadius + 
+            currentRequest.sendMessage(Component.text("First village: searching within " + spawnProximityRadius +
                     " blocks of spawn...", NamedTextColor.GRAY));
         } else if (!isFirstVillage) {
             // Subsequent villages: find nearest existing village
             Location nearestVillage = terrainSearcher.findNearestVillageLocation(world, searchOrigin);
             if (nearestVillage != null) {
                 searchOrigin = nearestVillage;
-                currentRequest.sendMessage(Component.text("Subsequent village: searching near existing village...", 
+                currentRequest.sendMessage(Component.text("Subsequent village: searching near existing village...",
                         NamedTextColor.GRAY));
             }
         }
@@ -319,6 +322,9 @@ public class TickBudgetedGenerationQueue {
         // T071: Use proper terrain search with spacing enforcement
         int minVillageSpacing = plugin.getMinVillageSpacing();
         int maxSearchRadius = 512; // Match GenerateCommand default
+        if (currentState.spawnRetryAttempts > 0) {
+            maxSearchRadius += currentState.spawnRetryAttempts * 256;
+        }
         
         Location suitableLocation = terrainSearcher.findSuitableVillageLocation(
                 world, searchOrigin, maxSearchRadius, minVillageSpacing);
@@ -680,6 +686,8 @@ public class TickBudgetedGenerationQueue {
         VillagePlacementServiceImpl placementService;
         CompletableFuture<PlacementOutcome> placementFuture;
         boolean existingVillageRequest;
+        int spawnRetryAttempts;
+        Location spawnRetryOrigin;
         CompletableFuture<ChunkPreloadResult> preloadFuture;
         ChunkPreloadResult preloadResult;
         int preloadCenterX;
@@ -784,6 +792,10 @@ public class TickBudgetedGenerationQueue {
             return;
         }
 
+        if (shouldRetrySpawnAfterZeroPlacement()) {
+            return;
+        }
+
         currentRequest.sendMessage(Component.text("Failed to place structures for village '" +
             currentState.villageName + "'", NamedTextColor.RED));
         currentRequest.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
@@ -805,5 +817,76 @@ public class TickBudgetedGenerationQueue {
             currentState.villageName));
 
         currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.FAILED);
+        }
+
+        private boolean shouldRetrySpawnAfterZeroPlacement() {
+        if (currentState == null || currentState.spawnRetryAttempts >= MAX_SPAWN_RETRY_ATTEMPTS) {
+            return false;
+        }
+        if (currentState.villageId == null || currentState.world == null || currentState.suitableLocation == null) {
+            return false;
+        }
+
+        Optional<VillageMetadataStore.PlacementFailureSummary> summaryOpt =
+            metadataStore.getLastPlacementFailureSummary(currentState.villageId);
+        VillageMetadataStore.PlacementFailureSummary summary = summaryOpt.orElse(null);
+        if (summary == null || (summary.steep <= 0 && summary.blocked <= 0)) {
+            return false;
+        }
+
+        String reason = resolveRetryReason(summary);
+        Location origin = currentState.suitableLocation;
+        int attemptNumber = currentState.spawnRetryAttempts + 1;
+
+        LOGGER.warning(String.format("[STRUCT][SPAWN-RETRY] attempt=%d reason=%s origin=(%d,%d,%d)",
+            attemptNumber,
+            reason,
+            origin.getBlockX(),
+            origin.getBlockY(),
+            origin.getBlockZ()));
+
+        metadataStore.removeVillage(currentState.villageId);
+        plugin.getVillageService().removeVillage(currentState.villageId);
+
+        currentState.spawnRetryAttempts = attemptNumber;
+        currentState.spawnRetryOrigin = computeRetryOrigin(currentState.world, origin, attemptNumber);
+        resetPlacementStateForRetry();
+
+        currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.TERRAIN_SEARCH);
+        currentRequest.sendMessage(Component.text("Retrying terrain search after zero-placement...", NamedTextColor.GRAY));
+        return true;
+        }
+
+        private Location computeRetryOrigin(World world, Location baseOrigin, int attemptNumber) {
+        int baseRadius = Math.max(1, plugin.getSpawnProximityRadius());
+        long seed = world.getSeed() + (long) attemptNumber * 1640531513L;
+        java.util.Random random = new java.util.Random(seed);
+        double angle = random.nextDouble() * Math.PI * 2.0;
+        int radius = baseRadius + (attemptNumber * baseRadius);
+        int offsetX = (int) Math.round(Math.cos(angle) * radius);
+        int offsetZ = (int) Math.round(Math.sin(angle) * radius);
+        return new Location(world,
+            baseOrigin.getBlockX() + offsetX,
+            baseOrigin.getBlockY(),
+            baseOrigin.getBlockZ() + offsetZ);
+        }
+
+        private void resetPlacementStateForRetry() {
+        currentState.suitableLocation = null;
+        currentState.placementFuture = null;
+        currentState.preloadFuture = null;
+        currentState.preloadResult = null;
+        currentState.chunkTicketsApplied = false;
+        releaseChunkTickets();
+        }
+
+        private String resolveRetryReason(VillageMetadataStore.PlacementFailureSummary summary) {
+        if (summary.steep >= summary.blocked && summary.steep > 0) {
+            return "steep";
+        }
+        if (summary.blocked > 0) {
+            return "blocked";
+        }
+        return "unknown";
         }
 }

@@ -1484,13 +1484,17 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Diagnostics track `terraformRejects` separately from `siteValidationRejects`.
     - Placement succeeds in seeds where terraform rejects occur at some candidates.
 
-- [ ] T083 [P0] Spawn seeding retries after zero-placement
+- [X] T083 [P0] Spawn seeding retries after zero-placement
   - Story: Spawn village failed to generate on steep terrain
   - Description: If the async spawn seeding ends with `ZERO-PLACEMENT` (rootCause steep/blocked), re-run terrain search with a new candidate origin (e.g., offset or expanded radius) and optionally validate the chosen origin using a structure-scale slope/solidity probe before committing. Cap retries (e.g., 3) and log `[STRUCT][SPAWN-RETRY] attempt=N reason=<rootCause> origin=(x,y,z)`.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TickBudgetedGenerationQueue.java`
   - Acceptance:
     - Spawn seeding performs bounded retries after `ZERO-PLACEMENT` and either places >=1 structure or logs an explicit "exhausted retries" result.
     - Logs show the retry attempts with origin changes and the final outcome.
+  - Implementation (2026-01-19):
+    - ✅ Added bounded retries for spawn seeding with deterministic origin offsets and expanded search radius.
+    - ✅ Logs emit `[STRUCT][SPAWN-RETRY]` attempts and final exhausted result.
+    - ✅ Cleanup removes failed seed village entries before retrying.
 
 - [ ] T084 [P1] Generation queue summary must reflect actual placements
   - Story: Queue summary reported 0 buildings despite 3 receipts
@@ -1508,6 +1512,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - No fixed max villagers/buildings limit remains in production paths.
     - Villager capacity scales with placed structures (or is unbounded if configured).
     - Logs clearly state derived capacity or “no cap”.
+  - Playtest note (2026-01-19): Logs show repeated `Cannot spawn roman_blacksmith ... cap reached (10)` with `spawnedVillagers=10` and 7 structures placed.
 
 - [ ] T080 [P1] Headless regression: large bounds generate additional structures
   - Story: Resilient structure generation validation
@@ -1532,6 +1537,7 @@ Notes:
   - Description: Enforce surface whitelist (grass/dirt/stone/sand/gravel/snow); refuse slab/stair emission when support missing; skip/reroute nodes on vegetation. Track `skippedVegetationNodes` and `unsupportedSurfaceNodes`.
   - Acceptance:
     - Zero floating slabs in smoke tests; logs include skipped/reroute counts.
+  - Playtest note (2026-01-19): Spawn village had no paths; logs show repeated `[PATH] A* failed: explored=1/10000` with only trees/grass nearby.
 
 - [ ] T053 [P1] Planner Resilience: Node Cap, Concurrency & Backoff
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServicePlanner.java (or equivalent)
@@ -1574,6 +1580,16 @@ Removed (superseded):
     - 0 path blocks placed on leaves/logs across smoke test seeds.
     - Logs include `skippedVegetationNodes=N` and `reroutedNodes=M` metrics.
     - Visual inspection: no treetop paths; all paths hug natural terrain.
+  - Playtest note (2026-01-19): Paths failed entirely with `[PATH] A* failed: explored=1/10000`, suggesting vegetation/ground detection may be producing no walkable nodes.
+
+- [ ] T086 [P1] Clear vegetation/trees in path corridor during generation
+  - Story: Spawn village had no paths despite only trees/grass obstructions
+  - Description: When path generation begins, allow the path pipeline to clear obstructing vegetation (leaves/logs/foliage) within the intended corridor before or during emission so A* has viable walkable nodes and emission can place blocks. Ensure clearing is bounded (corridor width, max blocks), respects protections, and is logged.
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
+  - Acceptance:
+    - Trees/foliage blocking the corridor are cleared and paths emit in the same generation run.
+    - Logs include a single-line summary: `[PATH][CLEAR] clearedVegetation=<n> corridorWidth=<w> blocks=<n>`.
+    - Paths emit in the 2026-01-19 playtest seed where A* previously failed at explored=1.
 
 - [ ] T020b [P1] [US1] Enforce site-prep abort on fluid veto
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
@@ -1631,7 +1647,7 @@ Removed (duplicate):
   - Description: Investigate and fix cases where buildings are placed 1-2 blocks too deep into terrain. This occurred in a recent playtest (accessible but awkward).
   - Acceptance: Natural-looking placement depth with entrance accessibility and no awkward embedding.
 
-- [ ] T083 [P0] Add footprint chunk-readiness check before SurfaceSolver sampling
+- [ ] T085 [P0] Add footprint chunk-readiness check before SurfaceSolver sampling
   - Story: Performance and Non-blocking Placement
   - Description: Before SurfaceSolver performs height sampling for a structure footprint, implement a check to ensure all affected chunks are loaded/ready. Skip the footprint (candidate) if any chunk is unloaded to prevent synchronous loading on the main thread. This prevents the "freeze" issue during the site validation phase.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
@@ -1641,7 +1657,7 @@ Removed (duplicate):
     - Zero synchronous chunk loads during `/votest` generation in unloaded areas.
     - Log diagnostic: `[STRUCT] candidate rejected: chunk-not-ready`.
 
-Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T083) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
+Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
 
