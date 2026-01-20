@@ -43,6 +43,10 @@ param(
     , [int]$ExpectedStructures = 5
     , [int]$MinExpectedStructures = 1  # Lowered due to T067/T069/T070 bugs
     , [int]$PathConnectivityThreshold = 90
+    , [switch]$ExistingVillageFillIn = $false
+    , [int]$MaxBoundsRadiusBlocks = 0
+    , [int]$MinAdditionalStructures = 1
+    , [int]$FillInWaitSeconds = 60
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,7 +61,62 @@ Write-Host "=== Fast Village Generation Test ===" -ForegroundColor Cyan
 Write-Host "Seed: $Seed" -ForegroundColor Gray
 Write-Host "Culture: $Culture" -ForegroundColor Gray
 Write-Host "Village Name: $VillageName" -ForegroundColor Gray
+if ($ExistingVillageFillIn) {
+    Write-Host "Existing village fill-in: Enabled" -ForegroundColor Gray
+    if ($MaxBoundsRadiusBlocks -gt 0) {
+        Write-Host "Max bounds radius override: $MaxBoundsRadiusBlocks" -ForegroundColor Gray
+    }
+}
 Write-Host ""
+
+function Ensure-PluginConfigSetting {
+    param(
+        [string]$ConfigPath,
+        [string]$DefaultConfigPath,
+        [int]$BoundsRadius
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        $configDir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+        if (Test-Path $DefaultConfigPath) {
+            Copy-Item -Path $DefaultConfigPath -Destination $ConfigPath -Force
+            Write-Host "OK Copied default config to $ConfigPath" -ForegroundColor Green
+        } else {
+            Write-Host "X Default config not found at $DefaultConfigPath" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    $configContent = Get-Content -Path $ConfigPath -Raw -ErrorAction SilentlyContinue
+    if (-not $configContent) {
+        Write-Host "X Failed to read config at $ConfigPath" -ForegroundColor Red
+        return $false
+    }
+
+    if ($configContent -match '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+') {
+        $configContent = $configContent -replace '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+', "  maxBoundsRadiusBlocks: $BoundsRadius"
+    } elseif ($configContent -match '(?m)^village:\s*$') {
+        $configContent = $configContent -replace '(?m)^village:\s*$', "village:`n  maxBoundsRadiusBlocks: $BoundsRadius"
+    } else {
+        $configContent = $configContent.TrimEnd() + "`n`nvillage:`n  maxBoundsRadiusBlocks: $BoundsRadius`n"
+    }
+
+    Set-Content -Path $ConfigPath -Value $configContent -Encoding UTF8
+    Write-Host "OK Applied maxBoundsRadiusBlocks=$BoundsRadius" -ForegroundColor Green
+    return $true
+}
+
+if ($MaxBoundsRadiusBlocks -gt 0) {
+    $pluginConfigPath = Join-Path $ServerDir "plugins\VillageOverhaul\config.yml"
+    $defaultConfigPath = Join-Path $RepoRoot "plugin\src\main\resources\config.yml"
+    if (-not (Ensure-PluginConfigSetting -ConfigPath $pluginConfigPath -DefaultConfigPath $defaultConfigPath -BoundsRadius $MaxBoundsRadiusBlocks)) {
+        Write-Host "X Failed to update config for maxBoundsRadiusBlocks" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # Find Java
 $JavaPath = $null
@@ -157,6 +216,10 @@ $r011bInconclusive = $true
 $overlaps = 0
 $villageId = $null
 $structureCount = 0
+$initialStructureCount = $null
+$additionalStructures = 0
+$boundsLogCount = 0
+$fillInTriggered = $false
 # Keep track of unique placement receipts we've already seen so we don't double-count
 $seenReceipts = @{}
 $pathsComplete = $false
@@ -192,6 +255,16 @@ while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
                 $seenReceipts[$receiptKey] = $true
                 $structureCount = $seenReceipts.Keys.Count
             }
+        } elseif ($line -match "\[STRUCT\]\s+receipt:\s+id=(\S+)\s+bounds=\[(-?\d+)\.\.(-?\d+),(-?\d+)\.\.(-?\d+),(-?\d+)\.\.(-?\d+)\]") {
+            $receiptKey = "$($Matches[1])@$($Matches[2]),$($Matches[4]),$($Matches[6])"
+            if (-not $seenReceipts.ContainsKey($receiptKey)) {
+                $seenReceipts[$receiptKey] = $true
+                $structureCount = $seenReceipts.Keys.Count
+            }
+        }
+
+        if ($line -match "\[STRUCT\]\[BOUNDS\].*candidates=") {
+            $boundsLogCount++
         }
         
         # Check for path completion
@@ -221,6 +294,51 @@ while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
     Write-Host "  Progress: ${elapsed}s - Structures: $structureCount, Paths: $(if ($pathsComplete) {'Complete'} else {'Pending'})" -ForegroundColor Gray
 }
 
+if ($generationComplete -and $ExistingVillageFillIn -and $villageId) {
+    $initialStructureCount = $structureCount
+    Write-Host "" 
+    Write-Host "Triggering existing-village fill-in: /votest generate-structures $villageId" -ForegroundColor Cyan
+    if (Test-Path $rconPath) {
+        $rconResult = & $rconPath -H localhost -p 25575 -P admin "votest generate-structures $villageId" 2>&1
+        Write-Host "  RCON response: $rconResult" -ForegroundColor Gray
+    } else {
+        Write-Host "  X RCON not available; cannot run generate-structures" -ForegroundColor Red
+    }
+
+    $fillInTriggered = $true
+    $fillInStart = Get-Date
+    while (((Get-Date) - $fillInStart).TotalSeconds -lt $FillInWaitSeconds) {
+        Start-Sleep -Seconds 1
+        if (-not (Test-Path $LogFile)) { continue }
+
+        $recentLines = Get-Content $LogFile -Tail 200 -ErrorAction SilentlyContinue
+        foreach ($line in $recentLines) {
+            if ($line -match "\[STRUCT\]\[RECEIPT\]\s+(\S+)\s+@\s+\((-?\d+),(-?\d+),(-?\d+)\)") {
+                $receiptKey = "$($Matches[1])@$($Matches[2]),$($Matches[3]),$($Matches[4])"
+                if (-not $seenReceipts.ContainsKey($receiptKey)) {
+                    $seenReceipts[$receiptKey] = $true
+                    $structureCount = $seenReceipts.Keys.Count
+                }
+            } elseif ($line -match "\[STRUCT\]\s+receipt:\s+id=(\S+)\s+bounds=\[(-?\d+)\.\.(-?\d+),(-?\d+)\.\.(-?\d+),(-?\d+)\.\.(-?\d+)\]") {
+                $receiptKey = "$($Matches[1])@$($Matches[2]),$($Matches[4]),$($Matches[6])"
+                if (-not $seenReceipts.ContainsKey($receiptKey)) {
+                    $seenReceipts[$receiptKey] = $true
+                    $structureCount = $seenReceipts.Keys.Count
+                }
+            }
+
+            if ($line -match "\[STRUCT\]\[BOUNDS\].*candidates=") {
+                $boundsLogCount++
+            }
+        }
+
+        $additionalStructures = $structureCount - $initialStructureCount
+        if ($additionalStructures -ge $MinAdditionalStructures) {
+            break
+        }
+    }
+}
+
 # Stop server
 Write-Host ""
 Write-Host "Stopping server..." -ForegroundColor Cyan
@@ -235,10 +353,16 @@ if ($generationComplete) {
     Write-Host "OK Generation completed in $([int]((Get-Date) - $generationStart).TotalSeconds) seconds" -ForegroundColor Green
     Write-Host "  Village ID: $villageId" -ForegroundColor Gray
     Write-Host "  Structures placed: $structureCount (expected: $ExpectedStructures)" -ForegroundColor Gray
+    if ($fillInTriggered) {
+        Write-Host "  Existing-village fill-in added: $additionalStructures (min: $MinAdditionalStructures)" -ForegroundColor Gray
+    }
     Write-Host "  Paths: $(if ($pathsComplete) {'Complete' + (if ($pathsConnectivity -ne $null) { ' (connectivity=' + $pathsConnectivity + '%)' } else { '' }) } else {'Not detected'})" -ForegroundColor Gray
 } else {
     Write-Host "! Generation did not complete within ${MaxWaitSeconds}s timeout" -ForegroundColor Yellow
     Write-Host "  Structures placed: $structureCount (expected: $ExpectedStructures)" -ForegroundColor Gray
+    if ($fillInTriggered) {
+        Write-Host "  Existing-village fill-in added: $additionalStructures (min: $MinAdditionalStructures)" -ForegroundColor Gray
+    }
     Write-Host "  Paths: $(if ($pathsComplete) {'Complete' + (if ($pathsConnectivity -ne $null) { ' (connectivity=' + $pathsConnectivity + '%)' } else { '' }) } else {'Not detected'})" -ForegroundColor Gray
 }
 
@@ -353,8 +477,15 @@ Write-Host "=== Test Complete ===" -ForegroundColor Cyan
 $structuresOk = $structureCount -ge $MinExpectedStructures
 $overlapsOk = $overlaps -eq 0
 $connectivityOk = ($pathsConnectivity -eq $null -or $pathsConnectivity -ge $PathConnectivityThreshold)
+$additionalOk = $true
+$boundsOk = $true
 
-if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk) {
+if ($ExistingVillageFillIn) {
+    $additionalOk = $additionalStructures -ge $MinAdditionalStructures
+    $boundsOk = $boundsLogCount -gt 0
+}
+
+if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk -and $additionalOk -and $boundsOk) {
     if ($structureCount -lt $ExpectedStructures) {
         Write-Host "OK Minimum checks passed (degraded: $structureCount/$ExpectedStructures structures due to T067/T070)" -ForegroundColor Yellow
         Write-Host "  Resolve T067/T069/T070 to achieve full structure placement" -ForegroundColor Yellow
@@ -373,6 +504,13 @@ if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk
     if ($structureCount -lt $MinExpectedStructures) { 
         Write-Host "  X Expected at least $MinExpectedStructures structure(s) but found $structureCount (HARD FAIL)" -ForegroundColor Red
         Write-Host "    Check T067 (terrain fallback) and T070 (candidate search) for root cause" -ForegroundColor Red
+    }
+    if ($ExistingVillageFillIn -and (-not $additionalOk)) {
+        Write-Host "  X Expected at least $MinAdditionalStructures additional structures but found $additionalStructures" -ForegroundColor Red
+        Write-Host "    Check [STRUCT][BOUNDS] coverage and candidate logs for root cause" -ForegroundColor Red
+    }
+    if ($ExistingVillageFillIn -and (-not $boundsOk)) {
+        Write-Host "  X Missing [STRUCT][BOUNDS] coverage logs" -ForegroundColor Red
     }
     if ($structureCount -lt $ExpectedStructures -and $structureCount -ge $MinExpectedStructures) {
         Write-Host "  ! Expected $ExpectedStructures structures but only $structureCount placed (known bug: T067/T070)" -ForegroundColor Yellow

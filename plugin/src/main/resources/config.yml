@@ -48,12 +48,12 @@ worldgen:
     # Lower = less blocking per structure, but may skip candidates
     # Higher = more thorough placement, but more blocking per structure
     # Range: 50-500 (default: 100)
-    placementTimeBudgetMs: 100
+    placementTimeBudgetMs: 500
         
   # Allow fallback marker pillar placement when zero-placement occurs
   # Default: false (zero-placement is treated as a failure and no pillar is placed)
   # Set to true to allow marker fallback without needing --allow-marker
-  allowMarkerFallback: false
+  allowMarkerFallback: true
 
 # NPC / Custom Villager Settings
 npc:
@@ -70,13 +70,13 @@ debug:
   # and other fine-grained diagnostic messages
   # WARNING: Generates significant log volume - use only for debugging
   # Default: false
-  verbose: false
+  verbose: true
   
   # Enable detailed tick engine logging
   tick: false
   
   # Enable structure placement debug logs
-  structure: false
+  structure: true
   
   # Enable path generation debug logs
   path: false

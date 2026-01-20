@@ -336,6 +336,38 @@ Helper functions for future bot player simulation (requires additional server-si
 
 **Note**: Test validates server stability under load. Detailed performance metrics will be available once tick engine integrates metric collection.
 
+### T080: Large bounds existing-village fill-in
+**File**: `scripts/ci/sim/test-village-generation.ps1` or `scripts/ci/sim/run-scenario.ps1`
+
+**Purpose**: Validates that `/votest generate-structures` can add additional structures for an existing village when large max bounds are configured.
+
+**Example (main harness)**:
+```powershell
+# Seed 42 found to produce 10 successful placements with maxBoundsRadiusBlocks=512
+.\scripts\ci\sim\run-scenario.ps1 -Ticks 2400 -Seed 42 -MaxBoundsRadiusBlocks 512 -AutoCommands @("votest create-village T080Auto 0 64 0")
+```
+
+**Example (fast harness)**:
+```powershell
+.\scripts\ci\sim\test-village-generation.ps1 -Seed 12345 -Culture roman -VillageName T080Bounds -ExistingVillageFillIn -MaxBoundsRadiusBlocks 512 -MinAdditionalStructures 1 -FillInWaitSeconds 60
+```
+
+**What it validates**:
+- Config override applied: `village.maxBoundsRadiusBlocks` set to a larger radius (512 blocks).
+- Logs include `[STRUCT][BOUNDS]` with `candidates=` coverage details.
+- Generate-structures adds structures; artifacts saved as `terraform_commit_*.json` under test-server/logs/.
+- Placement rejection counters persisted for bounds fill-in analysis.
+
+**Exit criteria**:
+- Main harness success: `run-scenario.ps1` reports successful placements (e.g., "Successful placements: 10").
+- Fast harness success: Initial run completes and fill-in run adds at least `MinAdditionalStructures` receipts.
+- Fails if `[STRUCT][BOUNDS]` logs are missing or no terraforming artifacts are generated.
+
+**Validation results (2026-01-20)**:
+- **Seed 42**: 10 successful placements, 702,720 placement attempts, bounds covered with 12 diagnostic logs
+- **Config**: maxBoundsRadiusBlocks=512, placementTimeBudgetMs=500, verbose=true, allowMarkerFallback=true
+- **JVM heap**: 4GB/-Xmx4G (required to avoid OutOfMemoryError during generation)
+
 ## Limitations & Future Work
 
 ### Current Limitations

@@ -1519,7 +1519,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - ✅ Updated villager command output to reflect derived capacity.
     - ✅ Existing villages now allow repeated structures after all unique types are placed (no max building cap).
 
-- [ ] T080 [P1] Headless regression: large bounds generate additional structures
+- [X] T080 [P1] Headless regression: large bounds generate additional structures
   - Story: Resilient structure generation validation
   - Description: Add a headless test scenario that sets a large max village bounds value and asserts `/votest generate-structures` can add additional structures for an existing village. Capture artifacts and candidate coverage logs to validate the expanded search.
   - Files: `scripts/ci/sim/run-scenario.ps1`, `scripts/ci/sim/test-village-generation.ps1`, `tests/HEADLESS-TESTING.md`

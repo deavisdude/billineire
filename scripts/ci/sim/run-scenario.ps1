@@ -34,6 +34,7 @@ param(
     [bool]$AutoInstallJdk = $true,
     [string]$PaperVersion = "1.21.8",
     [int]$PaperBuild = 60
+    ,[int]$MaxBoundsRadiusBlocks = 0
     ,[switch]$FixedLayout = $false
     ,[int]$FixedLayoutCount = 3
     ,[switch]$ForceZeroPlacement = $false
@@ -359,12 +360,63 @@ if (-not (Install-WorldEdit -serverDir $ServerDir)) {
     Write-Host "  Plugin will use procedural structures as fallback" -ForegroundColor Yellow
 }
 
+function Ensure-PluginConfigSetting {
+    param(
+        [string]$ConfigPath,
+        [string]$DefaultConfigPath,
+        [int]$BoundsRadius
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        $configDir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+        if (Test-Path $DefaultConfigPath) {
+            Copy-Item -Path $DefaultConfigPath -Destination $ConfigPath -Force
+            Write-Host "OK Copied default config to $ConfigPath" -ForegroundColor Green
+        } else {
+            Write-Host "X Default config not found at $DefaultConfigPath" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    $configContent = Get-Content -Path $ConfigPath -Raw -ErrorAction SilentlyContinue
+    if (-not $configContent) {
+        Write-Host "X Failed to read config at $ConfigPath" -ForegroundColor Red
+        return $false
+    }
+
+    if ($configContent -match '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+') {
+        $configContent = $configContent -replace '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+', "  maxBoundsRadiusBlocks: $BoundsRadius"
+    } elseif ($configContent -match '(?m)^village:\s*$') {
+        $configContent = $configContent -replace '(?m)^village:\s*$', "village:`n  maxBoundsRadiusBlocks: $BoundsRadius"
+    } else {
+        $configContent = $configContent.TrimEnd() + "`n`nvillage:`n  maxBoundsRadiusBlocks: $BoundsRadius`n"
+    }
+
+    Set-Content -Path $ConfigPath -Value $configContent -Encoding UTF8
+    Write-Host "OK Applied maxBoundsRadiusBlocks=$BoundsRadius" -ForegroundColor Green
+    return $true
+}
+
+if ($MaxBoundsRadiusBlocks -gt 0) {
+    $repoRoot = (Resolve-Path "$PSScriptRoot\..\..\..").Path
+    $pluginConfigPath = Join-Path $ServerDir "plugins\VillageOverhaul\config.yml"
+    $defaultConfigPath = Join-Path $repoRoot "plugin\src\main\resources\config.yml"
+    if (-not (Ensure-PluginConfigSetting -ConfigPath $pluginConfigPath -DefaultConfigPath $defaultConfigPath -BoundsRadius $MaxBoundsRadiusBlocks)) {
+        Write-Host "X Failed to update config for maxBoundsRadiusBlocks" -ForegroundColor Red
+        exit 1
+    }
+}
+
 
 # Create a startup script that will run the server for N ticks
+# Increase heap for generation-heavy tests to avoid OOM during FAWE/structure generation
 $startupScript = @"
 #!/bin/bash
 # Auto-stop server after N ticks
-java -Xmx1G -Xms1G -XX:+UseG1GC -jar paper.jar --nogui --world-dir=test-worlds --level-name=test-world-$Seed
+java -Xmx4G -Xms2G -XX:+UseG1GC -jar paper.jar --nogui --world-dir=test-worlds --level-name=test-world-$Seed
 "@
 Set-Content -Path "$ServerDir/start.sh" -Value $startupScript
 
@@ -526,7 +578,8 @@ if (-not $javaExe) {
 Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
 
 # T026d14: Build JVM arguments dynamically; suppress worldgen in fixed-layout mode to ensure deterministic artifacts
-$jvmArgs = @("-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
+    # Larger heap for generation scenarios to reduce risk of OutOfMemoryError
+    $jvmArgs = @("-Xmx4G", "-Xms2G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
 if ($FixedLayout) {
     $jvmArgs += "-Dvo.suppress.worldgen=true"
     Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
@@ -1050,6 +1103,12 @@ if (Test-Path "$ServerDir/server.log") {
     Write-Host "Successful placements: $seatMatches" -ForegroundColor White
     Write-Host "Re-seat operations: $reseatMatches" -ForegroundColor White
     Write-Host "Aborted placements: $abortMatches" -ForegroundColor White
+
+    $boundsMatches = ([regex]::Matches($logContent, '\[STRUCT\]\[BOUNDS\]')).Count
+    Write-Host "Bounds coverage logs: $boundsMatches" -ForegroundColor White
+    if ($MaxBoundsRadiusBlocks -gt 0 -and $boundsMatches -eq 0) {
+        Write-Host "! Missing [STRUCT][BOUNDS] logs for max bounds coverage" -ForegroundColor Yellow
+    }
     
     # Check for floating or embedded structures (validation failures)
     $floatingMatches = ([regex]::Matches($logContent, '(?i)floating|embedded|validation_failed')).Count
