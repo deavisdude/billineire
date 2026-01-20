@@ -1504,7 +1504,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Queue summary log matches `[STRUCT] village: id=... buildings=N` for the same run.
     - `GenerationRequest` finished state records the same placed count.
 
-- [ ] T079 [P1] Remove village caps on buildings and villagers
+- [X] T079 [P1] Remove village caps on buildings and villagers
   - Story: Village growth scalability
   - Description: Eliminate hard-coded or config-based caps for max buildings and max villagers; ensure growth is limited only by terrain/available space. Update any services that enforce caps (e.g., CustomVillagerService) to use capacity derived from placed structures instead of fixed limits.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villagers/CustomVillagerService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/resources/config.yml`
@@ -1513,6 +1513,11 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Villager capacity scales with placed structures (or is unbounded if configured).
     - Logs clearly state derived capacity or “no cap”.
   - Playtest note (2026-01-19): Logs show repeated `Cannot spawn roman_blacksmith ... cap reached (10)` with `spawnedVillagers=10` and 7 structures placed.
+  - Implementation (2026-01-19):
+    - ✅ Replaced fixed per-village cap with capacity derived from placed structure receipts.
+    - ✅ Added `npc.villagerCapacityPerStructure` config (0 = no cap) and capacity diagnostics.
+    - ✅ Updated villager command output to reflect derived capacity.
+    - ✅ Existing villages now allow repeated structures after all unique types are placed (no max building cap).
 
 - [ ] T080 [P1] Headless regression: large bounds generate additional structures
   - Story: Resilient structure generation validation

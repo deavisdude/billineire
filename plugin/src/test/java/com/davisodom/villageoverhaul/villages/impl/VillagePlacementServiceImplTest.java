@@ -155,7 +155,7 @@ public class VillagePlacementServiceImplTest {
 
         VillageMetadataStore store = new VillageMetadataStore(plugin);
         Metrics metrics = new Metrics(plugin.getLogger());
-        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store, 0);
 
         CultureService cs = Mockito.mock(CultureService.class);
         List<String> structures = Arrays.asList("house");
@@ -220,6 +220,14 @@ public class VillagePlacementServiceImplTest {
 
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(
             mockStructure, store, cs, npcService, null, 0.5);
+        try {
+            java.lang.reflect.Field maxBoundsField = VillagePlacementServiceImpl.class
+                .getDeclaredField("maxBoundsRadiusBlocks");
+            maxBoundsField.setAccessible(true);
+            maxBoundsField.setInt(svc, 16);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            fail("Failed to set maxBoundsRadiusBlocks for test: " + e.getMessage());
+        }
         Location origin = new Location(world, 0, 64, 0);
 
         Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
@@ -242,7 +250,7 @@ public class VillagePlacementServiceImplTest {
 
         VillageMetadataStore store = new VillageMetadataStore(plugin);
         Metrics metrics = new Metrics(plugin.getLogger());
-        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+        CustomVillagerService npcService = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store, 0);
 
         CultureService cs = Mockito.mock(CultureService.class);
         List<String> structures = Arrays.asList("house");
@@ -276,6 +284,14 @@ public class VillagePlacementServiceImplTest {
 
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(
             mockStructure, store, cs, npcService, null, 0.5);
+        try {
+            java.lang.reflect.Field maxBoundsField = VillagePlacementServiceImpl.class
+                .getDeclaredField("maxBoundsRadiusBlocks");
+            maxBoundsField.setAccessible(true);
+            maxBoundsField.setInt(svc, 16);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            fail("Failed to set maxBoundsRadiusBlocks for test: " + e.getMessage());
+        }
         Location origin = new Location(world, 0, 64, 0);
 
         Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
@@ -323,8 +339,10 @@ public class VillagePlacementServiceImplTest {
 
         Block dirt = Mockito.mock(Block.class);
         Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(dirt.getRelative(Mockito.any())).thenReturn(dirt);
 
         Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+        Mockito.when(world.getBlockAt(Mockito.any(Location.class))).thenReturn(dirt);
 
         // Return a placement receipt based on a deterministic increasing offset to ensure no overlaps
         // Updated for T057f: placeStructureAndGetReceipt now takes minBuildingSpacing parameter
@@ -361,7 +379,14 @@ public class VillagePlacementServiceImplTest {
             });
 
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
-
+        try {
+            java.lang.reflect.Field maxBoundsField = VillagePlacementServiceImpl.class
+                .getDeclaredField("maxBoundsRadiusBlocks");
+            maxBoundsField.setAccessible(true);
+            maxBoundsField.setInt(svc, 16);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            fail("Failed to set maxBoundsRadiusBlocks for test: " + e.getMessage());
+        }
         Location origin = new Location(world, 0, 64, 0);
         Optional<UUID> villageOpt = svc.placeVillage(world, origin, "test-culture", 42L);
 
@@ -385,14 +410,22 @@ public class VillagePlacementServiceImplTest {
         }
 
     @Test
-    @DisplayName("T072 - existing village reports FULL when all structures already placed")
-    public void testExistingVillageFullSkipsPlacement() {
+    @DisplayName("T079 - existing village allows repeats after all structure types placed")
+    public void testExistingVillageAllowsRepeatStructures() {
         com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
             com.davisodom.villageoverhaul.worldgen.StructureService.class);
 
         VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
         Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
         Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+        Mockito.when(plugin.getMinBuildingSpacing()).thenReturn(2);
+        Mockito.when(plugin.getMinVillageSpacing()).thenReturn(200);
+        Mockito.when(plugin.getMaxBoundsRadiusBlocks()).thenReturn(64);
+        Mockito.when(plugin.getCustomVillagerService()).thenReturn(null);
+        Mockito.when(plugin.getVillagerAppearanceAdapter()).thenReturn(null);
+        org.bukkit.configuration.file.FileConfiguration config = Mockito.mock(org.bukkit.configuration.file.FileConfiguration.class);
+        Mockito.when(config.getDouble(Mockito.anyString(), Mockito.anyDouble())).thenReturn(2.0);
+        Mockito.when(plugin.getConfig()).thenReturn(config);
 
         VillageMetadataStore store = new VillageMetadataStore(plugin);
 
@@ -429,15 +462,22 @@ public class VillagePlacementServiceImplTest {
         store.addBuilding(villageId, b1);
         store.addBuilding(villageId, b2);
 
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
+            .thenReturn(Optional.of(new int[]{3, 3, 3}));
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(
+            Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+            Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
+            .thenReturn(Optional.empty());
+
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
 
         PlacementOutcome outcome = svc.placeStructuresForExistingVillage(world, origin, "test-culture", seed, villageId);
 
-        assertEquals(PlacementStatus.FULL, outcome.getStatus(), "Expected FULL when all structures already placed");
+        assertEquals(PlacementStatus.FAILED, outcome.getStatus(), "Expected FAILED when repeat placements do not succeed");
         assertEquals(2, outcome.getExistingBuildings(), "Expected existing building count to be reported");
-        assertEquals(0, outcome.getPlacedBuildings(), "Expected no new buildings when full");
+        assertEquals(0, outcome.getPlacedBuildings(), "Expected no new buildings when placements fail");
 
-        Mockito.verifyNoInteractions(mockStructure);
+        Mockito.verify(mockStructure, Mockito.atLeastOnce()).getStructureDimensions(Mockito.anyString());
     }
 
     @Test
@@ -449,7 +489,6 @@ public class VillagePlacementServiceImplTest {
         VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
         Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
         Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
-
         VillageMetadataStore store = new VillageMetadataStore(plugin);
 
         CultureService cs = Mockito.mock(CultureService.class);
@@ -492,6 +531,14 @@ public class VillagePlacementServiceImplTest {
         Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
 
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+        try {
+            java.lang.reflect.Field maxBoundsField = VillagePlacementServiceImpl.class
+                .getDeclaredField("maxBoundsRadiusBlocks");
+            maxBoundsField.setAccessible(true);
+            maxBoundsField.setInt(svc, 16);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            fail("Failed to set maxBoundsRadiusBlocks for test: " + e.getMessage());
+        }
 
         Location origin = new Location(world, 0, 64, 0);
         long seed = 777L;
@@ -527,6 +574,9 @@ public class VillagePlacementServiceImplTest {
         CultureService cs = Mockito.mock(CultureService.class);
 
         VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+        java.lang.reflect.Field maxBoundsField = VillagePlacementServiceImpl.class.getDeclaredField("maxBoundsRadiusBlocks");
+        maxBoundsField.setAccessible(true);
+        maxBoundsField.setInt(svc, 64);
 
         World world = Mockito.mock(World.class);
         Location origin = new Location(world, 10, 64, 10);
@@ -650,17 +700,22 @@ public class VillagePlacementServiceImplTest {
         @Test
         @DisplayName("findSuitablePlacementPosition finds a valid location when chunks loaded and surface present")
         public void testFindSuitablePlacementPosition_ReturnsValidLocation() throws Exception {
-        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
-            com.davisodom.villageoverhaul.worldgen.StructureService.class);
-
         VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
         Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
         Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+        Mockito.when(plugin.getMinBuildingSpacing()).thenReturn(2);
+        Mockito.when(plugin.getMinVillageSpacing()).thenReturn(200);
+        Mockito.when(plugin.getMaxBoundsRadiusBlocks()).thenReturn(64);
+        Mockito.when(plugin.getCustomVillagerService()).thenReturn(null);
+        Mockito.when(plugin.getVillagerAppearanceAdapter()).thenReturn(null);
+        org.bukkit.configuration.file.FileConfiguration config = Mockito.mock(org.bukkit.configuration.file.FileConfiguration.class);
+        Mockito.when(config.getDouble(Mockito.anyString(), Mockito.anyDouble())).thenReturn(2.0);
+        Mockito.when(plugin.getConfig()).thenReturn(config);
 
         VillageMetadataStore store = new VillageMetadataStore(plugin);
         CultureService cs = Mockito.mock(CultureService.class);
 
-        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(plugin, store, cs);
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);

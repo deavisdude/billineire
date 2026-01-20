@@ -51,6 +51,7 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private int spawnProximityRadius;
     private boolean allowMarkerFallback;
     private double villagersPerStructure;
+    private double villagerCapacityPerStructure;
     
     // Core services (Phase 2)
     private TickEngine tickEngine;
@@ -86,17 +87,19 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         // Load configuration
         saveDefaultConfig();
         minBuildingSpacing = getConfig().getInt("village.minBuildingSpacing", 8);
-        maxBoundsRadiusBlocks = getConfig().getInt("village.maxBoundsRadiusBlocks", 160);
+        maxBoundsRadiusBlocks = getConfig().getInt("village.maxBoundsRadiusBlocks", 220);
         spacingMultiplier = getConfig().getDouble("village.spacingMultiplier", 1.25);
         minVillageSpacing = resolveMinVillageSpacing(getConfig().getInt("village.minVillageSpacing", 200));
         spawnProximityRadius = getConfig().getInt("village.spawnProximityRadius", 512);
         allowMarkerFallback = getConfig().getBoolean("worldgen.allowMarkerFallback", false);
         villagersPerStructure = getConfig().getDouble("worldgen.spawn.villagersPerStructure", 2.0);
+        villagerCapacityPerStructure = getConfig().getDouble("npc.villagerCapacityPerStructure", 2.0);
         
         // Configure debug logging if enabled
         getConfig().addDefault("debug.verbose", false);
         getConfig().addDefault("worldgen.allowMarkerFallback", false);
         getConfig().addDefault("worldgen.spawn.villagersPerStructure", 2.0);
+        getConfig().addDefault("npc.villagerCapacityPerStructure", 2.0);
         saveConfig();
         
         boolean verboseLogging = getConfig().getBoolean("debug.verbose", false);
@@ -105,11 +108,12 @@ public class VillageOverhaulPlugin extends JavaPlugin {
             logger.info("OK Debug logging configured (verbose=" + verboseLogging + ") - diagnostic logs will use INFO level");
         }
         
-logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing + 
+logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing +
                 ", maxBoundsRadiusBlocks=" + maxBoundsRadiusBlocks + ", spacingMultiplier=" + spacingMultiplier +
-                ", minVillageSpacing=" + minVillageSpacing + 
-                ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback + 
-                ", villagersPerStructure=" + villagersPerStructure + ")");
+                ", minVillageSpacing=" + minVillageSpacing +
+                ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback +
+                ", villagersPerStructure=" + villagersPerStructure +
+                ", villagerCapacityPerStructure=" + villagerCapacityPerStructure + ")");
         
         // Initialize foundational services
         initializeFoundation();
@@ -222,7 +226,7 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
     logger.info("OK Upgrade executor initialized");
         
         // Custom villager service (Phase 2.6)
-    customVillagerService = new CustomVillagerService(this, logger, metrics, metadataStore);
+    customVillagerService = new CustomVillagerService(this, logger, metrics, metadataStore, villagerCapacityPerStructure);
     logger.info("OK Custom villager service initialized");
         
         // Villager appearance adapter (Phase 2.6)

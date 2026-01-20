@@ -136,34 +136,32 @@ public class PathServiceImpl implements PathService {
 
     @Override
     public Optional<List<Block>> generatePath(World world, Location start, Location end, long seed) {
-        double distance = start.distance(end);
-        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
-            return Optional.empty();
-        }
-        
         // R007: Snap start/end to walkable surface if village context exists
         Location snappedStart = start;
         Location snappedEnd = end;
-        
+
         WalkableGraph graph = null;
         if (currentVillageContext != null && metadataStore != null) {
             List<VolumeMask> masks = metadataStore.getVolumeMasks(currentVillageContext);
             SurfaceSolver solver = new SurfaceSolver(world, masks);
             graph = new WalkableGraph(solver, masks, 2); // Buffer=2
-            
-            // Snap start
-            OptionalInt startY = solver.nearestWalkable(start.getBlockX(), start.getBlockZ(), start.getBlockY());
-            if (startY.isPresent()) {
-                snappedStart = new Location(world, start.getBlockX(), startY.getAsInt(), start.getBlockZ());
+
+            Optional<Location> resolvedStart = resolveEndpointOutsideMasks(world, solver, graph, start, 8);
+            Optional<Location> resolvedEnd = resolveEndpointOutsideMasks(world, solver, graph, end, 8);
+            if (resolvedStart.isEmpty() || resolvedEnd.isEmpty()) {
+                LOGGER.warning(String.format("[PATH] Unable to resolve walkable endpoints for path: start=%s end=%s",
+                    formatLocation(start), formatLocation(end)));
+                return Optional.empty();
             }
-            
-            // Snap end
-            OptionalInt endY = solver.nearestWalkable(end.getBlockX(), end.getBlockZ(), end.getBlockY());
-            if (endY.isPresent()) {
-                snappedEnd = new Location(world, end.getBlockX(), endY.getAsInt(), end.getBlockZ());
-            }
+            snappedStart = resolvedStart.get();
+            snappedEnd = resolvedEnd.get();
         }
-        
+
+        double distance = snappedStart.distance(snappedEnd);
+        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
+            return Optional.empty();
+        }
+
         List<PathNode> path = findPathAStar(world, snappedStart, snappedEnd, graph);
         
         if (path == null || path.isEmpty()) {
@@ -176,6 +174,39 @@ public class PathServiceImpl implements PathService {
         }
         
         return Optional.of(pathBlocks);
+    }
+
+    private Optional<Location> resolveEndpointOutsideMasks(World world, SurfaceSolver solver, WalkableGraph graph,
+                                                          Location target, int maxRadius) {
+        OptionalInt directY = solver.nearestWalkable(target.getBlockX(), target.getBlockZ(), target.getBlockY());
+        if (directY.isPresent() && !graph.isObstacle(target.getBlockX(), directY.getAsInt(), target.getBlockZ())) {
+            return Optional.of(new Location(world, target.getBlockX(), directY.getAsInt(), target.getBlockZ()));
+        }
+
+        for (int radius = 1; radius <= maxRadius; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (Math.abs(dx) != radius && Math.abs(dz) != radius) {
+                        continue;
+                    }
+                    int x = target.getBlockX() + dx;
+                    int z = target.getBlockZ() + dz;
+                    OptionalInt y = solver.nearestWalkable(x, z, target.getBlockY());
+                    if (y.isPresent() && !graph.isObstacle(x, y.getAsInt(), z)) {
+                        return Optional.of(new Location(world, x, y.getAsInt(), z));
+                    }
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private String formatLocation(Location location) {
+        if (location == null) {
+            return "(null)";
+        }
+        return String.format("(%d,%d,%d)", location.getBlockX(), location.getBlockY(), location.getBlockZ());
     }
     
     /**

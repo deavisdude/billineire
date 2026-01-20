@@ -69,7 +69,7 @@ public class CustomVillagerServiceTest {
     @Test
     public void testSpawnVillagerPersistsRecord() {
         Metrics metrics = new Metrics(plugin.getLogger());
-        CustomVillagerService service = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+        CustomVillagerService service = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store, 0);
 
         UUID villageId = UUID.randomUUID();
         Location location = new Location(world, 10, 64, 10);
@@ -92,7 +92,7 @@ public class CustomVillagerServiceTest {
     @Test
     public void testRestorePersistedVillagers() {
         Metrics metrics = new Metrics(plugin.getLogger());
-        CustomVillagerService service = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store);
+        CustomVillagerService service = new CustomVillagerService(plugin, plugin.getLogger(), metrics, store, 0);
 
         UUID villageId = UUID.randomUUID();
         UUID oldEntityId = UUID.randomUUID();

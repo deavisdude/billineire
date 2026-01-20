@@ -339,7 +339,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             sender.sendMessage("§aOK Spawned " + definitionId + " at your location");
             sender.sendMessage("§7Entity ID: " + customVillager.getEntityId());
         } else {
-            sender.sendMessage("§cFailed to spawn villager (village cap reached or error)");
+            sender.sendMessage("§cFailed to spawn villager (capacity reached or error)");
         }
         
         return true;
@@ -364,6 +364,12 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             
             List<com.davisodom.villageoverhaul.npc.CustomVillager> villagers = npcService.getVillagersByVillageId(villageId);
             sender.sendMessage("§eCustom Villagers in village " + villageId + ": " + villagers.size());
+            int capacity = npcService.getVillagerCapacity(villageId);
+            if (capacity == Integer.MAX_VALUE) {
+                sender.sendMessage("§7Capacity: no cap (derived from structures)");
+            } else {
+                sender.sendMessage("§7Capacity: " + capacity + " (derived from structures)");
+            }
             for (com.davisodom.villageoverhaul.npc.CustomVillager villager : villagers) {
                 sender.sendMessage("  §7" + villager.getDefinitionId() + " (entity: " + villager.getEntityId() + ")");
             }
@@ -371,7 +377,12 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             // List all
             java.util.Collection<com.davisodom.villageoverhaul.npc.CustomVillager> allVillagers = npcService.getAllVillagers();
             sender.sendMessage("§eTotal custom villagers: " + allVillagers.size());
-            sender.sendMessage("§7Per-village cap: " + npcService.getMaxVillagersPerVillage());
+            double ratio = npcService.getVillagerCapacityPerStructure();
+            if (ratio <= 0) {
+                sender.sendMessage("§7Capacity: no cap (villagerCapacityPerStructure=" + ratio + ")");
+            } else {
+                sender.sendMessage("§7Capacity ratio: " + ratio + " villagers per structure");
+            }
             
             for (com.davisodom.villageoverhaul.npc.CustomVillager villager : allVillagers) {
                 sender.sendMessage("  §7" + villager.getDefinitionId() + " @ village " + villager.getVillageId());

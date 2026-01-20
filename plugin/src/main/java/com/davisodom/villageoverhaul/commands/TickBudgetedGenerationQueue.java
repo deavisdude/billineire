@@ -773,18 +773,19 @@ public class TickBudgetedGenerationQueue {
         }
 
         if (outcome.getStatus() == PlacementStatus.FULL) {
-            currentRequest.sendMessage(Component.text("Village already has all structures. No additional placement needed.",
+            currentRequest.sendMessage(Component.text("Village already has all structure types. No additional placement needed (no cap).",
                 NamedTextColor.YELLOW));
             currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
-                " / " + outcome.getTotalStructures(), NamedTextColor.GRAY));
+                " / " + outcome.getTotalStructures() + " types", NamedTextColor.GRAY));
             currentRequest.setCurrentPhase(CommandGenerationRequest.GenerationPhase.COMPLETED);
             return;
         }
 
         currentRequest.sendMessage(Component.text("Failed to place additional structures for village '" +
             currentState.villageName + "'", NamedTextColor.RED));
+        currentRequest.sendMessage(Component.text("  Placed this run: " + outcome.getPlacedBuildings(), NamedTextColor.GRAY));
         currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
-            " / " + outcome.getTotalStructures(), NamedTextColor.GRAY));
+            " (structure types=" + outcome.getTotalStructures() + ", repeats allowed)", NamedTextColor.GRAY));
         currentRequest.sendMessage(Component.text("Check server logs for details.", NamedTextColor.GRAY));
 
         LOGGER.warning(String.format("[GEN-QUEUE] Failed to add structures for existing village '%s'",

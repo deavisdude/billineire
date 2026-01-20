@@ -13,22 +13,24 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
- * Service for managing Custom Villager lifecycle, caps, and village binding
+ * Service for managing Custom Villager lifecycle and village binding
  * 
  * Responsibilities:
  * - Spawn/despawn custom villagers with culture-profession identity
- * - Enforce per-village caps (configurable, default ≤ 10)
+ * - Enforce per-village capacity derived from placed structures
  * - Track spawned NPCs and provide lookup by village/entity
  * - Persist NPC state across server restarts (via JSON)
  * - Record NPC metrics (spawns, despawns, counts)
  * 
  * Constitution compliance:
  * - Principle II: Server-authoritative spawning; deterministic
- * - Principle III: Enforce per-village NPC caps; observable counts
+ * - Principle III: Enforce per-village NPC capacity; observable counts
  * - Principle VI: Data-driven definitions from custom-villager.json
  * - Principle VII: Observability with NPC metrics
  */
 public class CustomVillagerService {
+
+    private static final double DEFAULT_CAPACITY_PER_STRUCTURE = 2.0;
     
     private final Plugin plugin;
     private final Logger logger;
@@ -36,26 +38,32 @@ public class CustomVillagerService {
     private final VillageMetadataStore metadataStore;
     private final Map<UUID, CustomVillager> villagersByEntityId;
     private final Map<UUID, List<CustomVillager>> villagersByVillageId;
-    private final int maxVillagersPerVillage;
+    private final double villagerCapacityPerStructure;
+    private final Set<UUID> loggedCapInfo = ConcurrentHashMap.newKeySet();
     
     public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics) {
-        this(plugin, logger, metrics, null, 10);
+        this(plugin, logger, metrics, null, DEFAULT_CAPACITY_PER_STRUCTURE);
     }
 
     public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, VillageMetadataStore metadataStore) {
-        this(plugin, logger, metrics, metadataStore, 10);
+        this(plugin, logger, metrics, metadataStore, DEFAULT_CAPACITY_PER_STRUCTURE);
     }
 
-    public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, VillageMetadataStore metadataStore, int maxPerVillage) {
+    public CustomVillagerService(Plugin plugin, Logger logger, Metrics metrics, VillageMetadataStore metadataStore,
+                                 double villagerCapacityPerStructure) {
         this.plugin = plugin;
         this.logger = logger;
         this.metrics = metrics;
         this.metadataStore = metadataStore;
         this.villagersByEntityId = new ConcurrentHashMap<>();
         this.villagersByVillageId = new ConcurrentHashMap<>();
-        this.maxVillagersPerVillage = maxPerVillage;
+        this.villagerCapacityPerStructure = villagerCapacityPerStructure;
         
-        logger.info("CustomVillagerService initialized (max per village: " + maxPerVillage + ")");
+        if (villagerCapacityPerStructure <= 0) {
+            logger.info("CustomVillagerService initialized (villagerCapacityPerStructure=0, no cap)");
+        } else {
+            logger.info("CustomVillagerService initialized (villagerCapacityPerStructure=" + villagerCapacityPerStructure + ")");
+        }
     }
     
     /**
@@ -66,7 +74,7 @@ public class CustomVillagerService {
      * @param professionId Profession ID
      * @param villageId Village ID this NPC belongs to
      * @param location Spawn location
-     * @return The spawned CustomVillager, or null if cap reached or spawn failed
+    * @return The spawned CustomVillager, or null if capacity reached or spawn failed
      */
     public CustomVillager spawnVillager(String definitionId, String cultureId, 
                                         String professionId, UUID villageId, 
@@ -77,11 +85,13 @@ public class CustomVillagerService {
     private CustomVillager spawnVillagerInternal(String definitionId, String cultureId,
                                                  String professionId, UUID villageId,
                                                  Location location, boolean persist) {
-        // Check village cap
+        // Check village capacity derived from placed structures
         List<CustomVillager> existing = villagersByVillageId.getOrDefault(villageId, new ArrayList<>());
-        if (existing.size() >= maxVillagersPerVillage) {
+        int derivedCapacity = resolveVillagerCapacity(villageId);
+        logCapacityInfoIfNeeded(villageId, derivedCapacity);
+        if (derivedCapacity != Integer.MAX_VALUE && existing.size() >= derivedCapacity) {
             logger.warning("Cannot spawn " + definitionId + " at village " + villageId +
-                          ": cap reached (" + maxVillagersPerVillage + ")");
+                          ": capacity reached (" + derivedCapacity + ")");
             return null;
         }
 
@@ -213,12 +223,56 @@ public class CustomVillagerService {
     }
     
     /**
-     * Get the per-village cap
-     * 
-     * @return Maximum villagers per village
+     * Get the per-village capacity derived from placed structures.
+     *
+     * @param villageId Village UUID
+     * @return Derived capacity, or Integer.MAX_VALUE when no cap is configured
      */
-    public int getMaxVillagersPerVillage() {
-        return maxVillagersPerVillage;
+    public int getVillagerCapacity(UUID villageId) {
+        return resolveVillagerCapacity(villageId);
+    }
+
+    /**
+     * Get the configured capacity ratio per structure.
+     *
+     * @return Capacity per structure ratio (<= 0 means no cap)
+     */
+    public double getVillagerCapacityPerStructure() {
+        return villagerCapacityPerStructure;
+    }
+
+    private int resolveVillagerCapacity(UUID villageId) {
+        if (villagerCapacityPerStructure <= 0) {
+            return Integer.MAX_VALUE;
+        }
+        if (metadataStore == null || villageId == null) {
+            return Integer.MAX_VALUE;
+        }
+        int structuresPlaced = metadataStore.getPlacementReceipts(villageId).size();
+        if (structuresPlaced <= 0) {
+            return 0;
+        }
+        int computed = (int) Math.round(structuresPlaced * villagerCapacityPerStructure);
+        return Math.max(1, computed);
+    }
+
+    private void logCapacityInfoIfNeeded(UUID villageId, int derivedCapacity) {
+        if (villageId == null || !loggedCapInfo.add(villageId)) {
+            return;
+        }
+        if (derivedCapacity == Integer.MAX_VALUE) {
+            logger.info("[NPC] Villager capacity: no cap (villagerCapacityPerStructure="
+                + villagerCapacityPerStructure + ") for village " + villageId);
+            return;
+        }
+
+        int structuresPlaced = metadataStore != null
+            ? metadataStore.getPlacementReceipts(villageId).size()
+            : 0;
+        logger.info("[NPC] Villager capacity: derived=" + derivedCapacity
+            + " structures=" + structuresPlaced
+            + " ratio=" + villagerCapacityPerStructure
+            + " village=" + villageId);
     }
     
     /**

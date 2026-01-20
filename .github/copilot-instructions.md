@@ -1,4 +1,4 @@
-﻿# spec-billineire Development Guidelines
+# spec-billineire Development Guidelines
 
 Auto-generated from all feature plans. Last updated: 2025-11-04
 
@@ -31,7 +31,14 @@ Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 <!-- MANUAL ADDITIONS START -->
 Before beginning a task, consider using any/all of the skills avaialble to you in /.github/skills/. Review relevant skill files for best practices, code patterns, and critical rules related to the task at hand.
 
-When completing tasks, stop and test your work, then return suggestions and a summary to the user. Do not continue to the next task until instructed.
+When completing a task:
+1. Validate all acceptance criteria are fully met
+2. Run all applicable automated/headless tests
+3. Verify tests pass and coverage requirements are met
+4. If validation complete and successful: continue to the next task automatically
+5. If validation fails: fix issues and re-validate
+6. If scope clarification needed (beyond spec/story files): report findings and ask user
+7. If human playtest required (explicitly noted in task): report findings and ask user
 
 Scripting & CI Portability: CI/test scripts target Windows PowerShell 5.1 as a
     baseline. Use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), single-quoted

@@ -9,7 +9,7 @@ village:
   # Default: 2 blocks (Constitution v1.5.0, Principle XII)
   minBuildingSpacing: 2
   
-  maxBoundsRadiusBlocks: 160
+  maxBoundsRadiusBlocks: 220
 
   spacingMultiplier: 1.25
 
@@ -54,6 +54,14 @@ worldgen:
   # Default: false (zero-placement is treated as a failure and no pillar is placed)
   # Set to true to allow marker fallback without needing --allow-marker
   allowMarkerFallback: false
+
+# NPC / Custom Villager Settings
+npc:
+  # Villager capacity ratio derived from placed structures
+  # Capacity = round(structuresPlaced * villagerCapacityPerStructure)
+  # Set to 0 to disable capacity caps (no cap)
+  # Default: 2
+  villagerCapacityPerStructure: 2
 
 # Debug Flags
 debug:

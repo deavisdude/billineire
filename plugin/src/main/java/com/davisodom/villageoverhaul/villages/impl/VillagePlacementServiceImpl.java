@@ -44,16 +44,17 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     private static final int DEFAULT_VILLAGE_SPACING = 200;
 
     // Default max bounds radius for village placement search (blocks)
-    private static final int DEFAULT_MAX_BOUNDS_RADIUS = 160;
+    private static final int DEFAULT_MAX_BOUNDS_RADIUS = 220;
 
     // Default villagers per structure ratio
     private static final double DEFAULT_VILLAGERS_PER_STRUCTURE = 2.0;
     private static final int MIN_INITIAL_VILLAGERS = 1;
+    private static final int DEFAULT_MAX_CANDIDATES_PER_STRUCTURE = 240;
     
     // Configured spacing values (loaded from plugin config)
     private final int minBuildingSpacing;
     private final int minVillageSpacing;
-    private final int maxBoundsRadiusBlocks;
+    private int maxBoundsRadiusBlocks;
     private final double villagersPerStructure;
     
     // Structure service for building placement
@@ -319,7 +320,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
         // T070: Maximum number of candidate positions to try per structure before giving up
         // Increased to reduce false zero-placement on rough terrain while keeping attempts bounded.
-        final int maxCandidatesPerStructure = 240;
+        final int maxCandidatesPerStructure = DEFAULT_MAX_CANDIDATES_PER_STRUCTURE;
         
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
@@ -716,9 +717,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         }
 
         if (remainingStructureIds.isEmpty()) {
-            LOGGER.info(String.format("[STRUCT][T072] Village %s already has all %d structures; skipping generation.",
+            LOGGER.info(String.format("[STRUCT][T079] Village %s already has all %d structure types; allowing repeats (no cap).",
                     villageId, structureIds.size()));
-            return new PlacementOutcome(PlacementStatus.FULL, villageId, existingBuildings.size(), 0, structureIds.size());
+            remainingStructureIds.addAll(structureIds);
+            Collections.shuffle(remainingStructureIds, new Random(placementSeed ^ existingBuildings.size()));
         }
 
         LOGGER.info(String.format("[STRUCT][T072] Existing village placement: id=%s existingBuildings=%d remaining=%d seedChain=%d:%d",
@@ -729,7 +731,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
         SurfaceSolver surfaceSolver = new SurfaceSolver(world, metadataStore.getVolumeMasks(villageId));
 
-        final int maxCandidatesPerStructure = 20;
+        final int maxCandidatesPerStructure = DEFAULT_MAX_CANDIDATES_PER_STRUCTURE;
 
         for (int i = 0; i < remainingStructureIds.size(); i++) {
             String structureId = remainingStructureIds.get(i);

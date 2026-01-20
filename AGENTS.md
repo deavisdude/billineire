@@ -130,7 +130,14 @@ Includes checkstyle, pmd, spotless if configured. Run individual checks to focus
 
 Before beginning a task, consider using any/all skills available in `.github/skills/`. Review relevant skill files for best practices, code patterns, and critical rules related to the task at hand.
 
-When completing tasks, stop and test your work, then return suggestions and a summary to the user. Do not continue to the next task until instructed.
+When completing a task:
+1. Validate all acceptance criteria are fully met
+2. Run all applicable automated/headless tests
+3. Verify tests pass and coverage requirements are met
+4. If validation complete and successful: continue to the next task automatically
+5. If validation fails: fix issues and re-validate
+6. If scope clarification needed (beyond spec/story files): report findings and ask user
+7. If human playtest required (explicitly noted in task): report findings and ask user
 
 ### Scripting & CI Portability
 CI/test scripts target Windows PowerShell 5.1 as a baseline. Use ASCII-only output (replace ✓/✗/⚠ with OK/X/!), single-quoted regex with explicit `[0-9]` classes (avoid `\d` in double-quoted strings), escape `[]` and `()` when needed, and favor simple readiness checks (substring 'Done'). Validate with `Get-Command -Syntax` in CI to fail fast on parser errors.
