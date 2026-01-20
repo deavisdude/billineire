@@ -1496,7 +1496,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - ✅ Logs emit `[STRUCT][SPAWN-RETRY]` attempts and final exhausted result.
     - ✅ Cleanup removes failed seed village entries before retrying.
 
-- [ ] T084 [P1] Generation queue summary must reflect actual placements
+- [X] T084 [P1] Generation queue summary must reflect actual placements
   - Story: Queue summary reported 0 buildings despite 3 receipts
   - Description: Ensure `TickBudgetedGenerationQueue` (and the final "Successfully generated" log) uses the authoritative placed count from `VillageMetadataStore`/receipts after placement completes. Update `GenerationRequest.placed` and summary logging accordingly.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TickBudgetedGenerationQueue.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`

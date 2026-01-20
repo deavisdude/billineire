@@ -369,9 +369,13 @@ public class TickBudgetedGenerationQueue {
             seed = loc.getWorld().getSeed() ^ (((long)loc.getBlockX() << 32) | (loc.getBlockZ() & 0xFFFFFFFFL));
         }
         currentState.villageSeed = seed;
+
+        UUID deterministicVillageId = computeDeterministicVillageId(seed, loc);
+        currentState.villageId = deterministicVillageId;
         
         // Create village
         Village village = plugin.getVillageService().createVillage(
+            deterministicVillageId,
                 currentRequest.getCultureId(),
                 currentRequest.getVillageName(),
                 loc.getWorld().getName(),
@@ -379,8 +383,7 @@ public class TickBudgetedGenerationQueue {
                 loc.getBlockY(),
                 loc.getBlockZ()
         );
-        
-        currentState.villageId = village.getId();
+
         currentState.villageName = currentRequest.getVillageName();
         
         currentRequest.sendMessage(Component.text("Village '" + village.getName() + "' created (ID: " + 
@@ -462,11 +465,12 @@ public class TickBudgetedGenerationQueue {
                             currentState.world,
                             currentState.suitableLocation,
                             currentRequest.getCultureId(),
-                            currentState.villageSeed
+                        currentState.villageSeed,
+                        currentState.villageId
                     );
 
                     if (result.isPresent()) {
-                        int buildingCount = metadataStore.getVillageBuildings(currentState.villageId).size();
+                        int buildingCount = resolvePlacedCount(currentState.villageId);
                         future.complete(new PlacementOutcome(PlacementStatus.SUCCESS, result.get(), 0, buildingCount, buildingCount));
                     } else {
                         future.complete(new PlacementOutcome(PlacementStatus.FAILED, currentState.villageId, 0, 0, 0));
@@ -672,6 +676,22 @@ public class TickBudgetedGenerationQueue {
     private String formatLocation(Location loc) {
         return String.format("%d, %d, %d", loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
+
+    private UUID computeDeterministicVillageId(long seed, Location origin) {
+        return UUID.nameUUIDFromBytes(
+            (seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private int resolvePlacedCount(UUID villageId) {
+        if (villageId == null) {
+            return 0;
+        }
+        int receiptCount = metadataStore.getPlacementReceipts(villageId).size();
+        if (receiptCount > 0) {
+            return receiptCount;
+        }
+        return metadataStore.getVillageBuildings(villageId).size();
+    }
     
     /**
      * Internal state for current generation request.
@@ -738,6 +758,7 @@ public class TickBudgetedGenerationQueue {
         private void handleExistingVillageOutcome(PlacementOutcome outcome) {
         if (outcome.getStatus() == PlacementStatus.SUCCESS) {
             int total = outcome.getExistingBuildings() + outcome.getPlacedBuildings();
+            currentRequest.setStructuresPlaced(outcome.getPlacedBuildings());
             currentRequest.sendMessage(Component.text("Added " + outcome.getPlacedBuildings() +
                 " structures to village '" + currentState.villageName + "'", NamedTextColor.GREEN));
             currentRequest.sendMessage(Component.text("  Existing: " + outcome.getExistingBuildings() +
@@ -774,7 +795,8 @@ public class TickBudgetedGenerationQueue {
 
         private void handleNewVillageOutcome(PlacementOutcome outcome) {
         if (outcome.getStatus() == PlacementStatus.SUCCESS) {
-            int buildingCount = metadataStore.getVillageBuildings(currentState.villageId).size();
+            int buildingCount = resolvePlacedCount(currentState.villageId);
+            currentRequest.setStructuresPlaced(buildingCount);
 
             currentRequest.sendMessage(Component.text("Village '" + currentState.villageName +
                 "' generated successfully!", NamedTextColor.GREEN));

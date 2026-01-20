@@ -110,6 +110,10 @@ public class CommandGenerationRequest {
         return structuresPlaced;
     }
     
+    public void setStructuresPlaced(int structuresPlaced) {
+        this.structuresPlaced = Math.max(0, structuresPlaced);
+    }
+
     public void incrementStructuresPlaced() {
         this.structuresPlaced++;
     }
