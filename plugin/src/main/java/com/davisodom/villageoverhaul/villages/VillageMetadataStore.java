@@ -28,6 +28,8 @@ public class VillageMetadataStore {
     private final Logger logger;
     private final File storageDir;
     private final JsonStore jsonStore;
+    private final File diagnosticsDir;
+    private final JsonStore diagnosticsStore;
     
     // In-memory caches (thread-safe)
     private final Map<UUID, VillageMetadata> villages = new ConcurrentHashMap<>();
@@ -55,9 +57,15 @@ public class VillageMetadataStore {
         this.logger = plugin.getLogger();
         this.storageDir = new File(plugin.getDataFolder(), "villages");
         this.jsonStore = new JsonStore(storageDir, logger);
+        this.diagnosticsDir = new File(plugin.getDataFolder(), "diagnostics");
+        this.diagnosticsStore = new JsonStore(diagnosticsDir, logger);
         
         if (!storageDir.exists()) {
             storageDir.mkdirs();
+        }
+
+        if (!diagnosticsDir.exists()) {
+            diagnosticsDir.mkdirs();
         }
     }
     
@@ -287,6 +295,30 @@ public class VillageMetadataStore {
      */
     public Optional<PlacementFailureSummary> getLastPlacementFailureSummary(UUID villageId) {
         return Optional.ofNullable(lastPlacementFailureSummary.get(villageId));
+    }
+
+    /**
+     * T087: Persist collision diagnostics for placement candidate analysis.
+     */
+    public void recordCollisionDiagnostics(UUID villageId, CollisionDiagnostics diagnostics) {
+        if (villageId == null || diagnostics == null) return;
+
+        try {
+            String safeStructureId = sanitizeFileFragment(diagnostics.structureId);
+            String filename = String.format("collision_diag_%s_%s_%d.json",
+                villageId, safeStructureId, diagnostics.recordedTimestamp);
+            diagnosticsStore.saveJson(filename, diagnostics, JsonStore.SCHEMA_VERSION);
+            logger.info(String.format("[STRUCT][DIAG] Saved collision diagnostics for village %s: %s", villageId, filename));
+        } catch (Exception e) {
+            logger.warning(String.format("[STRUCT][DIAG] Failed to persist collision diagnostics for %s: %s", villageId, e.getMessage()));
+        }
+    }
+
+    private String sanitizeFileFragment(String value) {
+        if (value == null || value.isEmpty()) {
+            return "unknown";
+        }
+        return value.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
     
     /**
@@ -1148,5 +1180,62 @@ public class VillageMetadataStore {
                     gridSize, rotationCount, gridPointsTotal, gridPointsLoaded, candidatesChecked, validCandidates,
                     chunksSkipped, seed, recordedTimestamp);
         }
+    }
+
+    /**
+     * T087: Collision diagnostics per candidate and mask check.
+     */
+    public static class CollisionDiagnostics {
+        public String villageId;
+        public String structureId;
+        public long seed;
+        public int minBuildingSpacing;
+        public int existingMaskCount;
+        public int candidatesChecked;
+        public boolean truncated;
+        public long recordedTimestamp;
+        public List<CollisionCheckEntry> checks = new ArrayList<>();
+
+        public CollisionDiagnostics() {}
+
+        public CollisionDiagnostics(String villageId, String structureId, long seed,
+                                    int minBuildingSpacing, int existingMaskCount) {
+            this.villageId = villageId;
+            this.structureId = structureId;
+            this.seed = seed;
+            this.minBuildingSpacing = minBuildingSpacing;
+            this.existingMaskCount = existingMaskCount;
+            this.recordedTimestamp = System.currentTimeMillis();
+        }
+    }
+
+    public static class CollisionCheckEntry {
+        public int candidateIndex;
+        public int candidateX;
+        public int candidateY;
+        public int candidateZ;
+        public int rotationDegrees;
+        public int buffer;
+        public int distanceSquared;
+        public int dx;
+        public int dz;
+        public String phase;
+        public int[] candidateAabb;
+        public boolean collision;
+        public int masksChecked;
+        public List<CollisionMaskEntry> overlaps = new ArrayList<>();
+
+        public CollisionCheckEntry() {}
+    }
+
+    public static class CollisionMaskEntry {
+        public String structureId;
+        public int[] maskAabb;
+        public int[] expandedAabb;
+        public boolean xOverlap;
+        public boolean zOverlap;
+        public boolean collision;
+
+        public CollisionMaskEntry() {}
     }
 }

@@ -596,14 +596,21 @@ public class VillagePlacementServiceImplTest {
                 .bounds(14, 16, 63, 65, 10, 12)
                 .build();
 
-        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod("checkRotatedAABBCollision", int[].class, java.util.List.class, int.class);
+        Class<?> candidateClass = getCandidateSiteClass();
+        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod(
+            "checkRotatedAABBCollision", int[].class, java.util.List.class, int.class,
+            VillageMetadataStore.CollisionDiagnostics.class, candidateClass, int.class, String.class);
         mCollision.setAccessible(true);
 
+        Object candidateSite = createCandidateSite(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ(), 0, 0, 0, 0, 0);
+
         // No buffer: should NOT collide (close but touching)
-        boolean collidesNoBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0);
+        boolean collidesNoBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0,
+            null, candidateSite, 1, "spacing");
 
         // With spacing buffer=2 collisions should be detected
-        boolean collidesWithBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 2);
+        boolean collidesWithBuffer = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 2,
+            null, candidateSite, 1, "spacing");
 
         assertFalse(collidesNoBuffer, "Expected no collision when buffer=0 for adjacent mask");
         assertTrue(collidesWithBuffer, "Expected collision when spacing buffer applied");
@@ -638,10 +645,15 @@ public class VillagePlacementServiceImplTest {
                 .bounds(candidate[0] + 1, candidate[1] - 1, candidate[2], candidate[3], candidate[4] + 1, candidate[5] - 1)
                 .build();
 
-        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod("checkRotatedAABBCollision", int[].class, java.util.List.class, int.class);
+        Class<?> candidateClass = getCandidateSiteClass();
+        java.lang.reflect.Method mCollision = VillagePlacementServiceImpl.class.getDeclaredMethod(
+            "checkRotatedAABBCollision", int[].class, java.util.List.class, int.class,
+            VillageMetadataStore.CollisionDiagnostics.class, candidateClass, int.class, String.class);
         mCollision.setAccessible(true);
 
-        boolean collides = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0);
+        Object candidateSite = createCandidateSite(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ(), 0, 0, 0, 0, 0);
+        boolean collides = (boolean) mCollision.invoke(svc, candidate, java.util.List.of(blocking), 0,
+            null, candidateSite, 1, "spacing");
 
         assertTrue(collides, "Expected collision when existing mask intersects candidate AABB");
     }
@@ -875,6 +887,24 @@ public class VillagePlacementServiceImplTest {
         assertEquals(1, store.getPlacementReceipts(villageId).size(),
             "T061: Receipt count should match placement count for summary logging");
 
+    }
+
+    private Object createCandidateSite(int x, int y, int z, int distanceSquared, int dx, int dz,
+                                       int rotationDegrees, int rotationOrderIndex) throws Exception {
+        Class<?> candidateClass = getCandidateSiteClass();
+        java.lang.reflect.Constructor<?> ctor = candidateClass.getDeclaredConstructor(
+                int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class);
+        ctor.setAccessible(true);
+        return ctor.newInstance(x, y, z, distanceSquared, dx, dz, rotationDegrees, rotationOrderIndex);
+    }
+
+    private Class<?> getCandidateSiteClass() {
+        for (Class<?> inner : VillagePlacementServiceImpl.class.getDeclaredClasses()) {
+            if (inner.getSimpleName().equals("CandidateSite")) {
+                return inner;
+            }
+        }
+        throw new IllegalStateException("CandidateSite class not found");
     }
 
 }

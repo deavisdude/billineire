@@ -34,6 +34,7 @@ import java.util.logging.Logger;
 public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     private static final Logger LOGGER = Logger.getLogger(VillagePlacementServiceImpl.class.getName());
+    private static final int MAX_COLLISION_DIAGNOSTIC_ENTRIES = 2000;
     
     // Minimum spacing between buildings (blocks)
     // This is applied on BOTH sides, so total gap = 2 * spacing = 4 blocks
@@ -1102,6 +1103,13 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // T026d2: Collect ALL candidate sites first, then sort deterministically
         List<CandidateSite> allCandidates = new ArrayList<>();
 
+        VillageMetadataStore.CollisionDiagnostics collisionDiagnostics = null;
+        if (villageId != null) {
+            collisionDiagnostics = new VillageMetadataStore.CollisionDiagnostics(
+                villageId.toString(), structureId, buildingSeed, minBuildingSpacing,
+                existingMasks != null ? existingMasks.size() : 0);
+        }
+
         // T077: Enumerate rotations deterministically per building seed
         int[] rotationOrder = getRotationOrder(buildingSeed);
 
@@ -1189,7 +1197,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // Fixed sequence: 1) Collision check, 2) Spacing relaxation (if needed)
         int collisionRejections = 0;
         
+        int candidateIndex = 0;
         for (CandidateSite candidate : allCandidates) {
+            candidateIndex++;
             if (tracker != null) tracker.recordAttempt();
             
             // Compute rotated AABB for this candidate location with determined rotation
@@ -1197,13 +1207,15 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int[] candidateAABB = computeRotatedAABB(candidateLoc, width, depth, height, candidate.rotationDegrees);
             
             // Filter 1: Check collision with existing masks (including spacing buffer)
-            boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing);
+            boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing,
+                collisionDiagnostics, candidate, candidateIndex, "spacing");
 
             // Filter 2: If blocked by spacing, try a progressive relaxation (half spacing, then zero)
             if (overlaps && minBuildingSpacing > 0) {
                 int half = Math.max(0, minBuildingSpacing / 2);
                 if (half != minBuildingSpacing) {
-                    boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half);
+                    boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half,
+                        collisionDiagnostics, candidate, candidateIndex, "relaxedHalf");
                     if (!overlapsHalf) {
                         LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->%d for candidate (%d,%d)", 
                                 minBuildingSpacing, half, candidate.dx, candidate.dz));
@@ -1214,7 +1226,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
             if (overlaps && minBuildingSpacing > 1) {
                 // Final attempt without spacing
-                boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0);
+                boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0,
+                    collisionDiagnostics, candidate, candidateIndex, "relaxedZero");
                 if (!overlapsZero) {
                     LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->0 for candidate (%d,%d)", 
                             minBuildingSpacing, candidate.dx, candidate.dz));
@@ -1272,6 +1285,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             gridSize, rotationCount, gridPointsTotal, gridPointsLoaded,
                             candidatesChecked, validCandidates.size(), chunksSkipped, buildingSeed);
             metadataStore.recordCandidateCoverageSummary(villageId, coverage);
+        }
+
+        if (collisionDiagnostics != null) {
+            collisionDiagnostics.candidatesChecked = allCandidates.size();
+            metadataStore.recordCollisionDiagnostics(villageId, collisionDiagnostics);
         }
 
         return validCandidates;
@@ -1506,28 +1524,78 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * @param buffer Spacing buffer to apply around existing masks
      * @return true if collision detected, false otherwise
      */
-    private boolean checkRotatedAABBCollision(int[] candidateAABB, List<VolumeMask> existingMasks, int buffer) {
+    private boolean checkRotatedAABBCollision(int[] candidateAABB, List<VolumeMask> existingMasks, int buffer,
+                                              VillageMetadataStore.CollisionDiagnostics diagnostics,
+                                              CandidateSite candidate, int candidateIndex, String phase) {
         int candMinX = candidateAABB[0];
         int candMaxX = candidateAABB[1];
         int candMinZ = candidateAABB[4];
         int candMaxZ = candidateAABB[5];
-        
-        for (VolumeMask mask : existingMasks) {
-            // Expand mask by buffer
-            int maskMinX = mask.getMinX() - buffer;
-            int maskMaxX = mask.getMaxX() + buffer;
-            int maskMinZ = mask.getMinZ() - buffer;
-            int maskMaxZ = mask.getMaxZ() + buffer;
-            
-            // Check 2D XZ intersection (sufficient for building spacing)
-            boolean xOverlap = candMinX <= maskMaxX && candMaxX >= maskMinX;
-            boolean zOverlap = candMinZ <= maskMaxZ && candMaxZ >= maskMinZ;
-            
-            if (xOverlap && zOverlap) {
-                return true; // Collision detected
+
+        boolean collision = false;
+        VillageMetadataStore.CollisionCheckEntry entry = null;
+        if (diagnostics != null && diagnostics.checks.size() < MAX_COLLISION_DIAGNOSTIC_ENTRIES) {
+            entry = new VillageMetadataStore.CollisionCheckEntry();
+            entry.candidateIndex = candidateIndex;
+            entry.candidateX = candidate.x;
+            entry.candidateY = candidate.y;
+            entry.candidateZ = candidate.z;
+            entry.rotationDegrees = candidate.rotationDegrees;
+            entry.buffer = buffer;
+            entry.distanceSquared = candidate.distanceSquared;
+            entry.dx = candidate.dx;
+            entry.dz = candidate.dz;
+            entry.phase = phase;
+            entry.candidateAabb = candidateAABB;
+        } else if (diagnostics != null && diagnostics.checks.size() >= MAX_COLLISION_DIAGNOSTIC_ENTRIES) {
+            diagnostics.truncated = true;
+        }
+
+        int masksChecked = 0;
+        if (existingMasks != null) {
+            for (VolumeMask mask : existingMasks) {
+                masksChecked++;
+                // Expand mask by buffer
+                int maskMinX = mask.getMinX() - buffer;
+                int maskMaxX = mask.getMaxX() + buffer;
+                int maskMinZ = mask.getMinZ() - buffer;
+                int maskMaxZ = mask.getMaxZ() + buffer;
+
+                // Check 2D XZ intersection (sufficient for building spacing)
+                boolean xOverlap = candMinX <= maskMaxX && candMaxX >= maskMinX;
+                boolean zOverlap = candMinZ <= maskMaxZ && candMaxZ >= maskMinZ;
+                boolean overlap = xOverlap && zOverlap;
+
+                if (entry != null && overlap) {
+                    VillageMetadataStore.CollisionMaskEntry maskEntry = new VillageMetadataStore.CollisionMaskEntry();
+                    maskEntry.structureId = mask.getStructureId();
+                    maskEntry.maskAabb = new int[]{mask.getMinX(), mask.getMaxX(), mask.getMinY(), mask.getMaxY(), mask.getMinZ(), mask.getMaxZ()};
+                    maskEntry.expandedAabb = new int[]{maskMinX, maskMaxX, mask.getMinY(), mask.getMaxY(), maskMinZ, maskMaxZ};
+                    maskEntry.xOverlap = xOverlap;
+                    maskEntry.zOverlap = zOverlap;
+                    maskEntry.collision = overlap;
+                    entry.overlaps.add(maskEntry);
+
+                    String candidateStructureId = diagnostics != null ? diagnostics.structureId : "unknown";
+                    LOGGER.info(String.format("[STRUCT][COLLISION-DIAG] structure=%s candidate=(%d,%d,%d) rot=%d buffer=%d phase=%s candidateAABB=(%d..%d,%d..%d,%d..%d) mask=%s expanded=(%d..%d,%d..%d,%d..%d) overlap=true",
+                        candidateStructureId, candidate.x, candidate.y, candidate.z, candidate.rotationDegrees, buffer, phase,
+                        candMinX, candMaxX, candidateAABB[2], candidateAABB[3], candMinZ, candMaxZ,
+                        mask.getStructureId(), maskMinX, maskMaxX, mask.getMinY(), mask.getMaxY(), maskMinZ, maskMaxZ));
+                }
+
+                if (overlap) {
+                    collision = true;
+                }
             }
         }
-        return false; // No collisions
+
+        if (entry != null) {
+            entry.collision = collision;
+            entry.masksChecked = masksChecked;
+            diagnostics.checks.add(entry);
+        }
+
+        return collision;
     }
     
     /**

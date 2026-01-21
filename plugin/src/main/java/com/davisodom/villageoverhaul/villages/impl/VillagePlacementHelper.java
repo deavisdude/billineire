@@ -1,15 +1,19 @@
 package com.davisodom.villageoverhaul.villages.impl;
 
+import com.davisodom.villageoverhaul.DebugFlags;
 import com.davisodom.villageoverhaul.model.VolumeMask;
 import org.bukkit.Location;
 
 import java.util.List;
+import java.util.logging.Logger;
 
 /**
  * Helper class for village placement collision detection.
  * R011b: Rotation-aware building placement logic.
  */
 public class VillagePlacementHelper {
+
+    private static final Logger LOGGER = Logger.getLogger(VillagePlacementHelper.class.getName());
     
     /**
      * Compute rotated AABB bounds for a structure at given origin with specified rotation.
@@ -126,6 +130,11 @@ public class VillagePlacementHelper {
             boolean zOverlap = candMinZ <= maskMaxZ && candMaxZ >= maskMinZ;
             
             if (xOverlap && zOverlap) {
+                if (DebugFlags.isDebugStructures()) {
+                    LOGGER.info(String.format("[STRUCT][COLLISION-HELPER] candidateAABB=(%d..%d,%d..%d,%d..%d) mask=%s expanded=(%d..%d,%d..%d,%d..%d) buffer=%d overlap=true",
+                        candMinX, candMaxX, candidateAABB[2], candidateAABB[3], candMinZ, candMaxZ,
+                        mask.getStructureId(), maskMinX, maskMaxX, mask.getMinY(), mask.getMaxY(), maskMinZ, maskMaxZ, buffer));
+                }
                 return true; // Collision detected
             }
         }

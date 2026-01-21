@@ -214,6 +214,22 @@ Write-Host "Ticks: $Ticks" -ForegroundColor White
 Write-Host "Seed: $Seed" -ForegroundColor White
 Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
+# Ensure a minimal server.properties exists before enabling RCON (precondition for BotPlayer)
+$serverPropsCheckPath = Join-Path $ServerDir "server.properties"
+if (-not (Test-Path $serverPropsCheckPath)) {
+    Write-Host "server.properties not found in $ServerDir; creating minimal properties to satisfy BotPlayer module" -ForegroundColor Yellow
+    $minimalProps = @"
+enable-rcon=true
+rcon.password=temporary_dummy
+rcon.port=25575
+online-mode=false
+spawn-monsters=false
+"@
+    # Ensure server dir exists
+    if (-not (Test-Path $ServerDir)) { New-Item -ItemType Directory -Path $ServerDir -Force | Out-Null }
+    Set-Content -Path $serverPropsCheckPath -Value $minimalProps -Encoding UTF8
+}
+
 # Enable RCON for verification (R010)
 Import-Module "$PSScriptRoot/BotPlayer.psm1" -ErrorAction Stop
 $rconPassword = Enable-Rcon -ServerDir $ServerDir
@@ -1275,6 +1291,24 @@ if (Test-Path "$ServerDir/server.log") {
         }
     } else {
         Write-Host "! No terraforming commit artifacts found" -ForegroundColor Yellow
+    }
+
+    # T087: Collision diagnostics artifacts
+    Write-Host ""
+    Write-Host "=== Collision Diagnostics (T087) ===" -ForegroundColor Cyan
+    $collisionArtifacts = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\diagnostics') -Filter 'collision_diag_*.json' -File -ErrorAction SilentlyContinue)
+    if ($collisionArtifacts.Count -gt 0) {
+        foreach ($artifact in $collisionArtifacts) {
+            try {
+                $dest = Join-Path $ServerDir "logs\$($artifact.Name)"
+                Copy-Item -Path $artifact.FullName -Destination $dest -Force
+                Write-Host "  Saved collision diagnostic: $dest" -ForegroundColor Cyan
+            } catch {
+                Write-Host "  ! Failed to copy collision diagnostic $($artifact.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "! No collision diagnostics found" -ForegroundColor Yellow
     }
 
     # T063: Fixed-layout receipts vs summary validation

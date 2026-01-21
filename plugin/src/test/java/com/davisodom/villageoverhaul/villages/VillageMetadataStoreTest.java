@@ -279,4 +279,57 @@ public class VillageMetadataStoreTest {
         // Should not throw exception when no files exist
         assertDoesNotThrow(() -> store.loadAll(), "Loading with no files should not throw");
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("T087 - recordCollisionDiagnostics should write a diagnostics file")
+    public void testRecordCollisionDiagnosticsWritesFile() throws Exception {
+        // Use a dedicated data folder for this test
+        java.io.File dataDir = new java.io.File("build/test-data-diagnostics");
+        if (dataDir.exists()) {
+            java.nio.file.Files.walk(dataDir.toPath())
+                    .sorted(java.util.Comparator.reverseOrder())
+                    .map(java.nio.file.Path::toFile)
+                    .forEach(java.io.File::delete);
+        }
+        dataDir.mkdirs();
+
+        org.mockito.Mockito.when(plugin.getDataFolder()).thenReturn(dataDir);
+
+        VillageMetadataStore localStore = new VillageMetadataStore(plugin);
+
+        java.util.UUID villageId = java.util.UUID.randomUUID();
+        VillageMetadataStore.CollisionDiagnostics diag = new VillageMetadataStore.CollisionDiagnostics(
+            villageId.toString(), "house-test", 42L, 2, 0);
+        diag.candidatesChecked = 1;
+        VillageMetadataStore.CollisionCheckEntry entry = new VillageMetadataStore.CollisionCheckEntry();
+        entry.candidateIndex = 0;
+        entry.candidateX = 10;
+        entry.candidateY = 64;
+        entry.candidateZ = 20;
+        entry.rotationDegrees = 0;
+        entry.buffer = 0;
+        entry.collision = false;
+        entry.masksChecked = 0;
+        diag.checks.add(entry);
+
+        // Call the method under test
+        localStore.recordCollisionDiagnostics(villageId, diag);
+
+        // Verify a file named collision_diag_<villageId>_ exists in diagnostics dir
+        java.io.File diagnosticsDir = new java.io.File(dataDir, "diagnostics");
+        assertTrue(diagnosticsDir.exists() && diagnosticsDir.isDirectory(), "Diagnostics dir should exist");
+
+        java.io.File[] files = diagnosticsDir.listFiles((dir, name) -> name.startsWith("collision_diag_" + villageId.toString()));
+        assertNotNull(files, "File listing should not be null");
+        assertTrue(files.length >= 1, "At least one diagnostics file should be written");
+
+        // Cleanup
+        for (java.io.File f : files) {
+            f.delete();
+        }
+        java.nio.file.Files.walk(dataDir.toPath())
+                .sorted(java.util.Comparator.reverseOrder())
+                .map(java.nio.file.Path::toFile)
+                .forEach(java.io.File::delete);
+    }
 }

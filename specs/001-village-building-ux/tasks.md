@@ -1474,6 +1474,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Candidate search respects max village bounds and rotates structures deterministically.
     - A failed candidate results in a new (x,z,rotation) within bounds until the search budget is exhausted.
     - Logs include `[STRUCT][BOUNDS]` with bounds, candidates tried, and coverage stats.
+  - Note: For systemic collision issues observed in large-bounds runs, see task `T087` for dedicated investigation and diagnostics.
 
 - [X] T078 [P1] Terraforming resilience inside bounds
   - Story: Structure generation resilience / terraforming
@@ -1483,6 +1484,7 @@ These follow-up tasks were added after T052a verification — logs show frequent
     - Terraforming failures do not immediately abort the structure; next candidate is attempted within bounds.
     - Diagnostics track `terraformRejects` separately from `siteValidationRejects`.
     - Placement succeeds in seeds where terraform rejects occur at some candidates.
+  - Note: If placement rejection rates appear extreme after initial placements, coordinate with `T087` to determine whether re-seating or terraform retries are being triggered incorrectly due to collision masking.
 
 - [X] T083 [P0] Spawn seeding retries after zero-placement
   - Story: Spawn village failed to generate on steep terrain
@@ -1530,6 +1532,43 @@ These follow-up tasks were added after T052a verification — logs show frequent
 Notes:
 - Repro first using known-bad seeds from logs and capture artifacts under `test-server/logs/`.
 - Keep diagnostics parseable (single-line INFO) so `scripts/ci/sim` can fail fast on `ZERO-PLACEMENT` and path emission mismatches.
+
+- [X] T087 [P0] Investigate aggressive collision detection after initial placements
+  - Story: Placement resilience / collision diagnostics
+  - Description: After headless runs with large bounds we observe an extremely high placement rejection rate (≈99%). Although a few early structures seat successfully, almost all subsequent candidates are rejected by collision checks. Investigate and triage the root cause without applying immediate fixes in mainline. Suggested investigation steps:
+  1. Collect and compare collision logs for successful vs failed candidates (AABB values, rotation, spacing buffer, existing VolumeMask expansions).
+  2. Instrument `VillagePlacementHelper.checkRotatedAABBCollision()` and `VillagePlacementServiceImpl` to emit verbose per-candidate diagnostics (candidate AABB, mask AABB, expanded buffer, rotation, seed) saved as CI artifacts.
+  3. Add focused unit/integration tests reproducing near-collision and multi-placement scenarios to validate spacing, inclusive/exclusive bounds, and expansion semantics.
+  4. Verify `VolumeMask` expansion/merge logic and ensure spacing buffer is applied symmetrically for existing and candidate masks.
+  5. Produce a short report with root-cause, reproduction steps, and a recommended minimal fix or mitigation (e.g., buffer correction, masking bug, or adaptive reseat/backoff strategy).
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillagePlacementHelper.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Acceptance:
+  - Root cause identified and documented in the task report.
+  - Either a validated mitigation increases placement success rate >5% on the failing seed, or a clear mitigation plan (with follow-up tasks) is produced.
+  - Diagnostic artifacts (verbose collision logs and placement_rejections.json) are saved to `test-server/logs/` for CI review.
+  - **IMPLEMENTED** (2026-01-20):
+    - Added per-candidate collision diagnostics and persisted `collision_diag_*.json` artifacts.
+    - Added unit tests covering edge-touching and buffer symmetry.
+    - Updated harness to copy collision artifacts into `test-server/logs/`.
+    - Reported root cause and mitigation plan in `T087-collision-report.md`.
+
+- [ ] T087a [P1] Align candidate AABB rotation mapping with WorldEdit
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementHelper.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Ensure candidate AABB rotation logic matches WorldEdit rotation mapping used by placement receipts. Unify or reuse a single rotation helper to avoid divergence.
+  - Acceptance:
+    - Candidate collision checks match placement AABB results for 0/90/180/270° rotations.
+
+- [ ] T087b [P1] Add rotation consistency tests for candidate vs placement AABB
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementHelperTest.java`
+  - Description: Add unit tests asserting candidate AABB computations match placement AABB outputs for rotated structures.
+  - Acceptance:
+    - Tests cover all four rotations and pass deterministically.
+
+- [ ] T087c [P2] Standardize collision overlap semantics (2D vs 3D) and document spacing buffer
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `tests/HEADLESS-TESTING.md`
+  - Description: Decide and document whether collision checks should be 2D XZ or full 3D. Align candidate filtering and placement validation accordingly, and document buffer behavior.
+  - Acceptance:
+    - Collision checks use a single consistent strategy and documentation reflects the choice.
 
 - [ ] T051b [P1] SurfaceSolver / Entrance Validation Hardening
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java

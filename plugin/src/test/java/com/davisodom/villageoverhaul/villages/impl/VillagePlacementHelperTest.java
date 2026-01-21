@@ -164,6 +164,37 @@ public class VillagePlacementHelperTest {
         
         assertFalse(collision, "No collision should be detected when structures are outside spacing buffer");
     }
+
+    @Test
+    @DisplayName("checkRotatedAABBCollision - edge-touching respects inclusive bounds")
+    public void testCheckRotatedAABBCollision_EdgeTouching() {
+        int[] candidateAABB = {0, 4, 64, 70, 0, 4}; // 5x7x5 structure at origin
+
+        // Mask starts exactly after candidate on X (no overlap at buffer=0)
+        VolumeMask edgeMask = createMask(5, 9, 64, 70, 0, 4);
+        List<VolumeMask> masks = List.of(edgeMask);
+
+        boolean noBufferCollision = VillagePlacementHelper.checkRotatedAABBCollision(candidateAABB, masks, 0);
+        assertFalse(noBufferCollision, "Edge-touching without buffer should not collide");
+
+        boolean withBufferCollision = VillagePlacementHelper.checkRotatedAABBCollision(candidateAABB, masks, 1);
+        assertTrue(withBufferCollision, "Spacing buffer should turn edge-touching into collision");
+    }
+
+    @Test
+    @DisplayName("checkRotatedAABBCollision - buffer expands symmetrically")
+    public void testCheckRotatedAABBCollision_BufferSymmetry() {
+        int[] candidateAABB = {10, 14, 64, 70, 10, 14};
+
+        VolumeMask mask = createMask(20, 24, 64, 70, 10, 14);
+        List<VolumeMask> masks = List.of(mask);
+
+        boolean noBufferCollision = VillagePlacementHelper.checkRotatedAABBCollision(candidateAABB, masks, 0);
+        assertFalse(noBufferCollision, "No collision expected without buffer");
+
+        boolean withBufferCollision = VillagePlacementHelper.checkRotatedAABBCollision(candidateAABB, masks, 6);
+        assertTrue(withBufferCollision, "Symmetric buffer expansion should detect collision");
+    }
     
     @Test
     @DisplayName("checkRotatedAABBCollision - handles multiple existing masks correctly")
