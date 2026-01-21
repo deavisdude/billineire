@@ -1552,7 +1552,7 @@ Notes:
     - Updated harness to copy collision artifacts into `test-server/logs/`.
     - Reported root cause and mitigation plan in `T087-collision-report.md`.
 
-- [ ] T087a [P1] Align candidate AABB rotation mapping with WorldEdit
+- [X] T087a [P1] Align candidate AABB rotation mapping with WorldEdit
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementHelper.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
   - Description: Ensure candidate AABB rotation logic matches WorldEdit rotation mapping used by placement receipts. Unify or reuse a single rotation helper to avoid divergence.
   - Acceptance:

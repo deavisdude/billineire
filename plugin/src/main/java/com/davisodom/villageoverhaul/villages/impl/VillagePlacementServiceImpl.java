@@ -1307,76 +1307,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      * @return int[] {minX, maxX, minY, maxY, minZ, maxZ} - rotated AABB bounds
      */
     private int[] computeRotatedAABB(Location origin, int baseWidth, int baseDepth, int height, int rotation) {
-        int originX = origin.getBlockX();
-        int originY = origin.getBlockY();
-        int originZ = origin.getBlockZ();
-        
-        // Calculate the 8 corners of the bounding box in schematic space (origin at 0,0,0)
-        int[][] corners = new int[8][3];
-        int idx = 0;
-        for (int x : new int[]{0, baseWidth}) {
-            for (int y : new int[]{0, height}) {
-                for (int z : new int[]{0, baseDepth}) {
-                    corners[idx][0] = x;
-                    corners[idx][1] = y;
-                    corners[idx][2] = z;
-                    idx++;
-                }
-            }
-        }
-        
-        // Rotate each corner around origin (0,0,0) using Y-axis rotation matrix
-        int[][] rotatedCorners = new int[8][3];
-        for (int i = 0; i < 8; i++) {
-            int x = corners[i][0];
-            int y = corners[i][1];
-            int z = corners[i][2];
-            
-            // Apply Y-axis rotation (clockwise when viewed from above)
-            switch (rotation) {
-                case 0:
-                    rotatedCorners[i][0] = x;
-                    rotatedCorners[i][2] = z;
-                    break;
-                case 90:
-                    rotatedCorners[i][0] = -z;
-                    rotatedCorners[i][2] = x;
-                    break;
-                case 180:
-                    rotatedCorners[i][0] = -x;
-                    rotatedCorners[i][2] = -z;
-                    break;
-                case 270:
-                    rotatedCorners[i][0] = z;
-                    rotatedCorners[i][2] = -x;
-                    break;
-            }
-            rotatedCorners[i][1] = y; // Y unchanged
-        }
-        
-        // Find min/max of rotated corners
-        int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
-        int minRotY = Integer.MAX_VALUE, maxRotY = Integer.MIN_VALUE;
-        int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
-        
-        for (int i = 0; i < 8; i++) {
-            minRotX = Math.min(minRotX, rotatedCorners[i][0]);
-            maxRotX = Math.max(maxRotX, rotatedCorners[i][0]);
-            minRotY = Math.min(minRotY, rotatedCorners[i][1]);
-            maxRotY = Math.max(maxRotY, rotatedCorners[i][1]);
-            minRotZ = Math.min(minRotZ, rotatedCorners[i][2]);
-            maxRotZ = Math.max(maxRotZ, rotatedCorners[i][2]);
-        }
-        
-        // Translate to world coordinates
-        int minX = originX + minRotX;
-        int maxX = originX + maxRotX - 1; // -1 because size is exclusive
-        int minY = originY + minRotY;
-        int maxY = originY + maxRotY - 1;
-        int minZ = originZ + minRotZ;
-        int maxZ = originZ + maxRotZ - 1;
-        
-        return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
+        return VillagePlacementHelper.computeRotatedAABB(origin, baseWidth, baseDepth, height, rotation);
     }
 
     /**
@@ -1415,16 +1346,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     rotZ = z;
                     break;
                 case 90:
-                    rotX = -z;
-                    rotZ = x;
+                    rotX = z;
+                    rotZ = -x;
                     break;
                 case 180:
                     rotX = -x;
                     rotZ = -z;
                     break;
                 case 270:
-                    rotX = z;
-                    rotZ = -x;
+                    rotX = -z;
+                    rotZ = x;
                     break;
             }
 
