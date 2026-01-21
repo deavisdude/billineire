@@ -1926,10 +1926,11 @@ public class StructureServiceImpl implements StructureService {
     /**
      * Check if an AABB collides with any existing VolumeMasks (with spacing buffer).
      * R011b: Pre-placement collision detection to prevent wasted placements.
+     * Collision is evaluated in 2D XZ only; Y is ignored to keep horizontal spacing consistent.
      * 
      * @param bounds AABB bounds {minX, maxX, minY, maxY, minZ, maxZ}
      * @param existingMasks List of existing VolumeMasks to check against
-     * @param spacingBuffer Minimum spacing distance between structures
+     * @param spacingBuffer Minimum spacing distance between structures (applied in XZ)
      * @return true if collision detected, false if clear
      */
     private boolean checkAABBCollision(int[] bounds, java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks, int spacingBuffer) {
@@ -1938,13 +1939,12 @@ public class StructureServiceImpl implements StructureService {
             com.davisodom.villageoverhaul.model.VolumeMask expandedMask = mask.expand(spacingBuffer);
             
             // Check AABB intersection using inclusive bounds (matching VillagePlacementServiceImpl)
-            // Two AABBs intersect if they overlap on ALL three axes
+            // Collision is evaluated in 2D XZ only; Y is ignored to keep spacing consistent.
             // Use <= and >= to reject structures that share edges (prevents visual overlap)
             boolean xOverlap = bounds[0] <= expandedMask.getMaxX() && bounds[1] >= expandedMask.getMinX();
-            boolean yOverlap = bounds[2] <= expandedMask.getMaxY() && bounds[3] >= expandedMask.getMinY();
             boolean zOverlap = bounds[4] <= expandedMask.getMaxZ() && bounds[5] >= expandedMask.getMinZ();
             
-            if (xOverlap && yOverlap && zOverlap) {
+            if (xOverlap && zOverlap) {
                 LOGGER.info(String.format("[STRUCT] COLLISION: candidate bounds=(%d..%d, %d..%d, %d..%d) vs mask %s (with %d spacing) expanded=(%d..%d, %d..%d, %d..%d)",
                         bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
                         mask.getStructureId(), spacingBuffer,

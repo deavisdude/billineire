@@ -1575,7 +1575,7 @@ Notes:
       - `testRotationCycle` - validates that rotations form expected patterns
     - All tests pass deterministically; validates that candidate AABB logic matches placement AABB semantics.
 
-- [ ] T087c [P2] Standardize collision overlap semantics (2D vs 3D) and document spacing buffer
+- [X] T087c [P2] Standardize collision overlap semantics (2D vs 3D) and document spacing buffer
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `tests/HEADLESS-TESTING.md`
   - Description: Decide and document whether collision checks should be 2D XZ or full 3D. Align candidate filtering and placement validation accordingly, and document buffer behavior.
   - Acceptance:

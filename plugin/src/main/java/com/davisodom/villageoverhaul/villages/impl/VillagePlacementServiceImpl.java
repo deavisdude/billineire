@@ -1449,6 +1449,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     
     /**
      * Check if a rotated AABB intersects with any existing volume mask (with buffer).
+     * Collision is evaluated in 2D XZ only; Y is ignored to keep horizontal spacing consistent.
      * 
      * @param candidateAABB Candidate structure AABB bounds
      * @param existingMasks List of existing volume masks
