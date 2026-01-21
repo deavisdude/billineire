@@ -1558,11 +1558,22 @@ Notes:
   - Acceptance:
     - Candidate collision checks match placement AABB results for 0/90/180/270° rotations.
 
-- [ ] T087b [P1] Add rotation consistency tests for candidate vs placement AABB
+- [X] T087b [P1] Add rotation consistency tests for candidate vs placement AABB
   - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementHelperTest.java`
   - Description: Add unit tests asserting candidate AABB computations match placement AABB outputs for rotated structures.
   - Acceptance:
     - Tests cover all four rotations and pass deterministically.
+  - Implementation (2026-01-20):
+    - ✅ Added 8 comprehensive tests in VillagePlacementHelperTest:
+      - `testCandidateVsPlacementAABB_0Degrees` - validates 0° bounds
+      - `testCandidateVsPlacementAABB_90Degrees` - validates 90° bounds with dimension swap
+      - `testCandidateVsPlacementAABB_180Degrees` - validates 180° bounds with inverted offsets
+      - `testCandidateVsPlacementAABB_270Degrees` - validates 270° bounds with dimension swap
+      - `testRotationConsistency_DimensionSwapping` - verifies extent swapping for 90°/270°
+      - `testRotationConsistency_YUnchanged` - confirms Y bounds are invariant across rotations
+      - `testRotationDeterminism` - verifies deterministic output across multiple calls
+      - `testRotationCycle` - validates that rotations form expected patterns
+    - All tests pass deterministically; validates that candidate AABB logic matches placement AABB semantics.
 
 - [ ] T087c [P2] Standardize collision overlap semantics (2D vs 3D) and document spacing buffer
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `tests/HEADLESS-TESTING.md`

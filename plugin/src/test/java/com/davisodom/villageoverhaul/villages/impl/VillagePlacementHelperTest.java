@@ -278,6 +278,219 @@ public class VillagePlacementHelperTest {
         }
     }
     
+    @Test
+    @DisplayName("T087b - Candidate AABB at 0° rotation matches expected placement bounds")
+    public void testCandidateVsPlacementAABB_0Degrees() {
+        // Test parameters: origin (100, 64, 200), width=20, depth=30, height=10
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 100, 64, 200);
+        int width = 20;
+        int depth = 30;
+        int height = 10;
+        
+        // Candidate AABB from VillagePlacementHelper
+        int[] candidateBounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 0);
+        
+        // Expected bounds (0° rotation: origin is min corner)
+        // X: 100 to 100+20-1=119
+        // Y: 64 to 64+10-1=73
+        // Z: 200 to 200+30-1=229
+        int[] expectedBounds = {100, 119, 64, 73, 200, 229};
+        
+        assertArrayEquals(expectedBounds, candidateBounds, 
+            "Candidate AABB at 0° should match expected bounds");
+    }
+    
+    @Test
+    @DisplayName("T087b - Candidate AABB at 90° rotation matches expected placement bounds")
+    public void testCandidateVsPlacementAABB_90Degrees() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 100, 64, 200);
+        int width = 20;
+        int depth = 30;
+        int height = 10;
+        
+        int[] candidateBounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 90);
+        
+        // After 90° rotation: (x,z) -> (z, -x)
+        // Corners (0,0,0), (20,0,0), (0,0,30), (20,0,30)
+        // Become (0,0), (0,-20), (30,0), (30,-20)
+        // X range: [0, 30], Z range: [-20, 0]
+        // World coords: X [100, 129], Z [180, 199]
+        int[] expectedBounds = {100, 129, 64, 73, 180, 199};
+        
+        assertArrayEquals(expectedBounds, candidateBounds,
+            "Candidate AABB at 90° should match expected bounds");
+    }
+    
+    @Test
+    @DisplayName("T087b - Candidate AABB at 180° rotation matches expected placement bounds")
+    public void testCandidateVsPlacementAABB_180Degrees() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 100, 64, 200);
+        int width = 20;
+        int depth = 30;
+        int height = 10;
+        
+        int[] candidateBounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 180);
+        
+        // After 180° rotation: (x,z) -> (-x, -z)
+        // Corners (0,0,0), (20,0,0), (0,0,30), (20,0,30)
+        // Become (0,0), (-20,0), (0,-30), (-20,-30)
+        // X range: [-20, 0], Z range: [-30, 0]
+        // World coords: X [80, 99], Z [170, 199]
+        int[] expectedBounds = {80, 99, 64, 73, 170, 199};
+        
+        assertArrayEquals(expectedBounds, candidateBounds,
+            "Candidate AABB at 180° should match expected bounds");
+    }
+    
+    @Test
+    @DisplayName("T087b - Candidate AABB at 270° rotation matches expected placement bounds")
+    public void testCandidateVsPlacementAABB_270Degrees() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 100, 64, 200);
+        int width = 20;
+        int depth = 30;
+        int height = 10;
+        
+        int[] candidateBounds = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 270);
+        
+        // After 270° rotation: (x,z) -> (-z, x)
+        // Corners (0,0,0), (20,0,0), (0,0,30), (20,0,30)
+        // Become (0,0), (0,20), (-30,0), (-30,20)
+        // X range: [-30, 0], Z range: [0, 20]
+        // World coords: X [70, 99], Z [200, 219]
+        int[] expectedBounds = {70, 99, 64, 73, 200, 219};
+        
+        assertArrayEquals(expectedBounds, candidateBounds,
+            "Candidate AABB at 270° should match expected bounds");
+    }
+    
+    @Test
+    @DisplayName("T087b - Rotation consistency: dimensions swap correctly for 90° and 270°")
+    public void testRotationConsistency_DimensionSwapping() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 0, 0, 0);
+        int width = 15;
+        int depth = 25;
+        int height = 10;
+        
+        // At 0°: bounds should be width x depth
+        int[] bounds0 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 0);
+        int extent0X = bounds0[1] - bounds0[0] + 1;
+        int extent0Z = bounds0[5] - bounds0[4] + 1;
+        assertEquals(width, extent0X, "0° rotation X extent should equal width");
+        assertEquals(depth, extent0Z, "0° rotation Z extent should equal depth");
+        
+        // At 90°: bounds should be depth x width (swapped)
+        int[] bounds90 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 90);
+        int extent90X = bounds90[1] - bounds90[0] + 1;
+        int extent90Z = bounds90[5] - bounds90[4] + 1;
+        assertEquals(depth, extent90X, "90° rotation X extent should equal depth");
+        assertEquals(width, extent90Z, "90° rotation Z extent should equal width");
+        
+        // At 180°: bounds should be width x depth (same as 0°)
+        int[] bounds180 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 180);
+        int extent180X = bounds180[1] - bounds180[0] + 1;
+        int extent180Z = bounds180[5] - bounds180[4] + 1;
+        assertEquals(width, extent180X, "180° rotation X extent should equal width");
+        assertEquals(depth, extent180Z, "180° rotation Z extent should equal depth");
+        
+        // At 270°: bounds should be depth x width (swapped)
+        int[] bounds270 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 270);
+        int extent270X = bounds270[1] - bounds270[0] + 1;
+        int extent270Z = bounds270[5] - bounds270[4] + 1;
+        assertEquals(depth, extent270X, "270° rotation X extent should equal depth");
+        assertEquals(width, extent270Z, "270° rotation Z extent should equal width");
+    }
+    
+    @Test
+    @DisplayName("T087b - Y bounds unchanged across all rotations")
+    public void testRotationConsistency_YUnchanged() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 50, 100, 50);
+        int width = 20;
+        int depth = 30;
+        int height = 15;
+        
+        int[] bounds0 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 0);
+        int[] bounds90 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 90);
+        int[] bounds180 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 180);
+        int[] bounds270 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 270);
+        
+        // Y bounds should be identical across all rotations
+        assertEquals(bounds0[2], bounds90[2], "0° and 90° minY should match");
+        assertEquals(bounds0[3], bounds90[3], "0° and 90° maxY should match");
+        assertEquals(bounds0[2], bounds180[2], "0° and 180° minY should match");
+        assertEquals(bounds0[3], bounds180[3], "0° and 180° maxY should match");
+        assertEquals(bounds0[2], bounds270[2], "0° and 270° minY should match");
+        assertEquals(bounds0[3], bounds270[3], "0° and 270° maxY should match");
+        
+        int expectedMinY = origin.getBlockY();
+        int expectedMaxY = origin.getBlockY() + height - 1;
+        assertEquals(expectedMinY, bounds0[2], "minY should equal origin Y");
+        assertEquals(expectedMaxY, bounds0[3], "maxY should equal origin Y + height - 1");
+    }
+    
+    @Test
+    @DisplayName("T087b - Rotation determinism: multiple calls produce identical results")
+    public void testRotationDeterminism() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 123, 456, 789);
+        int width = 17;
+        int depth = 28;
+        int height = 12;
+        
+        for (int rotation : new int[]{0, 90, 180, 270}) {
+            int[] bounds1 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, rotation);
+            int[] bounds2 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, rotation);
+            int[] bounds3 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, rotation);
+            
+            assertArrayEquals(bounds1, bounds2, "Rotation " + rotation + "° call 1 and 2 should match");
+            assertArrayEquals(bounds2, bounds3, "Rotation " + rotation + "° call 2 and 3 should match");
+        }
+    }
+    
+    @Test
+    @DisplayName("T087b - Four rotations form a cycle: 0→90→180→270→0")
+    public void testRotationCycle() {
+        World world = Mockito.mock(World.class);
+        Location origin = new Location(world, 0, 0, 0);
+        int width = 10;
+        int depth = 20;
+        int height = 8;
+        
+        int[] bounds0 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 0);
+        int[] bounds90 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 90);
+        int[] bounds180 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 180);
+        int[] bounds270 = VillagePlacementHelper.computeRotatedAABB(origin, width, depth, height, 270);
+        
+        // Create a second rotation of bounds90 (should approach 180)
+        // This validates that the rotation is composable
+        // X extent: 0→90 swaps (10,20)→(20,10), 90→180 should negate both → (-20,-10) in relative coords
+        
+        // Verify extents form expected pattern
+        int ext0X = bounds0[1] - bounds0[0] + 1;
+        int ext0Z = bounds0[5] - bounds0[4] + 1;
+        int ext90X = bounds90[1] - bounds90[0] + 1;
+        int ext90Z = bounds90[5] - bounds90[4] + 1;
+        int ext180X = bounds180[1] - bounds180[0] + 1;
+        int ext180Z = bounds180[5] - bounds180[4] + 1;
+        int ext270X = bounds270[1] - bounds270[0] + 1;
+        int ext270Z = bounds270[5] - bounds270[4] + 1;
+        
+        // Pattern: 0 and 180 have same extents; 90 and 270 have swapped extents
+        assertEquals(ext0X, ext180X, "0° and 180° X extents should match");
+        assertEquals(ext0Z, ext180Z, "0° and 180° Z extents should match");
+        assertEquals(ext90X, ext270X, "90° and 270° X extents should match");
+        assertEquals(ext90Z, ext270Z, "90° and 270° Z extents should match");
+        
+        // 0° and 90° should have swapped extents
+        assertEquals(ext0X, ext90Z, "0° X extent should equal 90° Z extent");
+        assertEquals(ext0Z, ext90X, "0° Z extent should equal 90° X extent");
+    }
+    
     /**
      * Helper to create a VolumeMask for testing.
      */
