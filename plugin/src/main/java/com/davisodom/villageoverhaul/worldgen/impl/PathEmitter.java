@@ -1,6 +1,7 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.model.VolumeMask;
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -34,6 +35,26 @@ import java.util.logging.Logger;
 public class PathEmitter {
     
     private static final Logger LOGGER = Logger.getLogger(PathEmitter.class.getName());
+
+    private static final Set<Material> PATH_SURFACE_WHITELIST = new HashSet<>();
+    static {
+        addMaterials(PATH_SURFACE_WHITELIST,
+                "GRASS_BLOCK",
+                "DIRT",
+                "COARSE_DIRT",
+                "ROOTED_DIRT",
+                "STONE",
+                "COBBLESTONE",
+                "ANDESITE",
+                "DIORITE",
+                "GRANITE",
+                "SAND",
+                "RED_SAND",
+                "GRAVEL",
+                "SNOW",
+                "SNOW_BLOCK",
+                "DIRT_PATH");
+    }
     
     /**
      * Place path blocks in the world with culture-specific materials.
@@ -65,6 +86,8 @@ public class PathEmitter {
         int blocksPlaced = 0;
         int skippedMask = 0;
         int skippedSupport = 0;
+        int skippedVegetationNodes = 0;
+        int unsupportedSurfaceNodes = 0;
         int skippedChunk = 0;
         List<Block> successfullyPlacedBlocks = new ArrayList<>();
         Set<Block> expectedBlocks = new HashSet<>();
@@ -116,14 +139,52 @@ public class PathEmitter {
                 groundY = heightmapY;
             }
 
-            if (!shouldBypassSupportChecks()) {
-                int supportedY = findSupportedGroundY(world, x, z, groundY, heightmapY);
-                if (supportedY == Integer.MIN_VALUE) {
+            boolean vegetationFound = false;
+            boolean unsupportedFound = false;
+            boolean supportMissing = false;
+            Integer selectedY = null;
+
+            int[] candidates = buildSurfaceCandidates(groundY, heightmapY);
+            for (int candidateY : candidates) {
+                Block surface = world.getBlockAt(x, candidateY, z);
+
+                if (isVegetation(surface)) {
+                    vegetationFound = true;
+                    continue;
+                }
+
+                if (!isWhitelistedSurface(surface.getType())) {
+                    unsupportedFound = true;
+                    continue;
+                }
+
+                if (!shouldBypassSupportChecks() && !isSupported(world, x, candidateY, z)) {
+                    supportMissing = true;
+                    continue;
+                }
+
+                selectedY = candidateY;
+                break;
+            }
+
+            if (selectedY == null) {
+                if (vegetationFound) {
+                    skippedVegetationNodes++;
+                    continue;
+                }
+                if (unsupportedFound) {
+                    unsupportedSurfaceNodes++;
+                    continue;
+                }
+                if (supportMissing) {
                     skippedSupport++;
                     continue;
                 }
-                groundY = supportedY;
+                unsupportedSurfaceNodes++;
+                continue;
             }
+
+            groundY = selectedY;
 
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {
@@ -165,7 +226,10 @@ public class PathEmitter {
         }
 
         LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, verified=%d, skipped(mask)=%d, skipped(noSupport)=%d, skipped(unloaded)=%d, culture=%s, material=%s",
-                blocksPlaced, verifiedBlocks, skippedMask, skippedSupport, skippedChunk, cultureId, pathMaterial));
+            blocksPlaced, verifiedBlocks, skippedMask, skippedSupport, skippedChunk, cultureId, pathMaterial));
+
+        LOGGER.info(String.format("[PATH][EMIT][DIAG] skippedVegetationNodes=%d unsupportedSurfaceNodes=%d",
+            skippedVegetationNodes, unsupportedSurfaceNodes));
 
         return blocksPlaced;
     }
@@ -330,6 +394,35 @@ public class PathEmitter {
 
     private boolean shouldBypassSupportChecks() {
         return Boolean.getBoolean("vo.test.bypassPathSupport");
+    }
+
+    private static void addMaterials(Set<Material> target, String... names) {
+        for (String name : names) {
+            Material material = Material.matchMaterial(name);
+            if (material != null) {
+                target.add(material);
+            }
+        }
+    }
+
+    private boolean isWhitelistedSurface(Material material) {
+        return PATH_SURFACE_WHITELIST.contains(material);
+    }
+
+    private boolean isVegetation(Block block) {
+        return TerrainClassifier.classify(block) == TerrainClassifier.Classification.VEGETATION;
+    }
+
+    private int[] buildSurfaceCandidates(int groundY, Integer heightmapY) {
+        if (heightmapY == null) {
+            return new int[] { groundY, groundY - 1, groundY + 1 };
+        }
+
+        if (heightmapY == groundY) {
+            return new int[] { groundY, groundY - 1, groundY + 1 };
+        }
+
+        return new int[] { groundY, groundY - 1, groundY + 1, heightmapY, heightmapY - 1, heightmapY + 1 };
     }
 
     /**

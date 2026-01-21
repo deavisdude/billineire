@@ -5,6 +5,7 @@ import com.davisodom.villageoverhaul.model.VolumeMask;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.worldgen.PathService;
 import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
+import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 import java.util.OptionalInt;
 import org.bukkit.Location;
@@ -50,6 +51,26 @@ public class PathServiceImpl implements PathService {
     
     // Path network cache (villageId -> PathNetwork)
     private final Map<UUID, PathNetwork> pathNetworks = new HashMap<>();
+
+    private static final Set<Material> PATH_SURFACE_WHITELIST = new HashSet<>();
+    static {
+        addMaterials(PATH_SURFACE_WHITELIST,
+                "GRASS_BLOCK",
+                "DIRT",
+                "COARSE_DIRT",
+                "ROOTED_DIRT",
+                "STONE",
+                "COBBLESTONE",
+                "ANDESITE",
+                "DIORITE",
+                "GRANITE",
+                "SAND",
+                "RED_SAND",
+                "GRAVEL",
+                "SNOW",
+                "SNOW_BLOCK",
+                "DIRT_PATH");
+    }
     
     // R005: VillageMetadataStore for accessing VolumeMasks
     private final VillageMetadataStore metadataStore;
@@ -359,6 +380,14 @@ public class PathServiceImpl implements PathService {
         
         Material typeAt = blockAt.getType();
         Material typeBelow = blockBelow.getType();
+
+        if (isVegetation(blockAt) || isVegetation(blockBelow)) {
+            return OBSTACLE_COST;
+        }
+
+        if (!isWhitelistedSurface(typeBelow)) {
+            return OBSTACLE_COST;
+        }
         
         // Water penalty applies if walking through water OR walking on top of water surface
         boolean hasWater = (typeAt == Material.WATER || typeAt == Material.LAVA || 
@@ -375,6 +404,23 @@ public class PathServiceImpl implements PathService {
         } else {
             return OBSTACLE_COST; // Too steep
         }
+    }
+
+    private static void addMaterials(Set<Material> target, String... names) {
+        for (String name : names) {
+            Material material = Material.matchMaterial(name);
+            if (material != null) {
+                target.add(material);
+            }
+        }
+    }
+
+    private boolean isVegetation(Block block) {
+        return TerrainClassifier.classify(block) == TerrainClassifier.Classification.VEGETATION;
+    }
+
+    private boolean isWhitelistedSurface(Material material) {
+        return PATH_SURFACE_WHITELIST.contains(material);
     }
     
 

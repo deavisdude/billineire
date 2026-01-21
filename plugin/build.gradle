@@ -110,7 +110,7 @@ test {
         exceptionFormat "full"
     }
     // Increase heap to avoid OOM in MockBukkit-heavy test suites
-    maxHeapSize = "1g"
+    maxHeapSize = "2g"
     finalizedBy jacocoTestReport
 }
 

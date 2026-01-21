@@ -1588,7 +1588,7 @@ Notes:
     - Entrances verified and persisted; rejected entrances counted and appear in diagnostics.
   - **IMPLEMENTED** (2026-01-20): Hardened SurfaceSolver walkable checks, added entrance validation against expanded VolumeMask, and logged entrance rejection diagnostics.
 
-- [ ] T052b [P1] PathEmitter Support & Vegetation Exclusion
+- [X] T052b [P1] PathEmitter Support & Vegetation Exclusion
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java
   - Description: Enforce surface whitelist (grass/dirt/stone/sand/gravel/snow); refuse slab/stair emission when support missing; skip/reroute nodes on vegetation. Track `skippedVegetationNodes` and `unsupportedSurfaceNodes`.
   - Acceptance:
