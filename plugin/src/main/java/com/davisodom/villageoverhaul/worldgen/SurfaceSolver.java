@@ -62,19 +62,32 @@ public class SurfaceSolver {
         int g = getSurfaceHeight(x, z);
         
         // G(x,z) is the solid surface block. Walkable is usually G+1.
-        int candidateY = g + 1;
-        
-        // Verify candidate is not inside any mask
-        if (isInAnyMask(x, candidateY, z)) {
-            return OptionalInt.empty();
+        // Validate candidate positions within {G-1..G+1} and never return a Y inside any VolumeMask.
+        int[] candidates = new int[] { g + 1, g, g - 1 };
+        int maxHeight = world.getMaxHeight();
+        int minHeight = world.getMinHeight();
+        if (maxHeight <= minHeight) {
+            maxHeight = 320;
+            minHeight = -64;
         }
-        
-        // Also check if G itself is inside a mask (shouldn't be by definition of G, but good to be safe)
-        // Actually, G is the first solid block NOT inside a mask.
-        // So G is safe.
-        
-        // We return G+1 as the walkable surface.
-        return OptionalInt.of(candidateY);
+        if (maxHeight <= minHeight) {
+            maxHeight = 320;
+            minHeight = -64;
+        }
+
+        for (int candidateY : candidates) {
+            if (candidateY < minHeight || candidateY > maxHeight) {
+                continue;
+            }
+            if (isInAnyMask(x, candidateY, z) || isInAnyMask(x, candidateY - 1, z)) {
+                continue;
+            }
+            if (isWalkableAt(x, candidateY, z)) {
+                return OptionalInt.of(candidateY);
+            }
+        }
+
+        return OptionalInt.empty();
     }
     
     /**
@@ -127,6 +140,37 @@ public class SurfaceSolver {
         
         // Fallback to min height if nothing found
         return world.getMinHeight();
+    }
+
+    private boolean isWalkableAt(int x, int y, int z) {
+        if (y <= world.getMinHeight()) {
+            return false;
+        }
+
+        Block standing = world.getBlockAt(x, y, z);
+        if (standing == null) {
+            return false;
+        }
+        Material standingType = standing.getType();
+        if (standingType.isSolid() || isVegetation(standingType) || isFrozenWater(standingType)
+                || standingType == Material.WATER || standingType == Material.LAVA) {
+            return false;
+        }
+
+        Block ground = world.getBlockAt(x, y - 1, z);
+        if (ground == null) {
+            return false;
+        }
+        Material groundType = ground.getType();
+        if (!groundType.isSolid()) {
+            return false;
+        }
+        if (isVegetation(groundType) || isFrozenWater(groundType)
+                || groundType == Material.WATER || groundType == Material.LAVA) {
+            return false;
+        }
+
+        return true;
     }
     
     private boolean isVegetation(Material type) {

@@ -159,4 +159,50 @@ public class StructureServiceImplTest {
 
     // Chunk readiness behavior is exercised indirectly by higher-level placement flows
     // Tests that require WorldEdit internals are avoided here to keep tests lightweight
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt rejects entrance when projected target is blocked")
+    public void testEntranceRejectionIncrementsDiagnostics() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 200, originY = 70, originZ = 300;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        // Prepare flat ground around origin so site validation passes
+        for (int x = -20; x <= 20; x++) {
+            for (int z = -20; z <= 20; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.STONE);
+                fake.setBlockType(originX + x, originY, originZ + z, Material.AIR);
+            }
+        }
+
+        // With rotation override = 0, small house entrance anchor is at offset (4,1,0) facing (0,0,-1)
+        int doorX = originX + 4;
+        int doorY = originY + 1;
+        int doorZ = originZ + 0;
+        int targetX = doorX + (0 * 3); // faceX = 0
+        int targetZ = doorZ + (-1 * 3); // faceZ = -1, projection=3
+        int targetY = doorY;
+
+        // Place a blocking wall at the projected entrance point so it cannot snap to a walkable surface
+        fake.setBlockType(targetX, targetY, targetZ, Material.STONE);
+        fake.setBlockType(targetX, targetY - 1, targetZ, Material.STONE);
+
+        java.util.Map<String, Integer> diagnostics = new HashMap<>();
+        java.util.UUID villageId = java.util.UUID.randomUUID();
+
+        // Force rotation 0 for determinism by passing rotationOverride
+        java.util.Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 12345L, villageId, null, 0, diagnostics, 0);
+
+        assertFalse(receipt.isPresent(), "Placement should be rejected when entrance cannot snap to walkable ground");
+        assertTrue(diagnostics.getOrDefault("entranceRejects", 0) > 0,
+                "Diagnostics should report entranceRejects when entrance validation fails");
+    }
 }

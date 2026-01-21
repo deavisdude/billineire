@@ -45,6 +45,10 @@ public class StructureServiceImpl implements StructureService {
     
     // Maximum distance to search for alternative placement
     private static final int MAX_SEARCH_RADIUS = 32;
+
+    // Entrance validation buffer around structure bounds
+    private static final int ENTRANCE_BUFFER = 2;
+    private static final int ENTRANCE_PROJECTION = 3;
     
     // Loaded structure templates (structureId -> StructureTemplate)
     private final Map<String, StructureTemplate> loadedStructures = new HashMap<>();
@@ -295,7 +299,7 @@ public class StructureServiceImpl implements StructureService {
         // Single placement attempt (no re-seating, no collision check for legacy path)
         // Pass 0 for minBuildingSpacing since existingMasks is null anyway
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-            template, world, origin, seed, null, 0, rotationDegrees, null);
+            template, world, origin, seed, null, 0, rotationDegrees, null, null);
         
         if (actualLocation.isPresent()) {
             PlacementResult result = new PlacementResult(actualLocation.get(), rotationDegrees);
@@ -349,7 +353,7 @@ public class StructureServiceImpl implements StructureService {
         // VillagePlacementServiceImpl handles site search and candidate selection
         // This method only validates and places at the given origin
         Optional<Location> actualLocation = attemptSinglePlacementAndGetLocation(
-            template, world, origin, seed, existingMasks, minBuildingSpacing, rotationDegrees, attemptDiagnostics);
+            template, world, origin, seed, existingMasks, minBuildingSpacing, rotationDegrees, villageId, attemptDiagnostics);
         
         if (!actualLocation.isPresent()) {
             LOGGER.warning(String.format("[STRUCT] Abort: structure='%s', seed=%d, reason=site_validation_failed",
@@ -379,7 +383,18 @@ public class StructureServiceImpl implements StructureService {
         // Calculate entrance location
         // R003: Transform anchor via T and snap to adjacent walkable ground outside AABB+buffer
         // Pass bounds so calculateEntranceLocation can use SurfaceSolver to find natural ground
-        Location entranceLoc = calculateEntranceLocation(world, placedOrigin, template, rotationDegrees, bounds, villageId);
+        EntranceValidationResult entranceValidation = resolveEntranceLocation(
+            world, placedOrigin, template, rotationDegrees, bounds, villageId);
+        if (!entranceValidation.isValid()) {
+            LOGGER.warning(String.format(
+                "[STRUCT][ENTRANCE-ERROR] Entrance validation failed after placement for '%s' at %s reason=%s target=(%d,%d,%d)",
+                template.id, formatLocation(placedOrigin), entranceValidation.getReason(),
+                entranceValidation.getTargetX(), entranceValidation.getTargetY(), entranceValidation.getTargetZ()));
+            if (attemptDiagnostics != null) {
+                attemptDiagnostics.merge("entranceRejects", 1, Integer::sum);
+            }
+        }
+        Location entranceLoc = entranceValidation.getLocation();
         
         // Calculate effective dimensions after rotation
         int effectiveWidth, effectiveDepth;
@@ -455,7 +470,7 @@ public class StructureServiceImpl implements StructureService {
             StructureTemplate template, World world, Location origin, long seed,
             java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> existingMasks,
             int minBuildingSpacing,
-            int rotationDegrees, java.util.Map<String, Integer> attemptDiagnostics) {
+            int rotationDegrees, UUID villageId, java.util.Map<String, Integer> attemptDiagnostics) {
         // Single placement attempt - no re-seating loop
         // Candidate search is handled by VillagePlacementServiceImpl
         LOGGER.info(String.format("[STRUCT] Placement attempt: structure='%s', location=%s, seed=%d",
@@ -564,6 +579,21 @@ public class StructureServiceImpl implements StructureService {
             LOGGER.info("[STRUCT] DIAGNOSTIC: No collision detected - site is clear");
         } else {
             LOGGER.info("[STRUCT] DIAGNOSTIC: No existing masks to check collision against (first structure)");
+        }
+
+        if (villageId != null) {
+            EntranceValidationResult entranceValidation = resolveEntranceLocation(
+                world, origin, template, rotationDegrees, bounds, villageId);
+            if (!entranceValidation.isValid()) {
+                LOGGER.info(String.format(
+                    "[STRUCT][ENTRANCE-REJECT] structure='%s' origin=%s reason=%s target=(%d,%d,%d)",
+                    template.id, formatLocation(origin), entranceValidation.getReason(),
+                    entranceValidation.getTargetX(), entranceValidation.getTargetY(), entranceValidation.getTargetZ()));
+                if (attemptDiagnostics != null) {
+                    attemptDiagnostics.merge("entranceRejects", 1, Integer::sum);
+                }
+                return Optional.empty();
+            }
         }
         
         // T051: Use TerraformingPlan with deferred commits to prevent orphaned terraforming pads
@@ -1846,14 +1876,60 @@ public class StructureServiceImpl implements StructureService {
         // Vector pointing OUT of the entrance
         BlockVector3 entranceFacing;
     }
+
+    private static final class EntranceValidationResult {
+        private final boolean valid;
+        private final Location location;
+        private final String reason;
+        private final int targetX;
+        private final int targetY;
+        private final int targetZ;
+
+        private EntranceValidationResult(boolean valid, Location location, String reason,
+                                         int targetX, int targetY, int targetZ) {
+            this.valid = valid;
+            this.location = location;
+            this.reason = reason;
+            this.targetX = targetX;
+            this.targetY = targetY;
+            this.targetZ = targetZ;
+        }
+
+        private boolean isValid() {
+            return valid;
+        }
+
+        private Location getLocation() {
+            return location;
+        }
+
+        private String getReason() {
+            return reason;
+        }
+
+        private int getTargetX() {
+            return targetX;
+        }
+
+        private int getTargetY() {
+            return targetY;
+        }
+
+        private int getTargetZ() {
+            return targetZ;
+        }
+    }
     
     /**
      * Calculate the world location for the structure entrance.
      * Transforms the relative anchor and snaps to ground outside the structure.
      */
-    private Location calculateEntranceLocation(World world, Location origin, StructureTemplate template, int rotation, int[] bounds, UUID villageId) {
+    private EntranceValidationResult resolveEntranceLocation(World world, Location origin, StructureTemplate template,
+                                                            int rotation, int[] bounds, UUID villageId) {
         BlockVector3 offset = template.entranceOffset;
         BlockVector3 facing = template.entranceFacing;
+
+        int effectiveRotation = template.clipboard != null ? rotation : 0;
         
         // Rotate offset and facing
         int offX = offset.getX();
@@ -1867,7 +1943,7 @@ public class StructureServiceImpl implements StructureService {
         int rotOffX = offX, rotOffZ = offZ;
         int rotFaceX = faceX, rotFaceZ = faceZ;
         
-        switch (rotation) {
+        switch (effectiveRotation) {
             case 90:
                 rotOffX = -offZ;
                 rotOffZ = offX;
@@ -1895,32 +1971,95 @@ public class StructureServiceImpl implements StructureService {
         
         // Project outwards to be safe from buffer
         // Buffer is 2, so we need to be at least 3 blocks away from the face
-        int targetX = doorX + (rotFaceX * 3);
-        int targetZ = doorZ + (rotFaceZ * 3);
+        int targetX = doorX + (rotFaceX * ENTRANCE_PROJECTION);
+        int targetZ = doorZ + (rotFaceZ * ENTRANCE_PROJECTION);
         
-        // R003: Use SurfaceSolver to find ground level OUTSIDE the structure
-        // Create temporary VolumeMask for this structure
-        com.davisodom.villageoverhaul.model.VolumeMask tempMask = 
+        // R003/T051b: Use SurfaceSolver to find ground level OUTSIDE the expanded structure bounds
+        if (villageId == null) {
+            int fallbackY = origin.getBlockY();
+            Location fallback = new Location(world, targetX, fallbackY, targetZ);
+            return new EntranceValidationResult(true, fallback, "villageId_missing", targetX, fallbackY, targetZ);
+        }
+
+        com.davisodom.villageoverhaul.model.VolumeMask tempMask =
             new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
                 .structureId(template.id)
                 .villageId(villageId)
                 .bounds(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5])
                 .build();
-        
-        // Create SurfaceSolver with this mask (so it ignores structure blocks)
-        java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> masks = 
-            java.util.Collections.singletonList(tempMask);
-        com.davisodom.villageoverhaul.worldgen.SurfaceSolver solver = 
+
+        com.davisodom.villageoverhaul.model.VolumeMask expandedMask = tempMask.expand(ENTRANCE_BUFFER);
+
+        java.util.List<com.davisodom.villageoverhaul.model.VolumeMask> masks =
+            java.util.Collections.singletonList(expandedMask);
+        com.davisodom.villageoverhaul.worldgen.SurfaceSolver solver =
             new com.davisodom.villageoverhaul.worldgen.SurfaceSolver(world, masks);
-        
-        // Find walkable ground at target (ignoring structure blocks)
-        int targetY = solver.getSurfaceHeight(targetX, targetZ) + 1; // +1 for walking surface
-        
-        Location entranceLoc = new Location(world, targetX, targetY, targetZ);
-        LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",
-                template.id, formatLocation(entranceLoc), rotation, offset, facing));
-        
-        return entranceLoc;
+
+        java.util.OptionalInt walkableY = solver.nearestWalkable(targetX, targetZ, doorY);
+        if (walkableY.isPresent()) {
+            int targetY = walkableY.getAsInt();
+            String reason = validateEntranceSurface(world, expandedMask, targetX, targetY, targetZ);
+            if (reason == null) {
+                Location entranceLoc = new Location(world, targetX, targetY, targetZ);
+                LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",
+                        template.id, formatLocation(entranceLoc), effectiveRotation, offset, facing));
+                return new EntranceValidationResult(true, entranceLoc, "ok", targetX, targetY, targetZ);
+            }
+        }
+
+        int fallbackY = origin.getBlockY();
+        String fallbackReason = validateEntranceSurface(world, expandedMask, targetX, fallbackY, targetZ);
+        if (fallbackReason == null) {
+            Location entranceLoc = new Location(world, targetX, fallbackY, targetZ);
+            LOGGER.info(String.format("[STRUCT][ENTRANCE] Calculated entrance for '%s' at %s (rotation=%d°, offset=%s, facing=%s)",
+                    template.id, formatLocation(entranceLoc), effectiveRotation, offset, facing));
+            return new EntranceValidationResult(true, entranceLoc, "fallback_origin", targetX, fallbackY, targetZ);
+        }
+
+        Location fallback = new Location(world, targetX, fallbackY, targetZ);
+        return new EntranceValidationResult(false, fallback, "no_walkable_surface", targetX, fallbackY, targetZ);
+    }
+
+    private String validateEntranceSurface(World world, com.davisodom.villageoverhaul.model.VolumeMask expandedMask,
+                                           int x, int y, int z) {
+        if (expandedMask != null && expandedMask.contains(x, y, z)) {
+            return "inside_expanded_mask";
+        }
+
+        Material standType = world.getBlockAt(x, y, z).getType();
+        if (standType.isSolid() || isVegetationMaterial(standType) || isFrozenWater(standType)
+                || standType == Material.WATER || standType == Material.LAVA) {
+            return String.format("blocked_space:%s", standType);
+        }
+
+        Material groundType = world.getBlockAt(x, y - 1, z).getType();
+        if (!groundType.isSolid() || isVegetationMaterial(groundType) || isFrozenWater(groundType)
+                || groundType == Material.WATER || groundType == Material.LAVA) {
+            return String.format("unsupported_ground:%s", groundType);
+        }
+
+        return null;
+    }
+
+    private boolean isVegetationMaterial(Material type) {
+        String name = type.name();
+        return name.contains("LEAVES") ||
+            name.endsWith("_LOG") ||
+            name.endsWith("_STEM") ||
+            (name.contains("GRASS") && type != Material.GRASS_BLOCK) ||
+            name.contains("FERN") ||
+            type == Material.VINE ||
+            type == Material.SUNFLOWER ||
+            type == Material.LILAC ||
+            type == Material.ROSE_BUSH ||
+            type == Material.PEONY;
+    }
+
+    private boolean isFrozenWater(Material type) {
+        return type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
     }
     
     /**

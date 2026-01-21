@@ -1581,11 +1581,12 @@ Notes:
   - Acceptance:
     - Collision checks use a single consistent strategy and documentation reflects the choice.
 
-- [ ] T051b [P1] SurfaceSolver / Entrance Validation Hardening
+- [X] T051b [P1] SurfaceSolver / Entrance Validation Hardening
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java
   - Description: Ensure SurfaceSolver.nearestWalkable never returns a y inside any VolumeMask; add entrance validation that rejects entrances that cannot snap to a solid natural ground outside expanded VolumeMask. Log rejection reason.
   - Acceptance:
     - Entrances verified and persisted; rejected entrances counted and appear in diagnostics.
+  - **IMPLEMENTED** (2026-01-20): Hardened SurfaceSolver walkable checks, added entrance validation against expanded VolumeMask, and logged entrance rejection diagnostics.
 
 - [ ] T052b [P1] PathEmitter Support & Vegetation Exclusion
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java
