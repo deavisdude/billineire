@@ -147,7 +147,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
      */
     public VillagePlacementServiceImpl(Plugin plugin, VillageMetadataStore metadataStore, CultureService cultureService) {
         this.structureService = new StructureServiceImpl(plugin.getDataFolder());
-        this.pathService = new PathServiceImpl(metadataStore);
+        this.pathService = createPathService(metadataStore, plugin);
         this.pathEmitter = new PathEmitter();
         this.metadataStore = metadataStore;
         this.cultureService = cultureService;
@@ -204,6 +204,20 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         this.villagersPerStructure = villagersPerStructure;
         this.customVillagerService = customVillagerService;
         this.villagerAppearanceAdapter = villagerAppearanceAdapter;
+    }
+
+    private static PathService createPathService(VillageMetadataStore metadataStore, Plugin plugin) {
+        if (plugin instanceof VillageOverhaulPlugin voPlugin) {
+            PathServiceImpl.PlannerSettings settings = new PathServiceImpl.PlannerSettings(
+                voPlugin.getPathMaxNodesExplored(),
+                voPlugin.getPathPlannerConcurrencyCap(),
+                voPlugin.getPathNodeCapRetryMaxAttempts(),
+                voPlugin.getPathNodeCapBackoffBaseMs(),
+                voPlugin.getPathNodeCapBackoffMaxMs()
+            );
+            return new PathServiceImpl(metadataStore, settings);
+        }
+        return new PathServiceImpl(metadataStore);
     }
     
     @Override

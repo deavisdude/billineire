@@ -49,6 +49,28 @@ worldgen:
     # Higher = more thorough placement, but more blocking per structure
     # Range: 50-500 (default: 100)
     placementTimeBudgetMs: 500
+
+  # Pathfinding planner resilience (T053)
+  path:
+    # Maximum A* nodes explored before retrying or failing
+    # Default: 15000
+    maxNodesExplored: 15000
+
+    # Maximum concurrent path planners
+    # Default: 3
+    plannerConcurrencyCap: 3
+
+    # Number of retry attempts after node-cap hits
+    # Default: 2 (total attempts = 3)
+    nodeCapRetryMaxAttempts: 2
+
+    # Base backoff (ms) between retries when node-cap is hit
+    # Default: 50
+    nodeCapBackoffBaseMs: 50
+
+    # Maximum backoff (ms) between retries
+    # Default: 200
+    nodeCapBackoffMaxMs: 200
         
   # Allow fallback marker pillar placement when zero-placement occurs
   # Default: false (zero-placement is treated as a failure and no pillar is placed)

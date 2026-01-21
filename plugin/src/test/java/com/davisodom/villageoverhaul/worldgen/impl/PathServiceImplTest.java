@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 
 import java.util.*;
 
@@ -155,6 +156,125 @@ public class PathServiceImplTest {
         // main should be connected to both buildings
         assertTrue(network.areConnected(main, b1));
         assertTrue(network.areConnected(main, b2));
+    }
+
+    @Test
+    @DisplayName("A* node cap triggers retries and logs diagnostics")
+    public void testNodeCapRetriesAndBackoff() throws Exception {
+        // Create flat ground across a wide area
+        makeFlatGround(0, 300, 0, 300, 64);
+
+        // Register a village with distant buildings
+        UUID villageId = UUID.randomUUID();
+        Location main = new Location(world, 50, 64, 50);
+        Location far = new Location(world, 250, 64, 250);
+        List<Location> buildings = Arrays.asList(main, far);
+        store.registerVillage(villageId, "roman", main, 424242L);
+
+        // Add a large blocking VolumeMask to force A* to explore many nodes
+        com.davisodom.villageoverhaul.model.VolumeMask blocker = new com.davisodom.villageoverhaul.model.VolumeMask.Builder()
+                .structureId("blocker")
+                .villageId(villageId)
+                .bounds(100, 200, 0, 256, 100, 200)
+                .build();
+        store.addVolumeMask(villageId, blocker);
+
+        // Create a PathServiceImpl with a very low node cap to force node-cap hits
+        PathServiceImpl.PlannerSettings settings = new PathServiceImpl.PlannerSettings(
+                10, // maxNodesExplored (tiny)
+                1,  // plannerConcurrencyCap
+                2,  // nodeCapRetryMaxAttempts
+                5,  // nodeCapBackoffBaseMs
+                20  // nodeCapBackoffMaxMs
+        );
+        PathServiceImpl localService = new PathServiceImpl(store, settings);
+
+        // Capture logs to assert node-cap diagnostics emitted
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(PathServiceImpl.class.getName());
+        List<java.util.logging.LogRecord> records = new ArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) { records.add(record); }
+            @Override public void flush() {}
+            @Override public void close() throws SecurityException {}
+        };
+        logger.addHandler(handler);
+
+        boolean ok = localService.generatePathNetwork(world, villageId, Arrays.asList(main, far), main, 123L);
+
+        // Expect path generation to fail due to node cap (no network built)
+        assertFalse(ok, "Expected path generation to fail when node cap is small and area is blocked");
+
+        // Dump captured log records for debugging
+        System.out.println("--- Captured PathServiceImpl logs ---");
+        for (java.util.logging.LogRecord r : records) {
+            System.out.println(r.getLevel() + " - " + r.getMessage());
+        }
+        System.out.println("--- end logs ---");
+
+        // Verify that node cap warnings were logged at least once
+        boolean sawNodeCap = records.stream().anyMatch(r -> r.getMessage() != null && r.getMessage().toLowerCase().contains("node cap"));
+        assertTrue(sawNodeCap, "Expected node cap diagnostic to be logged");
+
+        // Clean up handler
+        logger.removeHandler(handler);
+    }
+
+    @Test
+    @DisplayName("Direct A* invocation hits node cap with synthetic neighbor expansion")
+    public void testFindPathAStar_nodeCapDirect() throws Exception {
+        PathServiceImpl.PlannerSettings settings = new PathServiceImpl.PlannerSettings(
+                1000, // large cap so default method won't abort prematurely
+                1,
+                0,
+                0,
+                0
+        );
+
+        PathServiceImpl impl = new PathServiceImpl(store, settings);
+
+        // Create a synthetic WalkableGraph that returns many neighbors to force node exploration
+        WalkableGraph fakeGraph = new WalkableGraph(null, Collections.emptyList(), 0) {
+            @Override
+            public List<int[]> getNeighbors(int x, int y, int z) {
+                List<int[]> nb = new ArrayList<>();
+                // Generate a dense fan of neighbors to force broad exploration
+                for (int dx = 1; dx <= 40; dx++) {
+                    for (int dz = -5; dz <= 5; dz++) {
+                        nb.add(new int[]{x + dx, y, z + dz});
+                    }
+                }
+                return nb;
+            }
+        };
+
+        // Make a wide flat ground so neighbors are walkable
+        makeFlatGround(-50, 400, -20, 20, 64);
+        Location start = new Location(world, 0, 64, 0);
+        Location end = new Location(world, 300, 64, 0);
+
+        // Use reflection to call private findPathAStar
+        java.lang.reflect.Method m = PathServiceImpl.class.getDeclaredMethod("findPathAStar", World.class, Location.class, Location.class, WalkableGraph.class, int.class);
+        m.setAccessible(true);
+
+        Object result = m.invoke(impl, world, start, end, fakeGraph, 5);
+        // Inspect PathSearchResult.nodeCapHit via reflection
+        java.lang.reflect.Field nodeCapHitField = result.getClass().getDeclaredField("nodeCapHit");
+        java.lang.reflect.Field nodesExploredField = result.getClass().getDeclaredField("nodesExplored");
+        java.lang.reflect.Field nodeCapField = result.getClass().getDeclaredField("nodeCap");
+        java.lang.reflect.Field failureReasonField = result.getClass().getDeclaredField("failureReason");
+        nodeCapHitField.setAccessible(true);
+        nodesExploredField.setAccessible(true);
+        nodeCapField.setAccessible(true);
+        failureReasonField.setAccessible(true);
+
+        boolean nodeCapHit = nodeCapHitField.getBoolean(result);
+        int nodesExplored = nodesExploredField.getInt(result);
+        int nodeCap = nodeCapField.getInt(result);
+        String failureReason = (String) failureReasonField.get(result);
+
+        System.out.println(String.format("PathSearchResult: nodeCapHit=%b nodesExplored=%d nodeCap=%d reason=%s", nodeCapHit, nodesExplored, nodeCap, failureReason));
+
+        assertTrue(nodeCapHit, "Expected nodeCapHit to be true for synthetic dense neighbor graph");
     }
 
     @Test

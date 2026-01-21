@@ -8,6 +8,9 @@ import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 import java.util.OptionalInt;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -41,7 +44,13 @@ public class PathServiceImpl implements PathService {
     private static final int MAX_SEARCH_DISTANCE = 200;
     
     // Maximum nodes to explore in A* search
-    private static final int MAX_NODES_EXPLORED = 10000;
+    private static final int DEFAULT_MAX_NODES_EXPLORED = 15000;
+
+    // Path planner defaults
+    private static final int DEFAULT_PLANNER_CONCURRENCY_CAP = 3;
+    private static final int DEFAULT_NODE_CAP_RETRY_MAX_ATTEMPTS = 2;
+    private static final int DEFAULT_NODE_CAP_BACKOFF_BASE_MS = 50;
+    private static final int DEFAULT_NODE_CAP_BACKOFF_MAX_MS = 200;
     
     // Terrain cost multipliers
     private static final double FLAT_COST = 1.0;
@@ -78,8 +87,26 @@ public class PathServiceImpl implements PathService {
     // Current village context for pathfinding
     private UUID currentVillageContext = null;
 
+    private final int maxNodesExplored;
+    private final int plannerConcurrencyCap;
+    private final int nodeCapRetryMaxAttempts;
+    private final int nodeCapBackoffBaseMs;
+    private final int nodeCapBackoffMaxMs;
+    private final PlannerLimiter plannerLimiter;
+
     public PathServiceImpl(VillageMetadataStore metadataStore) {
+        this(metadataStore, PlannerSettings.defaults());
+    }
+
+    public PathServiceImpl(VillageMetadataStore metadataStore, PlannerSettings plannerSettings) {
         this.metadataStore = metadataStore;
+        PlannerSettings settings = plannerSettings != null ? plannerSettings : PlannerSettings.defaults();
+        this.maxNodesExplored = Math.max(1000, settings.maxNodesExplored);
+        this.plannerConcurrencyCap = Math.max(1, settings.plannerConcurrencyCap);
+        this.nodeCapRetryMaxAttempts = Math.max(0, settings.nodeCapRetryMaxAttempts);
+        this.nodeCapBackoffBaseMs = Math.max(0, settings.nodeCapBackoffBaseMs);
+        this.nodeCapBackoffMaxMs = Math.max(this.nodeCapBackoffBaseMs, settings.nodeCapBackoffMaxMs);
+        this.plannerLimiter = new PlannerLimiter(this.plannerConcurrencyCap);
     }
     
     @Override
@@ -183,7 +210,11 @@ public class PathServiceImpl implements PathService {
             return Optional.empty();
         }
 
-        List<PathNode> path = findPathAStar(world, snappedStart, snappedEnd, graph);
+        PathSearchResult pathResult = findPathAStarWithRetries(world, snappedStart, snappedEnd, graph, seed);
+        if (!pathResult.isSuccess()) {
+            return Optional.empty();
+        }
+        List<PathNode> path = pathResult.path;
         
         if (path == null || path.isEmpty()) {
             return Optional.empty();
@@ -235,14 +266,54 @@ public class PathServiceImpl implements PathService {
      * Returns list of path nodes from start to end, or null if no path found.
      */
     private List<PathNode> findPathAStar(World world, Location start, Location end) {
-        return findPathAStar(world, start, end, null);
+        return findPathAStar(world, start, end, null, maxNodesExplored).path;
     }
     
     /**
      * A* pathfinding on 2D heightmap with optional village context for building avoidance.
      * Returns list of path nodes from start to end, or null if no path found.
      */
-    private List<PathNode> findPathAStar(World world, Location start, Location end, WalkableGraph graph) {
+    private PathSearchResult findPathAStarWithRetries(World world, Location start, Location end,
+                                                      WalkableGraph graph, long seed) {
+        int attempt = 0;
+        int maxAttempts = Math.max(0, nodeCapRetryMaxAttempts);
+
+        while (true) {
+            int nodeCap = computeNodeCapForAttempt(attempt);
+            try (PlannerPermit permit = plannerLimiter.acquire()) {
+                PathSearchResult result = findPathAStar(world, start, end, graph, nodeCap);
+                if (result.isSuccess()) {
+                    return result;
+                }
+
+                if (!result.nodeCapHit || attempt >= maxAttempts) {
+                    if (result.nodeCapHit) {
+                        LOGGER.warning(String.format(
+                            "[PATH] A* node cap exhausted: explored=%d cap=%d attempts=%d/%d start=%s end=%s",
+                            result.nodesExplored, nodeCap, attempt + 1, maxAttempts + 1,
+                            formatLocation(start), formatLocation(end)));
+                    }
+                    return result;
+                }
+
+                int backoffMs = computeBackoffMs(attempt);
+                LOGGER.warning(String.format(
+                    "[PATH] A* node cap hit: explored=%d cap=%d attempt=%d/%d backoffMs=%d start=%s end=%s",
+                    result.nodesExplored, nodeCap, attempt + 1, maxAttempts + 1, backoffMs,
+                    formatLocation(start), formatLocation(end)));
+                applyBackoff(backoffMs);
+            }
+
+            attempt++;
+        }
+    }
+
+    /**
+     * A* pathfinding on 2D heightmap with optional village context for building avoidance.
+     * Returns search result containing path or failure reason.
+     */
+    private PathSearchResult findPathAStar(World world, Location start, Location end, WalkableGraph graph,
+                                           int nodeCap) {
         // T026d: Deterministic tie-breaking for equal fScore values
         PriorityQueue<PathNode> openSet = new PriorityQueue<>(
             Comparator.comparingDouble((PathNode n) -> n.fScore)
@@ -273,7 +344,7 @@ public class PathServiceImpl implements PathService {
         int buildingTilesAvoided = 0; // T021b: count building footprint obstacles
         double maxTerrainCostSeen = 0.0;
         
-        while (!openSet.isEmpty() && nodesExplored < MAX_NODES_EXPLORED) {
+        while (!openSet.isEmpty() && nodesExplored < nodeCap) {
             PathNode current = openSet.poll();
             nodesExplored++;
             
@@ -284,7 +355,7 @@ public class PathServiceImpl implements PathService {
                     nodesExplored, buildingTilesAvoided, pathHash));
                 // Also emit deterministic hash in canonical format for harness parsing
                 LOGGER.info(String.format("[PATH] Determinism hash: %s (nodes=%d)", pathHash, path.size()));
-                return path;
+                return PathSearchResult.success(path, nodesExplored, nodeCap);
             }
             
             closedSet.add(current.key());
@@ -296,7 +367,7 @@ public class PathServiceImpl implements PathService {
             } else {
                 // R009: Require WalkableGraph for pathfinding
                 LOGGER.warning("[PATH] A* FAILED: No WalkableGraph available (legacy fallback removed)");
-                return null;
+                return PathSearchResult.failure(nodesExplored, nodeCap, false, "no_walkable_graph");
             }
             
             for (int[] n : neighbors) {
@@ -341,10 +412,14 @@ public class PathServiceImpl implements PathService {
                 }
             }
         }
-        
-        LOGGER.warning(String.format("[PATH] A* failed: explored=%d/%d",
-                nodesExplored, MAX_NODES_EXPLORED));
-        return null;
+
+        if (!openSet.isEmpty() && nodesExplored >= nodeCap) {
+            return PathSearchResult.failure(nodesExplored, nodeCap, true, "node_cap");
+        }
+
+        LOGGER.warning(String.format("[PATH] A* failed: explored=%d/%d reason=no_path",
+            nodesExplored, nodeCap));
+        return PathSearchResult.failure(nodesExplored, nodeCap, false, "no_path");
     }
     
     /**
@@ -368,6 +443,38 @@ public class PathServiceImpl implements PathService {
         
         Collections.reverse(path);
         return path;
+    }
+
+    private int computeNodeCapForAttempt(int attempt) {
+        if (attempt <= 0) {
+            return maxNodesExplored;
+        }
+        int growth = Math.max(1, maxNodesExplored / 2);
+        long candidate = (long) maxNodesExplored + (long) growth * attempt;
+        return (int) Math.min(Integer.MAX_VALUE, candidate);
+    }
+
+    private int computeBackoffMs(int attempt) {
+        if (nodeCapBackoffBaseMs <= 0) {
+            return 0;
+        }
+        int backoff = nodeCapBackoffBaseMs * (attempt + 1);
+        return Math.min(backoff, nodeCapBackoffMaxMs);
+    }
+
+    private void applyBackoff(int backoffMs) {
+        if (backoffMs <= 0) {
+            return;
+        }
+        if (Bukkit.isPrimaryThread()) {
+            LOGGER.info(String.format("[PATH] Backoff skipped on main thread (requestedMs=%d)", backoffMs));
+            return;
+        }
+        try {
+            Thread.sleep(backoffMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
     
     @Override
@@ -638,6 +745,121 @@ public class PathServiceImpl implements PathService {
         
         String key() {
             return x + "," + y + "," + z;
+        }
+    }
+
+    public static final class PlannerSettings {
+        private final int maxNodesExplored;
+        private final int plannerConcurrencyCap;
+        private final int nodeCapRetryMaxAttempts;
+        private final int nodeCapBackoffBaseMs;
+        private final int nodeCapBackoffMaxMs;
+
+        public PlannerSettings(int maxNodesExplored, int plannerConcurrencyCap, int nodeCapRetryMaxAttempts,
+                               int nodeCapBackoffBaseMs, int nodeCapBackoffMaxMs) {
+            this.maxNodesExplored = maxNodesExplored;
+            this.plannerConcurrencyCap = plannerConcurrencyCap;
+            this.nodeCapRetryMaxAttempts = nodeCapRetryMaxAttempts;
+            this.nodeCapBackoffBaseMs = nodeCapBackoffBaseMs;
+            this.nodeCapBackoffMaxMs = nodeCapBackoffMaxMs;
+        }
+
+        public static PlannerSettings defaults() {
+            return new PlannerSettings(
+                DEFAULT_MAX_NODES_EXPLORED,
+                DEFAULT_PLANNER_CONCURRENCY_CAP,
+                DEFAULT_NODE_CAP_RETRY_MAX_ATTEMPTS,
+                DEFAULT_NODE_CAP_BACKOFF_BASE_MS,
+                DEFAULT_NODE_CAP_BACKOFF_MAX_MS
+            );
+        }
+    }
+
+    private static final class PlannerLimiter {
+        private final Semaphore semaphore;
+        private final int cap;
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger queued = new AtomicInteger();
+
+        private PlannerLimiter(int cap) {
+            this.cap = cap;
+            this.semaphore = new Semaphore(cap, true);
+        }
+
+        private PlannerPermit acquire() {
+            boolean acquired = semaphore.tryAcquire();
+            if (!acquired) {
+                int queuedNow = queued.incrementAndGet();
+                LOGGER.info(String.format("[PATH] planner queued: active=%d queued=%d cap=%d",
+                    active.get(), queuedNow, cap));
+                try {
+                    semaphore.acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return new PlannerPermit(this, false);
+                } finally {
+                    queued.decrementAndGet();
+                }
+            }
+
+            int activeNow = active.incrementAndGet();
+            LOGGER.info(String.format("[PATH] planners: active=%d queued=%d cap=%d",
+                activeNow, queued.get(), cap));
+            return new PlannerPermit(this, true);
+        }
+
+        private void release() {
+            semaphore.release();
+            int activeNow = active.decrementAndGet();
+            LOGGER.info(String.format("[PATH] planners: active=%d queued=%d cap=%d",
+                activeNow, queued.get(), cap));
+        }
+    }
+
+    private static final class PlannerPermit implements AutoCloseable {
+        private final PlannerLimiter limiter;
+        private final boolean acquired;
+
+        private PlannerPermit(PlannerLimiter limiter, boolean acquired) {
+            this.limiter = limiter;
+            this.acquired = acquired;
+        }
+
+        @Override
+        public void close() {
+            if (acquired) {
+                limiter.release();
+            }
+        }
+    }
+
+    private static final class PathSearchResult {
+        private final List<PathNode> path;
+        private final int nodesExplored;
+        private final int nodeCap;
+        private final boolean nodeCapHit;
+        private final String failureReason;
+
+        private PathSearchResult(List<PathNode> path, int nodesExplored, int nodeCap,
+                                 boolean nodeCapHit, String failureReason) {
+            this.path = path;
+            this.nodesExplored = nodesExplored;
+            this.nodeCap = nodeCap;
+            this.nodeCapHit = nodeCapHit;
+            this.failureReason = failureReason;
+        }
+
+        private static PathSearchResult success(List<PathNode> path, int nodesExplored, int nodeCap) {
+            return new PathSearchResult(path, nodesExplored, nodeCap, false, null);
+        }
+
+        private static PathSearchResult failure(int nodesExplored, int nodeCap, boolean nodeCapHit,
+                                                String failureReason) {
+            return new PathSearchResult(Collections.emptyList(), nodesExplored, nodeCap, nodeCapHit, failureReason);
+        }
+
+        private boolean isSuccess() {
+            return path != null && !path.isEmpty() && failureReason == null;
         }
     }
 }

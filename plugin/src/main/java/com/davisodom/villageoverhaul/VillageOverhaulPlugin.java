@@ -52,6 +52,11 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     private boolean allowMarkerFallback;
     private double villagersPerStructure;
     private double villagerCapacityPerStructure;
+    private int pathMaxNodesExplored;
+    private int pathPlannerConcurrencyCap;
+    private int pathNodeCapRetryMaxAttempts;
+    private int pathNodeCapBackoffBaseMs;
+    private int pathNodeCapBackoffMaxMs;
     
     // Core services (Phase 2)
     private TickEngine tickEngine;
@@ -94,12 +99,22 @@ public class VillageOverhaulPlugin extends JavaPlugin {
         allowMarkerFallback = getConfig().getBoolean("worldgen.allowMarkerFallback", false);
         villagersPerStructure = getConfig().getDouble("worldgen.spawn.villagersPerStructure", 2.0);
         villagerCapacityPerStructure = getConfig().getDouble("npc.villagerCapacityPerStructure", 2.0);
+        pathMaxNodesExplored = getConfig().getInt("worldgen.path.maxNodesExplored", 15000);
+        pathPlannerConcurrencyCap = getConfig().getInt("worldgen.path.plannerConcurrencyCap", 3);
+        pathNodeCapRetryMaxAttempts = getConfig().getInt("worldgen.path.nodeCapRetryMaxAttempts", 2);
+        pathNodeCapBackoffBaseMs = getConfig().getInt("worldgen.path.nodeCapBackoffBaseMs", 50);
+        pathNodeCapBackoffMaxMs = getConfig().getInt("worldgen.path.nodeCapBackoffMaxMs", 200);
         
         // Configure debug logging if enabled
         getConfig().addDefault("debug.verbose", false);
         getConfig().addDefault("worldgen.allowMarkerFallback", false);
         getConfig().addDefault("worldgen.spawn.villagersPerStructure", 2.0);
         getConfig().addDefault("npc.villagerCapacityPerStructure", 2.0);
+        getConfig().addDefault("worldgen.path.maxNodesExplored", 15000);
+        getConfig().addDefault("worldgen.path.plannerConcurrencyCap", 3);
+        getConfig().addDefault("worldgen.path.nodeCapRetryMaxAttempts", 2);
+        getConfig().addDefault("worldgen.path.nodeCapBackoffBaseMs", 50);
+        getConfig().addDefault("worldgen.path.nodeCapBackoffMaxMs", 200);
         saveConfig();
         
         boolean verboseLogging = getConfig().getBoolean("debug.verbose", false);
@@ -113,7 +128,12 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
                 ", minVillageSpacing=" + minVillageSpacing +
                 ", spawnProximityRadius=" + spawnProximityRadius + ", allowMarkerFallback=" + allowMarkerFallback +
                 ", villagersPerStructure=" + villagersPerStructure +
-                ", villagerCapacityPerStructure=" + villagerCapacityPerStructure + ")");
+                ", villagerCapacityPerStructure=" + villagerCapacityPerStructure +
+                ", pathMaxNodesExplored=" + pathMaxNodesExplored +
+                ", pathPlannerConcurrencyCap=" + pathPlannerConcurrencyCap +
+                ", pathNodeCapRetryMaxAttempts=" + pathNodeCapRetryMaxAttempts +
+                ", pathNodeCapBackoffBaseMs=" + pathNodeCapBackoffBaseMs +
+                ", pathNodeCapBackoffMaxMs=" + pathNodeCapBackoffMaxMs + ")");
         
         // Initialize foundational services
         initializeFoundation();
@@ -393,5 +413,25 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
 
     public double getVillagersPerStructure() {
         return villagersPerStructure;
+    }
+
+    public int getPathMaxNodesExplored() {
+        return pathMaxNodesExplored;
+    }
+
+    public int getPathPlannerConcurrencyCap() {
+        return pathPlannerConcurrencyCap;
+    }
+
+    public int getPathNodeCapRetryMaxAttempts() {
+        return pathNodeCapRetryMaxAttempts;
+    }
+
+    public int getPathNodeCapBackoffBaseMs() {
+        return pathNodeCapBackoffBaseMs;
+    }
+
+    public int getPathNodeCapBackoffMaxMs() {
+        return pathNodeCapBackoffMaxMs;
     }
 }

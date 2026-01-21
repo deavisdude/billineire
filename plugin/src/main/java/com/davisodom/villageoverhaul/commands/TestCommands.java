@@ -330,8 +330,16 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
         
         // Initialize PathService (use plugin's instance if available, or create one)
+        com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl.PlannerSettings plannerSettings =
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl.PlannerSettings(
+                plugin.getPathMaxNodesExplored(),
+                plugin.getPathPlannerConcurrencyCap(),
+                plugin.getPathNodeCapRetryMaxAttempts(),
+                plugin.getPathNodeCapBackoffBaseMs(),
+                plugin.getPathNodeCapBackoffMaxMs()
+            );
         com.davisodom.villageoverhaul.worldgen.PathService pathService = 
-            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl(metadataStore);
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl(metadataStore, plannerSettings);
         
         // Log path generation start
         plugin.getLogger().info(String.format(

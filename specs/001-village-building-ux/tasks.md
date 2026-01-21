@@ -1595,7 +1595,7 @@ Notes:
     - Zero floating slabs in smoke tests; logs include skipped/reroute counts.
   - Playtest note (2026-01-19): Spawn village had no paths; logs show repeated `[PATH] A* failed: explored=1/10000` with only trees/grass nearby.
 
-- [ ] T053 [P1] Planner Resilience: Node Cap, Concurrency & Backoff
+- [X] T053 [P1] Planner Resilience: Node Cap, Concurrency & Backoff
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServicePlanner.java (or equivalent)
   - Description: Increase/confirm MAX_NODES_EXPLORED and add capped planner concurrency (configurable, default=3). On node-cap hit, emit clear failure log and enqueue a deterministic retry with backoff up to N times.
   - Acceptance:
