@@ -89,6 +89,36 @@ public class SurfaceSolver {
 
         return OptionalInt.empty();
     }
+
+    /**
+     * Check whether a rotated footprint and its immediate sampling margin are ready
+     * without triggering synchronous chunk loads.
+     */
+    public static boolean isFootprintReady(World world, int[] bounds) {
+        if (bounds == null || bounds.length < 6) {
+            return false;
+        }
+
+        int minX = bounds[0] - 1;
+        int maxX = bounds[1] + 1;
+        int minZ = bounds[4] - 1;
+        int maxZ = bounds[5] + 1;
+
+        int minChunkX = minX >> 4;
+        int maxChunkX = maxX >> 4;
+        int minChunkZ = minZ >> 4;
+        int maxChunkZ = maxZ >> 4;
+
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
     
     /**
      * Calculate G(x,z): the Y level of the highest solid block that is NOT inside any VolumeMask.

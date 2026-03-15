@@ -18,6 +18,7 @@ public class PlacementReceipt {
     private final String structureId;
     private final UUID villageId;
     private final String worldName;
+    private final UUID worldUuid;
     
     // Exact AABB in world coordinates (inclusive bounds)
     private final int minX;
@@ -89,6 +90,7 @@ public class PlacementReceipt {
         this.structureId = Objects.requireNonNull(builder.structureId, "structureId cannot be null");
         this.villageId = Objects.requireNonNull(builder.villageId, "villageId cannot be null");
         this.worldName = Objects.requireNonNull(builder.worldName, "worldName cannot be null");
+        this.worldUuid = builder.worldUuid;
         
         this.minX = builder.minX;
         this.maxX = builder.maxX;
@@ -133,6 +135,7 @@ public class PlacementReceipt {
     public String getStructureId() { return structureId; }
     public UUID getVillageId() { return villageId; }
     public String getWorldName() { return worldName; }
+    public UUID getWorldUuid() { return worldUuid; }
     
     public int getMinX() { return minX; }
     public int getMaxX() { return maxX; }
@@ -196,6 +199,7 @@ public class PlacementReceipt {
         private String structureId;
         private UUID villageId;
         private String worldName;
+        private UUID worldUuid;
         
         private int minX;
         private int maxX;
@@ -232,11 +236,17 @@ public class PlacementReceipt {
         
         public Builder world(World world) {
             this.worldName = world.getName();
+            this.worldUuid = world.getUID();
             return this;
         }
         
         public Builder worldName(String worldName) {
             this.worldName = worldName;
+            return this;
+        }
+
+        public Builder worldUuid(UUID worldUuid) {
+            this.worldUuid = worldUuid;
             return this;
         }
         

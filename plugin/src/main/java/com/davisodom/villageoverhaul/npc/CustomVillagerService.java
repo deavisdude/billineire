@@ -10,7 +10,6 @@ import org.bukkit.plugin.Plugin;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 /**
  * Service for managing Custom Villager lifecycle and village binding
@@ -126,6 +125,7 @@ public class CustomVillagerService {
                 cultureId,
                 professionId,
                 location.getWorld().getName(),
+                location.getWorld().getUID().toString(),
                 location.getBlockX(),
                 location.getBlockY(),
                 location.getBlockZ(),
@@ -311,7 +311,14 @@ public class CustomVillagerService {
                 continue;
             }
 
-            org.bukkit.World world = plugin.getServer().getWorld(record.worldName);
+            org.bukkit.World world = null;
+            if (record.worldUuid != null && !record.worldUuid.isBlank()) {
+                try {
+                    world = plugin.getServer().getWorld(UUID.fromString(record.worldUuid));
+                } catch (IllegalArgumentException ignored) {
+                    world = null;
+                }
+            }
             if (world == null) {
                 continue;
             }
@@ -346,6 +353,7 @@ public class CustomVillagerService {
                     record.cultureId,
                     record.professionId,
                     record.worldName,
+                    record.worldUuid,
                     record.x,
                     record.y,
                     record.z,

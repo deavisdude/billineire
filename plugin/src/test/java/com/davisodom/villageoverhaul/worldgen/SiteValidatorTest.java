@@ -418,4 +418,25 @@ class SiteValidatorTest {
             assertFalse(r.passed, "Site with 40% blocked should fail (over 30% tolerance); result=" + r);
         }
     }
+
+    @Test
+    @DisplayName("validateSite reports cache hits while sampling neighboring columns")
+    void testValidateSite_reportsCacheHits() {
+        Location origin = new Location(world, 1400, 64, 1400);
+        int width = 4;
+        int depth = 4;
+
+        for (int x = origin.getBlockX() - 2; x <= origin.getBlockX() + width + 1; x++) {
+            for (int z = origin.getBlockZ() - 2; z <= origin.getBlockZ() + depth + 1; z++) {
+                fake.setBlockType(x, origin.getBlockY() - 1, z, Material.DIRT);
+            }
+        }
+
+        SiteValidator.ValidationResult result = sut.validateSite(world, origin, width, depth, 4);
+
+        assertTrue(result.passed, "Expected flat terrain validation to pass");
+        assertNotNull(result.getCacheStats(), "Validation should expose cache stats");
+        assertTrue(result.getCacheStats().getGroundHits() > 0,
+            "Neighbor sampling should reuse cached ground levels within a validation pass");
+    }
 }

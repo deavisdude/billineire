@@ -84,13 +84,12 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
         
         player.sendMessage(Component.text("═══════════ Villages ═══════════", NamedTextColor.GOLD));
         
-        String playerWorld = player.getWorld().getName();
         int playerX = player.getLocation().getBlockX();
         int playerZ = player.getLocation().getBlockZ();
         
         // Filter to same world and sort by distance
         villages.stream()
-                .filter(v -> v.getWorldName().equals(playerWorld))
+            .filter(v -> v.matchesWorld(player.getWorld()))
                 .sorted((v1, v2) -> {
                     int d1 = getDistance2D(playerX, playerZ, v1.getX(), v1.getZ());
                     int d2 = getDistance2D(playerX, playerZ, v2.getX(), v2.getZ());
@@ -116,7 +115,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
     }
     
     private boolean handleLocateVillage(Player player, String villageName) {
-        Village village = findVillageByName(villageName, player.getWorld().getName());
+        Village village = findVillageByName(villageName, player.getWorld());
         
         if (village == null) {
             player.sendMessage(Component.text("Village not found: " + villageName, NamedTextColor.RED));
@@ -157,12 +156,11 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
     }
     
     private boolean handleNearestVillage(Player player) {
-        String playerWorld = player.getWorld().getName();
         int playerX = player.getLocation().getBlockX();
         int playerZ = player.getLocation().getBlockZ();
         
         Village nearest = villageService.getAllVillages().stream()
-                .filter(v -> v.getWorldName().equals(playerWorld))
+            .filter(v -> v.matchesWorld(player.getWorld()))
                 .min((v1, v2) -> {
                     int d1 = getDistance2D(playerX, playerZ, v1.getX(), v1.getZ());
                     int d2 = getDistance2D(playerX, playerZ, v2.getX(), v2.getZ());
@@ -178,9 +176,9 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
         return handleLocateVillage(player, nearest.getName());
     }
     
-    private Village findVillageByName(String name, String worldName) {
+    private Village findVillageByName(String name, org.bukkit.World world) {
         return villageService.getAllVillages().stream()
-                .filter(v -> v.getWorldName().equals(worldName))
+                .filter(v -> v.matchesWorld(world))
                 .filter(v -> v.getName().equalsIgnoreCase(name))
                 .findFirst()
                 .orElse(null);
@@ -238,7 +236,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
                 if (sender instanceof Player) {
                     Player player = (Player) sender;
                     completions.addAll(villageService.getAllVillages().stream()
-                            .filter(v -> v.getWorldName().equals(player.getWorld().getName()))
+                            .filter(v -> v.matchesWorld(player.getWorld()))
                             .map(Village::getName)
                             .collect(Collectors.toList()));
                 }

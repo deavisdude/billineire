@@ -28,6 +28,7 @@ public class CustomVillagerServiceTest {
     private World world;
     private Entity entity;
     private Server server;
+    private UUID worldUuid;
 
     @BeforeEach
     public void setUp() {
@@ -40,7 +41,9 @@ public class CustomVillagerServiceTest {
         store = new VillageMetadataStore(plugin);
 
         world = Mockito.mock(World.class);
+        worldUuid = UUID.randomUUID();
         Mockito.when(world.getName()).thenReturn("world");
+        Mockito.when(world.getUID()).thenReturn(worldUuid);
 
         entity = Mockito.mock(Entity.class);
         UUID entityId = UUID.randomUUID();
@@ -50,6 +53,7 @@ public class CustomVillagerServiceTest {
 
         server = Mockito.mock(Server.class);
         Mockito.when(server.getWorld("world")).thenReturn(world);
+        Mockito.when(server.getWorld(worldUuid)).thenReturn(world);
         Mockito.when(plugin.getServer()).thenReturn(server);
     }
 
@@ -84,6 +88,7 @@ public class CustomVillagerServiceTest {
         assertEquals("roman", record.cultureId);
         assertEquals("merchant", record.professionId);
         assertEquals("world", record.worldName);
+        assertEquals(worldUuid.toString(), record.worldUuid);
         assertEquals(10, record.x);
         assertEquals(64, record.y);
         assertEquals(10, record.z);
@@ -103,6 +108,7 @@ public class CustomVillagerServiceTest {
             "roman",
             "blacksmith",
             "world",
+            worldUuid.toString(),
             20,
             65,
             22,

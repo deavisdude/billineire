@@ -9,6 +9,8 @@ import org.bukkit.block.Block;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -27,6 +29,7 @@ public class VillageMetadataStoreTest {
     private VillageMetadataStore store;
     private World world;
     private FakeWorld fake;
+    private UUID worldUuid;
     
     @BeforeEach
     public void setUp() {
@@ -41,7 +44,9 @@ public class VillageMetadataStoreTest {
 
         fake = new FakeWorld();
         world = fake.getWorld();
+        worldUuid = UUID.randomUUID();
         org.mockito.Mockito.when(world.getName()).thenReturn("world");
+        org.mockito.Mockito.when(world.getUID()).thenReturn(worldUuid);
         // Provide simple Block mocks for getBlockAt used by tests
         // FakeWorld covers getBlockAt and highest-block behavior used by this store's tests
     }
@@ -272,6 +277,61 @@ public class VillageMetadataStoreTest {
         store.addPlacementReceipt(villageId, receipt);
 
         assertTrue(artifact.exists(), "Artifact should exist after addPlacementReceipt()");
+    }
+
+    @Test
+    public void testPersistWorldUuidForVillageAndReceipt() throws IOException {
+        UUID villageId = UUID.randomUUID();
+        Location origin = new Location(world, 600, 64, 600);
+        store.registerVillage(villageId, "test", origin, 123456L);
+
+        com.davisodom.villageoverhaul.model.PlacementReceipt receipt = new com.davisodom.villageoverhaul.model.PlacementReceipt.Builder()
+                .structureId("test")
+                .villageId(villageId)
+                .world(world)
+                .origin(600, 64, 600)
+                .rotation(0)
+                .bounds(600, 602, 64, 66, 600, 602)
+                .dimensions(3, 3, 3)
+                .entrance(601, 64, 599)
+                .foundationCorners(new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample[]{
+                        new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(600, 63, 600, org.bukkit.Material.DIRT),
+                        new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(602, 63, 600, org.bukkit.Material.DIRT),
+                        new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(602, 63, 602, org.bukkit.Material.DIRT),
+                        new com.davisodom.villageoverhaul.model.PlacementReceipt.CornerSample(600, 63, 602, org.bukkit.Material.DIRT)
+                })
+                .build();
+        store.addPlacementReceipt(villageId, receipt);
+
+        store.saveAll();
+
+        java.io.File file = new java.io.File(plugin.getDataFolder(), "villages/village_" + villageId + ".json");
+        String content = java.nio.file.Files.readString(file.toPath());
+        assertTrue(content.contains(worldUuid.toString()), "Saved village JSON should persist the world UUID");
+    }
+
+    @Test
+    public void testLoadAllSkipsVillageWhenWorldUuidDoesNotMatch() throws Exception {
+        UUID villageId = UUID.randomUUID();
+        Location origin = new Location(world, 700, 64, 700);
+        store.registerVillage(villageId, "test", origin, 98765L);
+        store.saveAll();
+
+        java.io.File file = new java.io.File(plugin.getDataFolder(), "villages/village_" + villageId + ".json");
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(file);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get("data")).put("worldUuid", UUID.randomUUID().toString());
+        mapper.writerWithDefaultPrettyPrinter().writeValue(file, root);
+
+        store.clearAll();
+
+        UUID mismatchedUuid = UUID.fromString(root.get("data").get("worldUuid").asText());
+        try (MockedStatic<org.bukkit.Bukkit> bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(() -> org.bukkit.Bukkit.getWorld(mismatchedUuid)).thenReturn(null);
+            store.loadAll();
+        }
+
+        assertTrue(store.getAllVillages().isEmpty(), "Village metadata should not load into a world with the same name but different UUID");
     }
     
     @Test

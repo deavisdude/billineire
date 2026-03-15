@@ -73,7 +73,7 @@ public class VillageMetadataStore {
      * Register a new village.
      */
     public void registerVillage(UUID villageId, String cultureId, Location origin, long seed) {
-        VillageMetadata metadata = new VillageMetadata(villageId, cultureId, origin, seed, System.currentTimeMillis());
+        VillageMetadata metadata = new VillageMetadata(villageId, cultureId, origin, seed, System.currentTimeMillis(), null);
         villages.put(villageId, metadata);
         villageBuildings.put(villageId, new ArrayList<>());
         villageVillagers.putIfAbsent(villageId, new ArrayList<>());
@@ -86,6 +86,13 @@ public class VillageMetadataStore {
             recordPlacementRejectionCounters(villageId, counters);
         } catch (Exception e) {
             logger.fine(String.format("[STRUCT][DIAG] failed to write initial placement counters for %s: %s", villageId, e.getMessage()));
+        }
+    }
+
+    public void setVillageName(UUID villageId, String villageName) {
+        VillageMetadata metadata = villages.get(villageId);
+        if (metadata != null) {
+            metadata.setVillageName(villageName);
         }
     }
     
@@ -371,7 +378,9 @@ public class VillageMetadataStore {
             VillageDataDTO dto = new VillageDataDTO();
             dto.villageId = villageId.toString();
             dto.cultureId = metadata.getCultureId();
+            dto.villageName = metadata.getVillageName();
             dto.worldName = metadata.getOrigin().getWorld().getName();
+            dto.worldUuid = metadata.getOrigin().getWorld().getUID().toString();
             dto.originX = metadata.getOrigin().getBlockX();
             dto.originY = metadata.getOrigin().getBlockY();
             dto.originZ = metadata.getOrigin().getBlockZ();
@@ -465,12 +474,9 @@ public class VillageMetadataStore {
                 if (dto == null) continue;
                 
                 UUID villageId = UUID.fromString(dto.villageId);
-                World world = Bukkit.getWorld(dto.worldName);
+                World world = resolveWorldIdentity(dto.worldName, dto.worldUuid, "village " + villageId);
                 
                 if (world == null) {
-                    logger.warning(String.format(
-                        "[STRUCT] Skipping village %s: world '%s' not loaded", 
-                        villageId, dto.worldName));
                     continue;
                 }
                 
@@ -478,7 +484,7 @@ public class VillageMetadataStore {
                 
                 // Restore village metadata
                 VillageMetadata metadata = new VillageMetadata(
-                    villageId, dto.cultureId, origin, dto.seed, dto.createdTimestamp);
+                    villageId, dto.cultureId, origin, dto.seed, dto.createdTimestamp, dto.villageName);
                 
                 // Restore border
                 if (dto.border != null) {
@@ -585,15 +591,17 @@ public class VillageMetadataStore {
         private final Location origin;
         private final long seed;
         private final long createdTimestamp;
+        private String villageName;
         private final VillageBorder border;
         private long lastBorderUpdateTick;
         
-        public VillageMetadata(UUID villageId, String cultureId, Location origin, long seed, long createdTimestamp) {
+        public VillageMetadata(UUID villageId, String cultureId, Location origin, long seed, long createdTimestamp, String villageName) {
             this.villageId = villageId;
             this.cultureId = cultureId;
             this.origin = origin;
             this.seed = seed;
             this.createdTimestamp = createdTimestamp;
+            this.villageName = villageName;
             // Initialize border at origin with minimal size (will expand with buildings)
             this.border = new VillageBorder(origin.getBlockX(), origin.getBlockX(), 
                                            origin.getBlockZ(), origin.getBlockZ());
@@ -605,8 +613,13 @@ public class VillageMetadataStore {
         public Location getOrigin() { return origin; }
         public long getSeed() { return seed; }
         public long getCreatedTimestamp() { return createdTimestamp; }
+        public String getVillageName() { return villageName; }
         public VillageBorder getBorder() { return border; }
         public long getLastBorderUpdateTick() { return lastBorderUpdateTick; }
+
+        public void setVillageName(String villageName) {
+            this.villageName = villageName;
+        }
         
         /**
          * Expand border to include a building's footprint.
@@ -759,6 +772,7 @@ public class VillageMetadataStore {
         dto.structureId = receipt.getStructureId();
         dto.villageId = receipt.getVillageId().toString();
         dto.worldName = receipt.getWorldName();
+        dto.worldUuid = receipt.getWorldUuid() != null ? receipt.getWorldUuid().toString() : null;
         dto.minX = receipt.getMinX();
         dto.maxX = receipt.getMaxX();
         dto.minY = receipt.getMinY();
@@ -808,6 +822,7 @@ public class VillageMetadataStore {
             .structureId(dto.structureId)
             .villageId(UUID.fromString(dto.villageId))
             .worldName(dto.worldName)
+            .worldUuid(parseWorldUuid(dto.worldUuid))
             .origin(dto.originX, dto.originY, dto.originZ)
             .rotation(dto.rotation)
             .bounds(dto.minX, dto.maxX, dto.minY, dto.maxY, dto.minZ, dto.maxZ)
@@ -874,6 +889,39 @@ public class VillageMetadataStore {
         
         return builder.build();
     }
+
+    private World resolveWorldIdentity(String worldName, String worldUuid, String contextLabel) {
+        UUID parsedUuid = parseWorldUuid(worldUuid);
+        if (parsedUuid == null) {
+            logger.warning(String.format("[STRUCT] Skipping %s: missing or invalid world UUID for world '%s'", contextLabel, worldName));
+            return null;
+        }
+
+        World world = Bukkit.getWorld(parsedUuid);
+        if (world == null) {
+            logger.warning(String.format("[STRUCT] Skipping %s: world UUID %s is not loaded (stored name='%s')",
+                contextLabel, parsedUuid, worldName));
+            return null;
+        }
+
+        if (worldName != null && !worldName.isBlank() && !worldName.equals(world.getName())) {
+            logger.warning(String.format("[STRUCT] World identity mismatch for %s: stored name='%s' actual name='%s' uuid=%s",
+                contextLabel, worldName, world.getName(), parsedUuid));
+        }
+
+        return world;
+    }
+
+    private UUID parseWorldUuid(String worldUuid) {
+        if (worldUuid == null || worldUuid.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(worldUuid);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
     
     /**
      * Data Transfer Objects for JSON persistence.
@@ -881,7 +929,9 @@ public class VillageMetadataStore {
     public static class VillageDataDTO {
         public String villageId;
         public String cultureId;
+        public String villageName;
         public String worldName;
+        public String worldUuid;
         public int originX;
         public int originY;
         public int originZ;
@@ -962,6 +1012,7 @@ public class VillageMetadataStore {
         public String cultureId;
         public String professionId;
         public String worldName;
+        public String worldUuid;
         public int x;
         public int y;
         public int z;
@@ -970,13 +1021,14 @@ public class VillageMetadataStore {
         public VillagerRecord() {} // For Jackson
 
         public VillagerRecord(String entityId, UUID villageId, String definitionId, String cultureId,
-                              String professionId, String worldName, int x, int y, int z, long createdTimestamp) {
+                              String professionId, String worldName, String worldUuid, int x, int y, int z, long createdTimestamp) {
             this.entityId = entityId;
             this.villageId = villageId;
             this.definitionId = definitionId;
             this.cultureId = cultureId;
             this.professionId = professionId;
             this.worldName = worldName;
+            this.worldUuid = worldUuid;
             this.x = x;
             this.y = y;
             this.z = z;
@@ -991,6 +1043,7 @@ public class VillageMetadataStore {
         public String structureId;
         public String villageId;
         public String worldName;
+        public String worldUuid;
         public int minX;
         public int maxX;
         public int minY;

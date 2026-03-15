@@ -58,6 +58,7 @@ The plugin JAR will be in `plugin/build/libs/village-overhaul-*.jar`
 - **[Compatibility Matrix](docs/compatibility-matrix.md)** - Supported server profiles and smoke tests
 - **[Cultural Review Checklist](docs/culture-review.md)** - Ensuring authentic cultural representation
 - **[Code Quality & Security Setup](docs/code-quality-security-setup.md)** - SonarQube and CodeQL configuration
+- **[Agentic Environment](docs/agentic-environment.md)** - MCP servers, CLI tooling, and autonomous playtest workflow
 
 ## 🎯 Roadmap
 

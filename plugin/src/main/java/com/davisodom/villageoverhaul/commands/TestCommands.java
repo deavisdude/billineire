@@ -155,6 +155,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         com.davisodom.villageoverhaul.villages.Village village = 
             plugin.getVillageService().createVillage(cultureId, villageName, worldName, x, y, z);
+        plugin.getMetadataStore().setVillageName(village.getId(), villageName);
         
         // Give the village some initial wealth
         village.addWealth(1000L);
@@ -358,42 +359,39 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             mainBuilding.getOrigin(), 
             village.getSeed()
         );
-        
-        if (success) {
-            sender.sendMessage("§aPath network generated successfully!");
+
+        List<List<org.bukkit.block.Block>> pathSegments = 
+            pathService.getVillagePathNetwork(villageId);
+
+        if (!pathSegments.isEmpty()) {
+            sender.sendMessage(success
+                ? "§aPath network generated successfully!"
+                : "§ePath network generated partially; emitting successful segments anyway.");
+
+            // Emit path blocks using PathEmitter
+            com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
+                new com.davisodom.villageoverhaul.worldgen.impl.PathEmitter();
             
-            // Retrieve path segments using the interface method
-            List<List<org.bukkit.block.Block>> pathSegments = 
-                pathService.getVillagePathNetwork(villageId);
+            // R008: Get volume masks for path placement checks
+            List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
             
-            if (!pathSegments.isEmpty()) {
-                // Emit path blocks using PathEmitter
-                com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
-                    new com.davisodom.villageoverhaul.worldgen.impl.PathEmitter();
-                
-                // R008: Get volume masks for path placement checks
-                List<com.davisodom.villageoverhaul.model.VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
-                
-                int totalBlocksPlaced = 0;
-                for (List<org.bukkit.block.Block> pathBlocks : pathSegments) {
-                    int blocksPlaced = pathEmitter.emitPath(
-                        world, 
-                        pathBlocks, 
-                        village.getCultureId(),
-                        masks
-                    );
-                    totalBlocksPlaced += blocksPlaced;
-                }
-                
-                sender.sendMessage(String.format("§7Path segments: %d, Blocks placed: %d", 
-                    pathSegments.size(), totalBlocksPlaced));
-                
-                plugin.getLogger().info(String.format(
-                    "[STRUCT] Path network complete for village %s: segments=%d, blocks=%d",
-                    villageId, pathSegments.size(), totalBlocksPlaced));
-            } else {
-                sender.sendMessage("§eWarning: Path network generated but no segments retrievable");
+            int totalBlocksPlaced = 0;
+            for (List<org.bukkit.block.Block> pathBlocks : pathSegments) {
+                int blocksPlaced = pathEmitter.emitPath(
+                    world, 
+                    pathBlocks, 
+                    village.getCultureId(),
+                    masks
+                );
+                totalBlocksPlaced += blocksPlaced;
             }
+            
+            sender.sendMessage(String.format("§7Path segments: %d, Blocks placed: %d", 
+                pathSegments.size(), totalBlocksPlaced));
+            
+            plugin.getLogger().info(String.format(
+                "[STRUCT] Path network %s for village %s: segments=%d, blocks=%d",
+                success ? "complete" : "partial", villageId, pathSegments.size(), totalBlocksPlaced));
         } else {
             sender.sendMessage("§cPath network generation failed");
             sender.sendMessage("§7Check logs for [STRUCT] markers with failure details");
@@ -835,6 +833,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // R011c: Categorized failure tracking
         int cornerFailures = 0;
         int perimeterFailures = 0;
+        int undersideFailures = 0;
         int outsideMaskFailures = 0;
         int pathMaskFailures = 0;
         int structuresChecked = 0;
@@ -865,6 +864,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             structuresChecked++;
             int structureCornerFailures = 0;
             int structurePerimeterFailures = 0;
+            int structureUndersideFailures = 0;
             int structureOutsideFailures = 0;
             
             // Need world to check blocks. Mask doesn't store world name, but Receipt does.
@@ -886,7 +886,6 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             };
             
             int airCorners = 0;
-            int solidCorners = 0;
             for (int[] corner : foundationCorners) {
                 totalChecks++;
                 org.bukkit.block.Block block = world.getBlockAt(corner[0], corner[1], corner[2]);
@@ -899,8 +898,6 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                         structureCornerFailures++;
                         allPass = false;
                     }
-                } else {
-                    solidCorners++;
                 }
             }
             
@@ -934,6 +931,32 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     allPass = false;
                 }
             }
+
+            if (mask.getMaxX() - mask.getMinX() >= 2 && mask.getMaxZ() - mask.getMinZ() >= 2) {
+                java.util.LinkedHashSet<String> undersidePoints = new java.util.LinkedHashSet<>();
+                int centerX = (mask.getMinX() + mask.getMaxX()) / 2;
+                int centerZ = (mask.getMinZ() + mask.getMaxZ()) / 2;
+                undersidePoints.add(centerX + ":" + centerZ);
+                undersidePoints.add((mask.getMinX() + 1) + ":" + (mask.getMinZ() + 1));
+                undersidePoints.add((mask.getMaxX() - 1) + ":" + (mask.getMinZ() + 1));
+                undersidePoints.add((mask.getMinX() + 1) + ":" + (mask.getMaxZ() - 1));
+                undersidePoints.add((mask.getMaxX() - 1) + ":" + (mask.getMaxZ() - 1));
+
+                for (String point : undersidePoints) {
+                    String[] coords = point.split(":");
+                    int x = Integer.parseInt(coords[0]);
+                    int z = Integer.parseInt(coords[1]);
+                    totalChecks++;
+                    org.bukkit.block.Block below = world.getBlockAt(x, mask.getMinY() - 1, z);
+                    org.bukkit.Material belowType = below.getType();
+                    if (belowType.isAir() || belowType == org.bukkit.Material.WATER || belowType == org.bukkit.Material.LAVA) {
+                        failedChecks++;
+                        undersideFailures++;
+                        structureUndersideFailures++;
+                        allPass = false;
+                    }
+                }
+            }
             
             // 2. Sample 32 points JUST OUTSIDE
             for (int i = 0; i < 32; i++) {
@@ -962,14 +985,15 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             String structureStatus;
             if (structureCornerFailures > 1) {
                 structureStatus = "§cFAIL";
-            } else if (structureCornerFailures == 1 || structurePerimeterFailures > 0 || structureOutsideFailures > 0) {
+            } else if (structureCornerFailures == 1 || structurePerimeterFailures > 0 || structureUndersideFailures > 0 || structureOutsideFailures > 0) {
                 structureStatus = structureCornerFailures == 1 ? "§eWARN" : "§cFAIL";
             } else {
                 structureStatus = "§aPASS";
             }
             
-            sender.sendMessage(String.format("  Structure %s: %s (corners=%d, perimeter=%d, outside=%d)",
-                mask.getStructureId(), structureStatus, structureCornerFailures, structurePerimeterFailures, structureOutsideFailures));
+            sender.sendMessage(String.format("  Structure %s: %s (corners=%d, perimeter=%d, underside=%d, outside=%d)",
+                mask.getStructureId(), structureStatus, structureCornerFailures, structurePerimeterFailures,
+                structureUndersideFailures, structureOutsideFailures));
         }
         
         // 3. Check paths against masks (R010)
@@ -997,8 +1021,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             sender.sendMessage(String.format("§aPASS: All persistence checks passed (%d checks, %d structures)", 
                 totalChecks, structuresChecked));
         } else {
-            sender.sendMessage(String.format("§cFAIL: %d/%d checks failed (corner=%d, perimeter=%d, outside-mask=%d, path=%d)",
-                failedChecks, totalChecks, cornerFailures, perimeterFailures, outsideMaskFailures, pathMaskFailures));
+            sender.sendMessage(String.format("§cFAIL: %d/%d checks failed (corner=%d, perimeter=%d, underside=%d, outside-mask=%d, path=%d)",
+                failedChecks, totalChecks, cornerFailures, perimeterFailures, undersideFailures, outsideMaskFailures, pathMaskFailures));
             if (cornerFailures > 0) {
                 sender.sendMessage("§7Benign edge case: Single AIR corners (1/4) show as WARN, not FAIL");
             }
@@ -1088,7 +1112,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // Use deterministic village UUID derived from seed so fixed-layout runs are repeatable
         java.util.UUID villageId = java.util.UUID.nameUUIDFromBytes(("fixed-layout-village-" + seed).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         // Load village into service using deterministic ID (avoids random UUIDs)
-        plugin.getVillageService().loadVillage(villageId, "roman", villageName, 1000L, world.getName(), baseX, baseY, baseZ);
+        plugin.getVillageService().loadVillage(villageId, "roman", villageName, 1000L, world, baseX, baseY, baseZ);
+        plugin.getMetadataStore().setVillageName(villageId, villageName);
         java.util.Optional<com.davisodom.villageoverhaul.villages.Village> villageOpt = plugin.getVillageService().getVillage(villageId);
         if (villageOpt.isEmpty()) {
             sender.sendMessage("§cFailed to create deterministic village");

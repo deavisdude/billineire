@@ -74,6 +74,17 @@ public class TerraformingPlan {
     private int trimCount = 0;
     private int gradeCount = 0;
     private int fillCount = 0;
+    private final Set<String> canopyColumns = new HashSet<>();
+
+    private static final class SurfaceColumn {
+        private final int surfaceY;
+        private final Material surfaceMaterial;
+
+        private SurfaceColumn(int surfaceY, Material surfaceMaterial) {
+            this.surfaceY = surfaceY;
+            this.surfaceMaterial = surfaceMaterial;
+        }
+    }
     
     /**
      * T058: Represents an operation that was actually applied to the world.
@@ -205,6 +216,7 @@ public class TerraformingPlan {
             throw new IllegalStateException("Plan already computed; create a new TerraformingPlan instance");
         }
         planned = true;
+        canopyColumns.clear();
         
         int footprintArea = width * depth;
         boolean isLargeStructure = footprintArea > LARGE_STRUCTURE_THRESHOLD;
@@ -273,8 +285,8 @@ public class TerraformingPlan {
         normalizeTopLayerMaterials(origin.getBlockY());
         
         int totalPlanned = trimCount + gradeCount + fillCount;
-        LOGGER.info(String.format("[STRUCT][PLAN] Plan complete: %d operations (trim=%d, grade=%d, fill=%d)",
-                totalPlanned, trimCount, gradeCount, fillCount));
+        LOGGER.info(String.format("[STRUCT][PLAN] Plan complete: %d operations (trim=%d, grade=%d, fill=%d, skippedCanopyColumns=%d)",
+            totalPlanned, trimCount, gradeCount, fillCount, canopyColumns.size()));
         
         planSucceeded = true;
         return true;
@@ -476,9 +488,9 @@ public class TerraformingPlan {
     public String getDiagnosticsSummary() {
         double skippedRatio = plannedOperations.isEmpty() ? 0.0
             : (double) skippedOpsCount / (double) plannedOperations.size();
-        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, applied=%d, skipped=%d, skippedRatio=%.2f, success=%s, committed=%s, rolledBack=%s, reason=%s}",
+        return String.format("TerraformingPlan{bounds=(%d..%d,%d..%d,%d..%d), ops=%d, trim=%d, grade=%d, fill=%d, skippedCanopyColumns=%d, applied=%d, skipped=%d, skippedRatio=%.2f, success=%s, committed=%s, rolledBack=%s, reason=%s}",
                 bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5],
-                plannedOperations.size(), trimCount, gradeCount, fillCount,
+                plannedOperations.size(), trimCount, gradeCount, fillCount, canopyColumns.size(),
             appliedOpsCount, skippedOpsCount, skippedRatio,
                 planSucceeded, committed, rolledBack, rejectionReason);
     }
@@ -528,20 +540,15 @@ public class TerraformingPlan {
             for (int z = 0; z < depth; z++) {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
-                
-                Material topMaterial = world.getBlockAt(blockX, targetY, blockZ).getType();
-                if (isTrimmableVegetation(topMaterial)) {
-                    continue;
-                }
 
-                int scanStartY = topMaterial.isAir() ? targetY - 1 : targetY;
-                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, scanStartY);
+                SurfaceColumn surface = resolveSurfaceColumn(blockX, blockZ, world.getHighestBlockYAt(blockX, blockZ));
+                int surfaceY = surface.surfaceY;
                 int yDiff = surfaceY - targetY;
                 
                 // Only fill gaps UPWARD - never dig down
                 if (yDiff < 0 && Math.abs(yDiff) <= MAX_VERTICAL_CHANGE) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
+                    Material surfaceMat = surface.surfaceMaterial;
                     
                     for (int y = surfaceY + 1; y <= targetY; y++) {
                         Block fillBlock = world.getBlockAt(blockX, y, blockZ);
@@ -593,8 +600,9 @@ public class TerraformingPlan {
             for (int z = 0; z < depth; z++) {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
-                
-                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, foundationY - 1);
+
+                SurfaceColumn surface = resolveSurfaceColumn(blockX, blockZ, foundationY - 1);
+                int surfaceY = surface.surfaceY;
                 
                 // T057e: DO NOT fill at foundationY - the structure will be placed there by WorldEdit
                 // Only fill gaps BELOW the structure's foundation level (from surfaceY+1 to foundationY-1)
@@ -603,7 +611,7 @@ public class TerraformingPlan {
                 // Fill gaps below foundation (from ground surface up to one block below structure)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
+                    Material surfaceMat = surface.surfaceMaterial;
                     
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
@@ -652,13 +660,14 @@ public class TerraformingPlan {
             for (int z = 0; z < depth; z++) {
                 int blockX = origin.getBlockX() + x;
                 int blockZ = origin.getBlockZ() + z;
-                
-                int surfaceY = findSurfaceYFromTarget(blockX, blockZ, foundationY - 1);
+
+                SurfaceColumn surface = resolveSurfaceColumn(blockX, blockZ, foundationY - 1);
+                int surfaceY = surface.surfaceY;
                 
                 // Only fill gaps below the foundation (not at foundation level)
                 if (surfaceY >= minFillY && surfaceY < foundationY - 1) {
                     // T065: Determine appropriate fill material based on surface context
-                    Material surfaceMat = findSurfaceMaterialForColumn(blockX, blockZ, surfaceY);
+                    Material surfaceMat = surface.surfaceMaterial;
                     
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(blockX, y, blockZ);
@@ -703,41 +712,11 @@ public class TerraformingPlan {
             return Material.DIRT;
         }
         
-        // For the top layer, preserve grass-family surfaces to prevent dirt scars
-        // GRASS_BLOCK -> GRASS_BLOCK (preserves the grassy appearance)
-        if (surfaceMaterial == Material.GRASS_BLOCK) {
-            return Material.GRASS_BLOCK;
-        }
         if ("GRASS".equals(surfaceMaterial.name())) {
             return Material.GRASS_BLOCK;
         }
-        
-        // PODZOL -> PODZOL (preserves taiga/mega spruce biome appearance)
-        if (surfaceMaterial == Material.PODZOL) {
-            return Material.PODZOL;
-        }
-        
-        // MYCELIUM -> MYCELIUM (preserves mushroom biome appearance)
-        if (surfaceMaterial == Material.MYCELIUM) {
-            return Material.MYCELIUM;
-        }
-        
-        // COARSE_DIRT stays COARSE_DIRT (preserves badlands/mesa appearance)
-        if (surfaceMaterial == Material.COARSE_DIRT) {
-            return Material.COARSE_DIRT;
-        }
-        
-        // Sand/red sand preservation for deserts and beaches
-        if (surfaceMaterial == Material.SAND) {
-            return Material.SAND;
-        }
-        if (surfaceMaterial == Material.RED_SAND) {
-            return Material.RED_SAND;
-        }
-        
-        // Gravel preservation
-        if (surfaceMaterial == Material.GRAVEL) {
-            return Material.GRAVEL;
+        if (isSurfaceMaterial(surfaceMaterial)) {
+            return surfaceMaterial;
         }
         
         // Default to DIRT for all other cases
@@ -962,8 +941,8 @@ public class TerraformingPlan {
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                int surfaceY = findSurfaceYFromTarget(x, z, world.getHighestBlockYAt(x, z));
-                Material surfaceMat = findSurfaceMaterialForColumn(x, z, surfaceY);
+                SurfaceColumn surface = resolveSurfaceColumn(x, z, world.getHighestBlockYAt(x, z));
+                Material surfaceMat = surface.surfaceMaterial;
                 if (surfaceMat.isSolid()) {
                     counts.merge(surfaceMat, 1, Integer::sum);
                 }
@@ -995,25 +974,54 @@ public class TerraformingPlan {
     }
 
     private int findSurfaceYFromTarget(int blockX, int blockZ, int startY) {
+        SurfaceColumn surface = resolveSurfaceColumn(blockX, blockZ, startY);
+        return surface.surfaceY;
+    }
+
+    private SurfaceColumn resolveSurfaceColumn(int blockX, int blockZ, int startY) {
         int minY = world.getMinHeight();
-        for (int y = startY; y >= minY; y--) {
+        int highestY = Math.max(startY, world.getHighestBlockYAt(blockX, blockZ));
+        Material fallback = Material.DIRT;
+
+        for (int y = highestY; y >= minY; y--) {
             Material mat = world.getBlockAt(blockX, y, blockZ).getType();
-            if (!mat.isAir() && !isWaterMaterial(mat) && !isLavaMaterial(mat)) {
-                return y;
+            if (mat.isAir()) {
+                continue;
             }
+            if (isCanopyMaterial(mat)) {
+                canopyColumns.add(blockX + ":" + blockZ);
+                continue;
+            }
+            if (!isWaterMaterial(mat) && !isLavaMaterial(mat)) {
+                return new SurfaceColumn(y, mat);
+            }
+            fallback = mat;
         }
-        return startY;
+
+        return new SurfaceColumn(startY, fallback);
     }
 
     private boolean isSurfaceMaterial(Material material) {
         return material == Material.GRASS_BLOCK
             || "GRASS".equals(material.name())
+                || material == Material.DIRT
                 || material == Material.PODZOL
                 || material == Material.MYCELIUM
                 || material == Material.SAND
                 || material == Material.RED_SAND
                 || material == Material.GRAVEL
-                || material == Material.COARSE_DIRT;
+                || material == Material.COARSE_DIRT
+                || material == Material.ROOTED_DIRT
+                || material == Material.STONE
+                || material == Material.ANDESITE
+                || material == Material.DIORITE
+                || material == Material.GRANITE
+                || material == Material.CLAY
+                || material == Material.TERRACOTTA
+                || material == Material.MUD
+                || material == Material.MOSS_BLOCK
+                || material == Material.SANDSTONE
+                || material == Material.RED_SANDSTONE;
     }
 
     private void normalizeTopLayerMaterials(int targetY) {
@@ -1039,6 +1047,10 @@ public class TerraformingPlan {
         Material fallback = Material.DIRT;
         for (int y = startY; y >= minY; y--) {
             Material mat = world.getBlockAt(blockX, y, blockZ).getType();
+            if (isCanopyMaterial(mat)) {
+                canopyColumns.add(blockX + ":" + blockZ);
+                continue;
+            }
             if (isSurfaceMaterial(mat)) {
                 return mat;
             }
@@ -1047,6 +1059,11 @@ public class TerraformingPlan {
             }
         }
         return fallback;
+    }
+
+    private boolean isCanopyMaterial(Material material) {
+        String name = material.name();
+        return name.endsWith("_LEAVES") || name.endsWith("_LOG") || name.endsWith("_STEM");
     }
 
 

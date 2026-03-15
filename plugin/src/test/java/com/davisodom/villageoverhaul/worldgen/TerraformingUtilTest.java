@@ -74,7 +74,7 @@ class TerraformingUtilTest {
 
         assertEquals(Material.DIRT, world.getBlockAt(200, 62, 300).getType());
         assertEquals(Material.DIRT, world.getBlockAt(200, 63, 300).getType());
-        assertEquals(Material.DIRT, world.getBlockAt(200, 64, 300).getType());
+        assertEquals(Material.STONE, world.getBlockAt(200, 64, 300).getType());
 
         // Ensure nothing was removed from the higher column
         assertEquals(Material.DIRT, world.getBlockAt(201, 65, 300).getType());
@@ -99,43 +99,61 @@ class TerraformingUtilTest {
         assertTrue(filled >= 2);
 
         assertEquals(Material.DIRT, world.getBlockAt(300, 64, 400).getType());
-        assertEquals(Material.DIRT, world.getBlockAt(301, 63, 400).getType());
+        assertEquals(Material.STONE, world.getBlockAt(301, 63, 400).getType());
     }
 
     @Test
-    @DisplayName("backfillFoundation fills perimeter gaps only and respects max gap")
-    void testBackfillFoundation_perimeterOnly() {
+    @DisplayName("backfillFoundation fills full footprint gaps with local surface material")
+    void testBackfillFoundation_fullFootprintUsesLocalMaterial() {
         Location origin = new Location(world, 400, 70, 500);
-        int width = 6;
-        int depth = 6;
+        int width = 4;
+        int depth = 4;
 
-        // Set natural terrain lower at peripheral columns (create gap of 2)
-        for (int x = 400; x < 406; x++) {
-            for (int z = 500; z < 506; z++) {
-                // interior keep at structure base (70)
-                if (x >= 402 && x <= 403 && z >= 502 && z <= 503) {
-                    // interior: terrain at same level
-                    fake.setBlockType(x, 70, z, Material.DIRT);
-                } else {
-                    // perimeter: terrain at 68 (gap=2)
-                    fake.setBlockType(x, 68, z, Material.STONE);
-                    fake.setBlockType(x, 69, z, Material.AIR);
-                }
+        for (int x = 400; x < 404; x++) {
+            for (int z = 500; z < 504; z++) {
+                fake.setBlockType(x, 67, z, Material.SAND);
+                fake.setBlockType(x, 68, z, Material.AIR);
+                fake.setBlockType(x, 69, z, Material.AIR);
             }
         }
 
         int filled = TerraformingUtil.backfillFoundation(world, origin, width, depth, Material.DIRT);
 
-        // Perimeter for 6x6 with 2-block-wide border: perimeter positions count = total - interior
-        int total = width * depth;
-        int interiorW = width - 4; // 2-block border each side
-        int interiorD = depth - 4;
-        int interior = Math.max(0, interiorW) * Math.max(0, interiorD);
-        int expectedPerimeter = total - interior;
+        assertEquals(width * depth * 2, filled);
+        assertEquals(Material.SAND, world.getBlockAt(401, 68, 501).getType());
+        assertEquals(Material.SAND, world.getBlockAt(401, 69, 501).getType());
+    }
 
-        assertEquals(expectedPerimeter * 1 /* at least one block per perimeter position */, filled);
+    @Test
+    @DisplayName("fillGaps ignores canopy blocks and preserves sand top layers")
+    void testFillGaps_ignoresCanopyAndPreservesSurfaceMaterial() {
+        Location origin = new Location(world, 450, 64, 550);
 
-        // Verify that interior blocks were not filled (interior stays as DIRT at base)
-        assertEquals(Material.DIRT, world.getBlockAt(402, 70, 502).getType());
+        fake.setBlockType(450, 62, 550, Material.SAND);
+        fake.setBlockType(450, 63, 550, Material.AIR);
+        fake.setBlockType(450, 64, 550, Material.AIR);
+        fake.setBlockType(450, 66, 550, Material.OAK_LEAVES);
+
+        int filled = TerraformingUtil.fillGaps(world, origin, 1, 1, 64);
+
+        assertTrue(filled >= 2);
+        assertEquals(Material.SAND, world.getBlockAt(450, 63, 550).getType());
+        assertEquals(Material.SAND, world.getBlockAt(450, 64, 550).getType());
+    }
+
+    @Test
+    @DisplayName("backfillFoundation fills an empty base layer when structure blocks sit directly above it")
+    void testBackfillFoundation_fillsEmptyBaseLayerUnderStructure() {
+        Location origin = new Location(world, 500, 70, 600);
+
+        fake.setBlockType(500, 69, 600, Material.STONE);
+        fake.setBlockType(500, 70, 600, Material.AIR);
+        fake.setBlockType(500, 71, 600, Material.STONE_BRICKS);
+
+        int filled = TerraformingUtil.backfillFoundation(world, origin, 1, 1, Material.DIRT);
+
+        assertTrue(filled >= 1, "Expected the empty base layer to be filled");
+        assertEquals(Material.STONE, world.getBlockAt(500, 70, 600).getType(),
+            "Base layer should inherit the predominant local support material when the schematic leaves it empty");
     }
 }

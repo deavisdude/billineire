@@ -4,7 +4,9 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Terrain classification API for village placement.
@@ -110,6 +112,65 @@ public class TerrainClassifier {
      * Terraforming can handle significant height differences.
      */
     private static final int MAX_SLOPE_DELTA = 10;
+
+    /**
+     * Reusable terrain sampling cache for repeated validation over nearby coordinates.
+     */
+    public static final class SamplingCache {
+        private final Map<GroundKey, Integer> groundLevelCache = new ConcurrentHashMap<>();
+        private final Map<ClassificationKey, Classification> classificationCache = new ConcurrentHashMap<>();
+        private int groundHits = 0;
+        private int groundMisses = 0;
+        private int classificationHits = 0;
+        private int classificationMisses = 0;
+
+        public CacheStats snapshotStats() {
+            return new CacheStats(groundHits, groundMisses, classificationHits, classificationMisses);
+        }
+
+        public void invalidateFootprint(World world, int minX, int maxX, int minZ, int maxZ, int padding) {
+            int clearMinX = minX - padding;
+            int clearMaxX = maxX + padding;
+            int clearMinZ = minZ - padding;
+            int clearMaxZ = maxZ + padding;
+
+            groundLevelCache.entrySet().removeIf(entry -> {
+                GroundKey key = entry.getKey();
+                return key.world() == world
+                        && key.x() >= clearMinX && key.x() <= clearMaxX
+                        && key.z() >= clearMinZ && key.z() <= clearMaxZ;
+            });
+
+            classificationCache.entrySet().removeIf(entry -> {
+                ClassificationKey key = entry.getKey();
+                return key.world() == world
+                        && key.x() >= clearMinX && key.x() <= clearMaxX
+                        && key.z() >= clearMinZ && key.z() <= clearMaxZ;
+            });
+        }
+    }
+
+    public static final class CacheStats {
+        private final int groundHits;
+        private final int groundMisses;
+        private final int classificationHits;
+        private final int classificationMisses;
+
+        private CacheStats(int groundHits, int groundMisses, int classificationHits, int classificationMisses) {
+            this.groundHits = groundHits;
+            this.groundMisses = groundMisses;
+            this.classificationHits = classificationHits;
+            this.classificationMisses = classificationMisses;
+        }
+
+        public int getGroundHits() { return groundHits; }
+        public int getGroundMisses() { return groundMisses; }
+        public int getClassificationHits() { return classificationHits; }
+        public int getClassificationMisses() { return classificationMisses; }
+    }
+
+    private record GroundKey(World world, int x, int z) {}
+    private record ClassificationKey(World world, int x, int y, int z) {}
     
     /**
      * Check if a block is acceptable for structure placement.
@@ -171,11 +232,28 @@ public class TerrainClassifier {
      * @return Classification category
      */
     public static Classification classify(World world, int x, int y, int z) {
+        return classify(world, x, y, z, null);
+    }
+
+    public static Classification classify(World world, int x, int y, int z, SamplingCache cache) {
+        if (cache != null) {
+            ClassificationKey key = new ClassificationKey(world, x, y, z);
+            Classification cached = cache.classificationCache.get(key);
+            if (cached != null) {
+                cache.classificationHits++;
+                return cached;
+            }
+            cache.classificationMisses++;
+        }
+
         Block block = world.getBlockAt(x, y, z);
         
         // First check block material classification
         Classification materialClassification = classify(block);
         if (materialClassification != Classification.ACCEPTABLE) {
+            if (cache != null) {
+                cache.classificationCache.put(new ClassificationKey(world, x, y, z), materialClassification);
+            }
             return materialClassification;
         }
         
@@ -186,7 +264,7 @@ public class TerrainClassifier {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 // Find actual ground level (not tree tops)
-                int checkY = findGroundLevel(world, x + dx, z + dz);
+                int checkY = findGroundLevel(world, x + dx, z + dz, cache);
                 minY = Math.min(minY, checkY);
                 maxY = Math.max(maxY, checkY);
             }
@@ -194,7 +272,14 @@ public class TerrainClassifier {
         
         int heightDelta = maxY - minY;
         if (heightDelta > MAX_SLOPE_DELTA) {
+            if (cache != null) {
+                cache.classificationCache.put(new ClassificationKey(world, x, y, z), Classification.STEEP);
+            }
             return Classification.STEEP;
+        }
+
+        if (cache != null) {
+            cache.classificationCache.put(new ClassificationKey(world, x, y, z), Classification.ACCEPTABLE);
         }
         
         return Classification.ACCEPTABLE;
@@ -209,11 +294,42 @@ public class TerrainClassifier {
      * @param z Z coordinate
      * @return Y coordinate of ground level
      */
+    static int getGroundLevel(World world, int x, int z, SamplingCache cache) {
+        return findGroundLevel(world, x, z, cache);
+    }
+
     private static int findGroundLevel(World world, int x, int z) {
-        int startY = world.getHighestBlockYAt(x, z);
-        
-        // Search downward up to 64 blocks to find solid ground beneath vegetation
-        for (int y = startY; y > startY - 64 && y > world.getMinHeight(); y--) {
+        return findGroundLevel(world, x, z, null);
+    }
+
+    private static int findGroundLevel(World world, int x, int z, SamplingCache cache) {
+        if (cache != null) {
+            GroundKey key = new GroundKey(world, x, z);
+            Integer cached = cache.groundLevelCache.get(key);
+            if (cached != null) {
+                cache.groundHits++;
+                return cached;
+            }
+            cache.groundMisses++;
+        }
+
+        int highestY = world.getHighestBlockYAt(x, z);
+
+        Block highestBlock = world.getBlockAt(x, highestY, z);
+        Block aboveHighest = world.getBlockAt(x, highestY + 1, z);
+        Classification highestClass = classify(highestBlock);
+        Classification aboveClass = classify(aboveHighest);
+
+        if (highestClass == Classification.ACCEPTABLE
+                && (aboveClass == Classification.BLOCKED || aboveClass == Classification.VEGETATION)) {
+            if (cache != null) {
+                cache.groundLevelCache.put(new GroundKey(world, x, z), highestY);
+            }
+            return highestY;
+        }
+
+        int maxSearchDepth = 32;
+        for (int y = highestY; y > highestY - maxSearchDepth && y > world.getMinHeight(); y--) {
             Block block = world.getBlockAt(x, y, z);
             Block below = world.getBlockAt(x, y - 1, z);
             
@@ -226,11 +342,18 @@ public class TerrainClassifier {
             boolean belowIsSolid = (belowClass == Classification.ACCEPTABLE);
             
             if (currentIsEmpty && belowIsSolid) {
-                return y - 1; // Return Y of the solid ground block
+                int resolved = y - 1;
+                if (cache != null) {
+                    cache.groundLevelCache.put(new GroundKey(world, x, z), resolved);
+                }
+                return resolved; // Return Y of the solid ground block
             }
         }
-        
-        return startY; // Fallback to highest block
+
+        if (cache != null) {
+            cache.groundLevelCache.put(new GroundKey(world, x, z), highestY);
+        }
+        return highestY; // Fallback to highest block
     }
     
     /**

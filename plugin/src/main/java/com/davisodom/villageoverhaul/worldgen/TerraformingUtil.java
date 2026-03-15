@@ -30,6 +30,7 @@ public class TerraformingUtil {
     
     // Vegetation materials that can be safely trimmed
     private static final Set<Material> TRIMMABLE_VEGETATION = new HashSet<>();
+    private static final Set<Material> PRESERVED_SURFACE_MATERIALS = new HashSet<>();
     
     static {
         // Helper to add by name when the constant may not exist in the runtime.
@@ -105,6 +106,30 @@ public class TerraformingUtil {
         addIfPresent.accept("BROWN_MUSHROOM_BLOCK");
         addIfPresent.accept("RED_MUSHROOM_BLOCK");
         addIfPresent.accept("MUSHROOM_STEM");
+
+        String[] preservedSurfaceNames = new String[]{
+            "GRASS_BLOCK", "DIRT", "COARSE_DIRT", "ROOTED_DIRT", "PODZOL", "MYCELIUM",
+            "SAND", "RED_SAND", "GRAVEL", "STONE", "ANDESITE", "DIORITE", "GRANITE",
+            "CLAY", "TERRACOTTA", "MUD", "MOSS_BLOCK", "SANDSTONE", "RED_SANDSTONE"
+        };
+        for (String name : preservedSurfaceNames) {
+            Material material = Material.matchMaterial(name);
+            if (material != null) {
+                PRESERVED_SURFACE_MATERIALS.add(material);
+            }
+        }
+    }
+
+    private static final class SurfaceColumn {
+        private final int surfaceY;
+        private final Material surfaceMaterial;
+        private final boolean skippedCanopy;
+
+        private SurfaceColumn(int surfaceY, Material surfaceMaterial, boolean skippedCanopy) {
+            this.surfaceY = surfaceY;
+            this.surfaceMaterial = surfaceMaterial;
+            this.skippedCanopy = skippedCanopy;
+        }
     }
     
     /**
@@ -170,13 +195,18 @@ public class TerraformingUtil {
      */
     private static int lightGradingWithLimit(World world, Location origin, int width, int depth, int targetY, int maxBlocks) {
         int modifiedCount = 0;
+        int skippedCanopyColumns = 0;
         
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
-                int surfaceY = world.getHighestBlockYAt(
-                        origin.getBlockX() + x,
-                        origin.getBlockZ() + z
-                );
+                int blockX = origin.getBlockX() + x;
+                int blockZ = origin.getBlockZ() + z;
+                SurfaceColumn surface = resolveSurfaceColumn(world, blockX, blockZ, world.getHighestBlockYAt(blockX, blockZ));
+                if (surface.skippedCanopy) {
+                    skippedCanopyColumns++;
+                }
+                int surfaceY = surface.surfaceY;
+                Material surfaceMaterial = surface.surfaceMaterial;
                 
                 int yDiff = surfaceY - targetY;
                 
@@ -186,12 +216,12 @@ public class TerraformingUtil {
                     // Surface is below target - fill gap
                     for (int y = surfaceY + 1; y <= targetY; y++) {
                         Block fillBlock = world.getBlockAt(
-                                origin.getBlockX() + x,
+                                blockX,
                                 y,
-                                origin.getBlockZ() + z
+                                blockZ
                         );
                         if (!fillBlock.getType().isSolid()) {
-                            fillBlock.setType(Material.DIRT);
+                            fillBlock.setType(determineFillMaterial(surfaceMaterial, y, targetY));
                             modifiedCount++;
                         }
                     }
@@ -205,6 +235,10 @@ public class TerraformingUtil {
             LOGGER.warning(String.format("[STRUCT] Terraforming exceeded limit at %s: %d blocks (max %d)",
                     origin, modifiedCount, maxBlocks));
             return -1; // Indicate failure
+        }
+
+        if (skippedCanopyColumns > 0) {
+            LOGGER.info(String.format("[STRUCT] skippedCanopyColumns=%d", skippedCanopyColumns));
         }
         
         if (modifiedCount > 0) {
@@ -255,31 +289,28 @@ public class TerraformingUtil {
      */
     private static int fillGapsWithLimit(World world, Location origin, int width, int depth, int foundationY, int maxBlocks) {
         int filledCount = 0;
+        int skippedCanopyColumns = 0;
         
         // Only fill small gaps NEAR the surface (max 3 blocks down from foundation)
         int minFillY = foundationY - MAX_VERTICAL_CHANGE;
         
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
-                // Find actual surface at this column
-                int surfaceY = world.getHighestBlockYAt(
-                        origin.getBlockX() + x,
-                        origin.getBlockZ() + z
-                );
-                
-                // T065: Capture surface material for preservation
-                Material surfaceMat = world.getBlockAt(
-                        origin.getBlockX() + x,
-                        surfaceY,
-                        origin.getBlockZ() + z
-                ).getType();
+            int blockX = origin.getBlockX() + x;
+            int blockZ = origin.getBlockZ() + z;
+            SurfaceColumn surface = resolveSurfaceColumn(world, blockX, blockZ, world.getHighestBlockYAt(blockX, blockZ));
+            if (surface.skippedCanopy) {
+                skippedCanopyColumns++;
+            }
+            int surfaceY = surface.surfaceY;
+            Material surfaceMat = surface.surfaceMaterial;
                 
                 // CRITICAL: ALWAYS solidify the foundation layer, even if terrain is higher
                 // Check foundation block regardless of surface height
                 Block foundationBlock = world.getBlockAt(
-                        origin.getBlockX() + x,
+                blockX,
                         foundationY,
-                        origin.getBlockZ() + z
+                blockZ
                 );
                 
                 // Replace unsuitable foundation materials with appropriate surface-preserving material
@@ -304,9 +335,9 @@ public class TerraformingUtil {
                     // Fill from surface UP TO (but not including) foundation level (already handled above)
                     for (int y = surfaceY + 1; y < foundationY; y++) {
                         Block block = world.getBlockAt(
-                                origin.getBlockX() + x,
+                            blockX,
                                 y,
-                                origin.getBlockZ() + z
+                            blockZ
                         );
                         
                         // Fill if block is not solid (including AIR, SHORT_GRASS, etc.)
@@ -326,6 +357,10 @@ public class TerraformingUtil {
                     }
                 }
             }
+        }
+
+        if (skippedCanopyColumns > 0) {
+            LOGGER.info(String.format("[STRUCT] skippedCanopyColumns=%d", skippedCanopyColumns));
         }
         
         if (filledCount > 0) {
@@ -376,42 +411,43 @@ public class TerraformingUtil {
             return Material.DIRT;
         }
         
-        // For the top layer, preserve grass-family surfaces to prevent dirt scars
-        // GRASS_BLOCK -> GRASS_BLOCK (preserves the grassy appearance)
-        if (surfaceMaterial == Material.GRASS_BLOCK) {
+        // Normalize legacy grass, then preserve the dominant local top-surface material.
+        if ("GRASS".equals(surfaceMaterial.name())) {
             return Material.GRASS_BLOCK;
         }
-        
-        // PODZOL -> PODZOL (preserves taiga/mega spruce biome appearance)
-        if (surfaceMaterial == Material.PODZOL) {
-            return Material.PODZOL;
-        }
-        
-        // MYCELIUM -> MYCELIUM (preserves mushroom biome appearance)
-        if (surfaceMaterial == Material.MYCELIUM) {
-            return Material.MYCELIUM;
-        }
-        
-        // COARSE_DIRT stays COARSE_DIRT (preserves badlands/mesa appearance)
-        if (surfaceMaterial == Material.COARSE_DIRT) {
-            return Material.COARSE_DIRT;
-        }
-        
-        // Sand/red sand preservation for deserts and beaches
-        if (surfaceMaterial == Material.SAND) {
-            return Material.SAND;
-        }
-        if (surfaceMaterial == Material.RED_SAND) {
-            return Material.RED_SAND;
-        }
-        
-        // Gravel preservation
-        if (surfaceMaterial == Material.GRAVEL) {
-            return Material.GRAVEL;
+        if (PRESERVED_SURFACE_MATERIALS.contains(surfaceMaterial)) {
+            return surfaceMaterial;
         }
         
         // Default to DIRT for all other cases
         return Material.DIRT;
+    }
+
+    private static SurfaceColumn resolveSurfaceColumn(World world, int x, int z, int startY) {
+        int minY = world.getMinHeight();
+        int highestY = Math.max(startY, world.getHighestBlockYAt(x, z));
+        boolean skippedCanopy = false;
+        Material fallback = Material.DIRT;
+
+        for (int y = highestY; y >= minY; y--) {
+            Material material = world.getBlockAt(x, y, z).getType();
+            if (material.isAir()) {
+                continue;
+            }
+            if (isCanopyMaterial(material)) {
+                skippedCanopy = true;
+                continue;
+            }
+            fallback = material;
+            return new SurfaceColumn(y, material, skippedCanopy);
+        }
+
+        return new SurfaceColumn(startY, fallback, skippedCanopy);
+    }
+
+    private static boolean isCanopyMaterial(Material material) {
+        String name = material.name();
+        return name.endsWith("_LEAVES") || name.endsWith("_LOG") || name.endsWith("_STEM");
     }
     
     /**
@@ -551,14 +587,14 @@ public class TerraformingUtil {
      * Backfill foundation AFTER structure placement.
      * Fills any AIR blocks below the structure down to solid ground.
      * This fixes floating structures caused by terrain variations.
-     * Only fills EXTERIOR perimeter, not interior areas.
+     * Fills the full footprint underside so interior air shelves do not remain.
      * ONLY fills where terrain is within reasonable distance (max 3 blocks gap).
      * 
      * @param world The world
      * @param origin Structure origin (southwest corner, ground level)
      * @param width Structure width (X direction)
      * @param depth Structure depth (Z direction)
-     * @param fillMaterial Material to use for backfilling (typically DIRT)
+     * @param fillMaterial Fallback material to use when no local surface material can be preserved
      * @return Number of blocks filled
      */
     public static int backfillFoundation(World world, Location origin, int width, int depth, Material fillMaterial) {
@@ -567,34 +603,38 @@ public class TerraformingUtil {
         
         LOGGER.fine(String.format("[STRUCT] Backfilling foundation at %s (%dx%d)", origin, width, depth));
         
-        // Only fill the PERIMETER of the structure (exterior edges only)
-        // This prevents dirt from appearing inside buildings
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
-                // Skip interior blocks - only process perimeter (2 block wide border)
-                boolean isPerimeter = (x < 2 || x >= width - 2 || z < 2 || z >= depth - 2);
-                if (!isPerimeter) {
-                    continue;
-                }
-                
-                Location surfaceLoc = origin.clone().add(x, 0, z);
+                int blockX = origin.getBlockX() + x;
+                int blockZ = origin.getBlockZ() + z;
                 
                 // Find natural terrain height at this position
-                int terrainY = world.getHighestBlockYAt(surfaceLoc);
-                int structureBaseY = surfaceLoc.getBlockY();
+                int structureBaseY = origin.getBlockY();
+                SurfaceColumn surface = findSupportBelowBase(world, blockX, blockZ, structureBaseY - 1);
+                int terrainY = surface.surfaceY;
                 int gapSize = structureBaseY - terrainY;
+                Material columnFillMaterial = determineBackfillMaterial(surface.surfaceMaterial, fillMaterial);
+
+                Block baseBlock = world.getBlockAt(blockX, structureBaseY, blockZ);
+                boolean fillBaseLayer = baseBlock.getType().isAir() && hasStructureSupportAbove(world, blockX, structureBaseY, blockZ);
+                if (fillBaseLayer) {
+                    baseBlock.setType(columnFillMaterial);
+                    filled++;
+                }
                 
                 // Only fill if gap is reasonable (1-3 blocks)
                 // Skip if terrain is higher than structure (no gap) or gap is too large (steep slope)
                 if (gapSize < 1 || gapSize > maxGap) {
                     continue;
                 }
+
+                int fillTopY = fillBaseLayer ? structureBaseY - 1 : structureBaseY - 1;
                 
                 // Fill from terrain UP to structure base
-                for (int y = terrainY + 1; y < structureBaseY; y++) {
-                    Block block = world.getBlockAt(surfaceLoc.getBlockX(), y, surfaceLoc.getBlockZ());
+                for (int y = terrainY + 1; y <= fillTopY; y++) {
+                    Block block = world.getBlockAt(blockX, y, blockZ);
                     if (block.getType().isAir()) {
-                        block.setType(fillMaterial);
+                        block.setType(columnFillMaterial);
                         filled++;
                     }
                 }
@@ -603,5 +643,49 @@ public class TerraformingUtil {
         
         LOGGER.info(String.format("[STRUCT] Foundation backfilled: %d blocks placed (max gap: %d)", filled, maxGap));
         return filled;
+    }
+
+    private static SurfaceColumn findSupportBelowBase(World world, int x, int z, int startY) {
+        int minY = world.getMinHeight();
+        boolean skippedCanopy = false;
+        Material fallback = Material.DIRT;
+
+        for (int y = startY; y >= minY; y--) {
+            Material material = world.getBlockAt(x, y, z).getType();
+            if (material.isAir()) {
+                continue;
+            }
+            if (isCanopyMaterial(material)) {
+                skippedCanopy = true;
+                continue;
+            }
+            fallback = material;
+            return new SurfaceColumn(y, material, skippedCanopy);
+        }
+
+        return new SurfaceColumn(startY, fallback, skippedCanopy);
+    }
+
+    private static boolean hasStructureSupportAbove(World world, int x, int y, int z) {
+        for (int offset = 1; offset <= 2; offset++) {
+            Material above = world.getBlockAt(x, y + offset, z).getType();
+            if (above.isSolid() && !above.isAir()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Material determineBackfillMaterial(Material surfaceMaterial, Material defaultFillMaterial) {
+        if (surfaceMaterial == null) {
+            return defaultFillMaterial;
+        }
+        if ("GRASS".equals(surfaceMaterial.name())) {
+            return Material.GRASS_BLOCK;
+        }
+        if (surfaceMaterial == Material.GRASS_BLOCK || PRESERVED_SURFACE_MATERIALS.contains(surfaceMaterial)) {
+            return surfaceMaterial;
+        }
+        return defaultFillMaterial;
     }
 }

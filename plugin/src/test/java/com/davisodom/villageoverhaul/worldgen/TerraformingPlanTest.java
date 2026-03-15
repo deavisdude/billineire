@@ -263,6 +263,26 @@ class TerraformingPlanTest {
         
         assertThrows(IllegalStateException.class, plan::commit);
     }
+
+    @Test
+    @DisplayName("Plan preserves sand fills when canopy sits above the natural surface")
+    void testPlanPreservesSandBelowCanopy() {
+        for (int x = 200; x < 203; x++) {
+            for (int z = 300; z < 303; z++) {
+                world.getBlockAt(x, 62, z).setType(Material.SAND);
+                world.getBlockAt(x, 63, z).setType(Material.AIR);
+                world.getBlockAt(x, 64, z).setType(Material.OAK_LEAVES);
+            }
+        }
+
+        Location origin = new Location(world, 200, 64, 300);
+        TerraformingPlan plan = TerraformingPlan.forSite(world, origin, 3, 3, 5);
+
+        assertTrue(plan.plan());
+
+        assertTrue(plan.getDiagnosticsSummary().contains("skippedCanopyColumns=9"),
+            "Expected canopy-aware diagnostics to record skipped canopy columns");
+    }
     
     @Test
     @DisplayName("Cannot call plan() twice")
@@ -354,7 +374,7 @@ class TerraformingPlanTest {
         plan.commit();
         
         // Foundation level should now be solid (DIRT)
-        assertEquals(Material.DIRT, world.getBlockAt(100, 64, 200).getType());
+        assertEquals(Material.STONE, world.getBlockAt(100, 64, 200).getType());
     }
     
     // ---- T058: Rollback and atomicity tests ----

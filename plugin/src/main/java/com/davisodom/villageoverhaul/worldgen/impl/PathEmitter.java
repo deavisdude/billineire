@@ -35,6 +35,9 @@ import java.util.logging.Logger;
 public class PathEmitter {
     
     private static final Logger LOGGER = Logger.getLogger(PathEmitter.class.getName());
+    private static final int CORRIDOR_HALF_WIDTH = 1;
+    private static final int MAX_CORRIDOR_CLEAR_HEIGHT = 4;
+    private static final int MAX_CORRIDOR_CLEAR_BLOCKS = 512;
 
     private static final Set<Material> PATH_SURFACE_WHITELIST = new HashSet<>();
     static {
@@ -87,6 +90,7 @@ public class PathEmitter {
         int skippedMask = 0;
         int skippedSupport = 0;
         int skippedVegetationNodes = 0;
+        int reroutedNodes = 0;
         int unsupportedSurfaceNodes = 0;
         int skippedChunk = 0;
         List<Block> successfullyPlacedBlocks = new ArrayList<>();
@@ -117,6 +121,10 @@ public class PathEmitter {
                 LOGGER.warning(String.format("[PATH][EMIT] Skipping %d blocks in unloaded chunks", skippedChunk));
             }
         }
+
+        int clearedVegetation = clearVegetationCorridor(world, pathBlocks, masks);
+        LOGGER.info(String.format("[PATH][CLEAR] clearedVegetation=%d corridorWidth=%d blocks=%d",
+            clearedVegetation, CORRIDOR_HALF_WIDTH * 2 + 1, pathBlocks.size()));
 
         for (Block pathBlock : pathBlocks) {
             int x = pathBlock.getX();
@@ -185,6 +193,9 @@ public class PathEmitter {
             }
 
             groundY = selectedY;
+            if (groundY != pathBlock.getY()) {
+                reroutedNodes++;
+            }
 
             // Check if target is inside any VolumeMask
             if (isInsideAnyMask(masks, x, groundY, z)) {
@@ -228,10 +239,45 @@ public class PathEmitter {
         LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, verified=%d, skipped(mask)=%d, skipped(noSupport)=%d, skipped(unloaded)=%d, culture=%s, material=%s",
             blocksPlaced, verifiedBlocks, skippedMask, skippedSupport, skippedChunk, cultureId, pathMaterial));
 
-        LOGGER.info(String.format("[PATH][EMIT][DIAG] skippedVegetationNodes=%d unsupportedSurfaceNodes=%d",
-            skippedVegetationNodes, unsupportedSurfaceNodes));
+        LOGGER.info(String.format("[PATH][DIAG] skippedVegetationNodes=%d reroutedNodes=%d unsupportedSurfaceNodes=%d",
+            skippedVegetationNodes, reroutedNodes, unsupportedSurfaceNodes));
 
         return blocksPlaced;
+    }
+
+    private int clearVegetationCorridor(World world, List<Block> pathBlocks, List<VolumeMask> masks) {
+        int cleared = 0;
+        Set<String> visited = new HashSet<>();
+
+        for (Block pathBlock : pathBlocks) {
+            for (int dx = -CORRIDOR_HALF_WIDTH; dx <= CORRIDOR_HALF_WIDTH; dx++) {
+                for (int dz = -CORRIDOR_HALF_WIDTH; dz <= CORRIDOR_HALF_WIDTH; dz++) {
+                    int x = pathBlock.getX() + dx;
+                    int z = pathBlock.getZ() + dz;
+
+                    for (int y = pathBlock.getY(); y <= pathBlock.getY() + MAX_CORRIDOR_CLEAR_HEIGHT; y++) {
+                        String key = x + ":" + y + ":" + z;
+                        if (!visited.add(key)) {
+                            continue;
+                        }
+                        if (isInsideAnyMask(masks, x, y, z)) {
+                            continue;
+                        }
+
+                        Block block = world.getBlockAt(x, y, z);
+                        if (isVegetation(block)) {
+                            block.setType(Material.AIR);
+                            cleared++;
+                            if (cleared >= MAX_CORRIDOR_CLEAR_BLOCKS) {
+                                return cleared;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return cleared;
     }
 
     
@@ -359,7 +405,11 @@ public class PathEmitter {
 
     private boolean isSupported(World world, int x, int y, int z) {
         Block foundation = world.getBlockAt(x, y - 1, z);
-        return foundation.getType().isSolid();
+        Material material = foundation.getType();
+        return material.isSolid()
+            && !isVegetation(foundation)
+            && material != Material.WATER
+            && material != Material.LAVA;
     }
 
     private int countExpectedBlocks(Set<Block> expectedBlocks, Material pathMaterial) {
@@ -461,6 +511,9 @@ public class PathEmitter {
             // R008: Check support before smoothing
             Block below = current.getRelative(BlockFace.DOWN);
             if (!below.getType().isSolid()) {
+                continue;
+            }
+            if (!isWhitelistedSurface(below.getType())) {
                 continue;
             }
             

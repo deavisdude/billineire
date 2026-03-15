@@ -51,6 +51,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
     private static final double DEFAULT_VILLAGERS_PER_STRUCTURE = 2.0;
     private static final int MIN_INITIAL_VILLAGERS = 1;
     private static final int DEFAULT_MAX_CANDIDATES_PER_STRUCTURE = 240;
+    private static final int ADAPTIVE_ABORT_MIN_ATTEMPTS = 40;
+    private static final double ADAPTIVE_ABORT_REJECTION_RATE = 0.95;
     
     // Configured spacing values (loaded from plugin config)
     private final int minBuildingSpacing;
@@ -336,6 +338,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         // T070: Maximum number of candidate positions to try per structure before giving up
         // Increased to reduce false zero-placement on rough terrain while keeping attempts bounded.
         final int maxCandidatesPerStructure = DEFAULT_MAX_CANDIDATES_PER_STRUCTURE;
+        final int targetStarterStructureCount = Math.min(5, structureIds.size());
+        List<String> failedStructureSummaries = new ArrayList<>();
         
         // Place buildings one at a time with dynamic collision detection
         // Use grid-based spiral search for each building to find non-overlapping spots
@@ -370,8 +374,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             
             // T070: Try candidates one by one until terrain validation succeeds
             boolean placed = false;
+            boolean structureAdaptiveAbort = false;
             int candidatesTried = 0;
             int candidatesToTry = Math.min(candidatePositions.size(), maxCandidatesPerStructure);
+            PlacementRejectionTracker structureAttemptTracker = new PlacementRejectionTracker();
             
             for (int candidateIdx = 0; candidateIdx < candidatesToTry && !placed; candidateIdx++) {
                 CandidateSite candidate = candidatePositions.get(candidateIdx);
@@ -405,6 +411,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             .build();
                     
                     placedBuildings.add(building);
+                    rejectionTracker.recordPlacementSuccess();
+                    structureAttemptTracker.recordPlacementSuccess();
                     placed = true;
                     
                     LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d° candidatesTried=%d", 
@@ -416,35 +424,41 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             candidatesTried));
                 } else {
                     // Aggregate diagnostics from failed attempt
-                    if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
-                        rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
-                        int siteValidationRejects = attemptDiagnostics.getOrDefault("siteValidationRejects",
-                            attemptDiagnostics.getOrDefault("terrainInvalid", 0));
-                        int terraformRejects = attemptDiagnostics.getOrDefault("terraformRejects", 0);
-                        if (terraformRejects == 0) {
-                            terraformRejects = attemptDiagnostics.getOrDefault("terraformCommitFailed", 0);
-                        }
-                        rejectionTracker.terrainRejections += siteValidationRejects;
-                        rejectionTracker.siteValidationRejects += siteValidationRejects;
-                        rejectionTracker.terraformRejects += terraformRejects;
-                        rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
-                        rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
-                        int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
-                        rejectionTracker.fluidRejections += fluidCount;
-                        rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
-                        rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
-                    }
+                    mergePlacementAttemptDiagnostics(rejectionTracker, attemptDiagnostics);
+                    mergePlacementAttemptDiagnostics(structureAttemptTracker, attemptDiagnostics);
                     // T070: Log candidate rejection and continue to next candidate
                         LOGGER.fine(String.format("[STRUCT][T070] Candidate %d/%d rejected for %s at (%d,%d,%d) rot=%d", 
                             candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z,
                             candidate.rotationDegrees));
+
+                    if (shouldAdaptiveAbort(structureAttemptTracker)) {
+                        structureAdaptiveAbort = true;
+                        LOGGER.warning(String.format(
+                            "[STRUCT] adaptive-abort structure=%s attempts=%d rejectionRate=%.2f candidatesTried=%d/%d action=skip-structure",
+                            structureId,
+                            structureAttemptTracker.getPlacementAttempts(),
+                            structureAttemptTracker.getPlacementRejectionRate(),
+                            candidatesTried,
+                            candidatesToTry));
+                        break;
+                    }
                 }
             }
             
             // T070: Log summary of candidate search for this structure
             if (!placed) {
-                LOGGER.info(String.format("[STRUCT][T070] Failed to place %s after trying %d/%d candidates", 
-                        structureId, candidatesTried, candidatePositions.size()));
+                failedStructureSummaries.add(String.format(
+                    "%s{attempts=%d,siteValidation=%d,terraform=%d,overlap=%d,chunkNotReady=%d,adaptiveAbort=%s}",
+                    structureId,
+                    structureAttemptTracker.getPlacementAttempts(),
+                    structureAttemptTracker.siteValidationRejects,
+                    structureAttemptTracker.terraformRejects,
+                    structureAttemptTracker.overlapRejections,
+                    structureAttemptTracker.chunkNotReady,
+                    structureAdaptiveAbort));
+                LOGGER.info(String.format("[STRUCT][T070] Failed to place %s after trying %d/%d candidates%s", 
+                        structureId, candidatesTried, candidatePositions.size(),
+                        structureAdaptiveAbort ? " (adaptive-abort)" : ""));
             }
         }
         
@@ -562,16 +576,23 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                     mainBuildingEntrance,
                     pathBaseSeed
             );
-            
-            if (pathSuccess) {
-                List<List<Block>> pathNetwork = pathService.getVillagePathNetwork(villageId);
+
+            List<List<Block>> pathNetwork = pathService.getVillagePathNetwork(villageId);
+            if (!pathNetwork.isEmpty()) {
                 int totalPathBlocks = 0;
                 List<VolumeMask> masks = metadataStore.getVolumeMasks(villageId);
-                
+
                 for (List<Block> pathSegment : pathNetwork) {
                     int placed = pathEmitter.emitPathWithSmoothing(world, pathSegment, cultureId, masks);
                     totalPathBlocks += placed;
                 }
+
+                if (!pathSuccess) {
+                    LOGGER.warning(String.format("[STRUCT] Path network generated partially for village %s: segments=%d emittedBlocks=%d",
+                        villageId, pathNetwork.size(), totalPathBlocks));
+                }
+            } else if (!pathSuccess) {
+                LOGGER.warning(String.format("[STRUCT] Path network generation failed for village %s", villageId));
             }
         }
         
@@ -581,6 +602,16 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
         int persistedBuildingCount = metadataStore.getPlacementReceipts(villageId).size();
         LOGGER.info(String.format("[STRUCT] village: id=%s buildings=%d",
             villageId, persistedBuildingCount));
+
+        if (persistedBuildingCount < targetStarterStructureCount && !failedStructureSummaries.isEmpty()) {
+            LOGGER.warning(String.format(
+                "[STRUCT][STARTER-SHORTFALL] village=%s placed=%d target=%d mainMissing=%s failures=%s",
+                villageId,
+                persistedBuildingCount,
+                targetStarterStructureCount,
+                metadataStore.getMainBuilding(villageId).isEmpty(),
+                String.join(";", failedStructureSummaries)));
+        }
 
 
         // Persist per-attempt rejection counters so harnesses can analyze placement rejections (T026d12)
@@ -775,8 +806,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             }
 
             boolean placed = false;
+            boolean structureAdaptiveAbort = false;
             int candidatesTried = 0;
             int candidatesToTry = Math.min(candidatePositions.size(), maxCandidatesPerStructure);
+            PlacementRejectionTracker structureAttemptTracker = new PlacementRejectionTracker();
 
             for (int candidateIdx = 0; candidateIdx < candidatesToTry && !placed; candidateIdx++) {
                 CandidateSite candidate = candidatePositions.get(candidateIdx);
@@ -809,6 +842,8 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             .build();
 
                     placedBuildings.add(building);
+                    rejectionTracker.recordPlacementSuccess();
+                    structureAttemptTracker.recordPlacementSuccess();
                     placed = true;
 
                     LOGGER.info(String.format("[STRUCT] receipt: id=%s bounds=[%d..%d,%d..%d,%d..%d] rot=%d° candidatesTried=%d",
@@ -819,33 +854,30 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                             receipt.getRotation(),
                             candidatesTried));
                 } else {
-                    if (attemptDiagnostics != null && !attemptDiagnostics.isEmpty()) {
-                        rejectionTracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
-                        int siteValidationRejects = attemptDiagnostics.getOrDefault("siteValidationRejects",
-                            attemptDiagnostics.getOrDefault("terrainInvalid", 0));
-                        int terraformRejects = attemptDiagnostics.getOrDefault("terraformRejects", 0);
-                        if (terraformRejects == 0) {
-                            terraformRejects = attemptDiagnostics.getOrDefault("terraformCommitFailed", 0);
-                        }
-                        rejectionTracker.terrainRejections += siteValidationRejects;
-                        rejectionTracker.siteValidationRejects += siteValidationRejects;
-                        rejectionTracker.terraformRejects += terraformRejects;
-                        rejectionTracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
-                        rejectionTracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
-                        int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
-                        rejectionTracker.fluidRejections += fluidCount;
-                        rejectionTracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
-                        rejectionTracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
-                    }
+                    mergePlacementAttemptDiagnostics(rejectionTracker, attemptDiagnostics);
+                    mergePlacementAttemptDiagnostics(structureAttemptTracker, attemptDiagnostics);
                         LOGGER.fine(String.format("[STRUCT][T072] Candidate %d/%d rejected for %s at (%d,%d,%d) rot=%d",
                             candidateIdx + 1, candidatesToTry, structureId, candidate.x, candidate.y, candidate.z,
                             candidate.rotationDegrees));
+
+                    if (shouldAdaptiveAbort(structureAttemptTracker)) {
+                        structureAdaptiveAbort = true;
+                        LOGGER.warning(String.format(
+                            "[STRUCT] adaptive-abort structure=%s attempts=%d rejectionRate=%.2f candidatesTried=%d/%d action=skip-structure",
+                            structureId,
+                            structureAttemptTracker.getPlacementAttempts(),
+                            structureAttemptTracker.getPlacementRejectionRate(),
+                            candidatesTried,
+                            candidatesToTry));
+                        break;
+                    }
                 }
             }
 
             if (!placed) {
-                LOGGER.info(String.format("[STRUCT][T072] Failed to place %s after trying %d/%d candidates",
-                        structureId, candidatesTried, candidatePositions.size()));
+                LOGGER.info(String.format("[STRUCT][T072] Failed to place %s after trying %d/%d candidates%s",
+                        structureId, candidatesTried, candidatePositions.size(),
+                        structureAdaptiveAbort ? " (adaptive-abort)" : ""));
             }
         }
 
@@ -1204,8 +1236,11 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             return Integer.compare(a.rotationOrderIndex, b.rotationOrderIndex);
         });
         
-        // T070: Collect all collision-free candidates instead of returning first one
-        List<CandidateSite> validCandidates = new ArrayList<>();
+        // T070: Prefer candidates that satisfy full configured spacing. Relaxed spacing is
+        // only considered if no strict-spacing candidates exist.
+        List<CandidateSite> strictCandidates = new ArrayList<>();
+        List<CandidateSite> relaxedHalfCandidates = new ArrayList<>();
+        List<CandidateSite> relaxedZeroCandidates = new ArrayList<>();
         
         // T026d2: Apply filters in fixed sequence to each candidate
         // Fixed sequence: 1) Collision check, 2) Spacing relaxation (if needed)
@@ -1223,46 +1258,55 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             // Filter 1: Check collision with existing masks (including spacing buffer)
             boolean overlaps = checkRotatedAABBCollision(candidateAABB, existingMasks, minBuildingSpacing,
                 collisionDiagnostics, candidate, candidateIndex, "spacing");
+            if (!overlaps) {
+                strictCandidates.add(candidate);
+                LOGGER.fine(String.format("[STRUCT] findCandidates: Strict candidate at offset=(%d,%d) pos=(%d,%d,%d) rot=%d dist²=%d strictCount=%d rejected=%d seed=%d",
+                    candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z, candidate.rotationDegrees,
+                    candidate.distanceSquared, strictCandidates.size(), collisionRejections, buildingSeed));
+                continue;
+            }
 
-            // Filter 2: If blocked by spacing, try a progressive relaxation (half spacing, then zero)
-            if (overlaps && minBuildingSpacing > 0) {
+            boolean admittedUnderRelaxation = false;
+            if (minBuildingSpacing > 0) {
                 int half = Math.max(0, minBuildingSpacing / 2);
                 if (half != minBuildingSpacing) {
                     boolean overlapsHalf = checkRotatedAABBCollision(candidateAABB, existingMasks, half,
                         collisionDiagnostics, candidate, candidateIndex, "relaxedHalf");
                     if (!overlapsHalf) {
-                        LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->%d for candidate (%d,%d)", 
-                                minBuildingSpacing, half, candidate.dx, candidate.dz));
-                        overlaps = false;
+                        relaxedHalfCandidates.add(candidate);
+                        admittedUnderRelaxation = true;
                     }
                 }
             }
 
-            if (overlaps && minBuildingSpacing > 1) {
-                // Final attempt without spacing
+            if (!admittedUnderRelaxation && minBuildingSpacing > 1) {
                 boolean overlapsZero = checkRotatedAABBCollision(candidateAABB, existingMasks, 0,
                     collisionDiagnostics, candidate, candidateIndex, "relaxedZero");
                 if (!overlapsZero) {
-                    LOGGER.fine(String.format("[STRUCT] findCandidates: relaxing spacing %d->0 for candidate (%d,%d)", 
-                            minBuildingSpacing, candidate.dx, candidate.dz));
-                    overlaps = false;
+                    relaxedZeroCandidates.add(candidate);
+                    admittedUnderRelaxation = true;
                 }
             }
-            
-            if (overlaps) {
+
+            if (!admittedUnderRelaxation) {
                 if (tracker != null) tracker.recordOverlapRejection();
                 collisionRejections++;
-                continue;
             }
-            
-            // T070: Add valid candidate to list instead of returning immediately
-            validCandidates.add(candidate);
-            
-            // Log deterministic candidate sequence info
-            LOGGER.fine(String.format("[STRUCT] findCandidates: Valid candidate at offset=(%d,%d) " +
-                "pos=(%d,%d,%d) rot=%d dist²=%d validCount=%d rejected=%d seed=%d", 
-                candidate.dx, candidate.dz, candidate.x, candidate.y, candidate.z, candidate.rotationDegrees,
-                candidate.distanceSquared, validCandidates.size(), collisionRejections, buildingSeed));
+        }
+
+        List<CandidateSite> validCandidates;
+        if (!strictCandidates.isEmpty()) {
+            validCandidates = strictCandidates;
+        } else if (!relaxedHalfCandidates.isEmpty()) {
+            LOGGER.warning(String.format("[STRUCT][T070] No strict-spacing candidates for %s; falling back to half-spacing candidates (%d)",
+                structureId, relaxedHalfCandidates.size()));
+            validCandidates = relaxedHalfCandidates;
+        } else {
+            if (!relaxedZeroCandidates.isEmpty()) {
+                LOGGER.warning(String.format("[STRUCT][T070] No strict-spacing candidates for %s; falling back to zero-spacing candidates (%d)",
+                    structureId, relaxedZeroCandidates.size()));
+            }
+            validCandidates = relaxedZeroCandidates;
         }
         
         // T070: Log summary of candidate search
@@ -1274,8 +1318,9 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
                 "checked=%d rejected=%d seed=%d retryHash=%s",
                 maxRadius, tracker != null ? tracker.totalAttempts : 0, collisionRejections, buildingSeed, retryHash));
         } else {
-            LOGGER.info(String.format("[STRUCT][T070] Found %d collision-free candidates (checked=%d, rejected=%d, seed=%d)",
-                validCandidates.size(), allCandidates.size(), collisionRejections, buildingSeed));
+            LOGGER.info(String.format("[STRUCT][T070] Found %d collision-free candidates (checked=%d, rejected=%d, strict=%d, relaxedHalf=%d, relaxedZero=%d, seed=%d)",
+                validCandidates.size(), allCandidates.size(), collisionRejections,
+                strictCandidates.size(), relaxedHalfCandidates.size(), relaxedZeroCandidates.size(), buildingSeed));
         }
 
         // T077: Log and persist candidate sampling coverage
@@ -2010,6 +2055,7 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
 
         int siteValidationRejects = 0;
         int terraformRejects = 0;
+        int successfulPlacements = 0;
         
         // Detailed terrain breakdown
         int fluidRejections = 0;
@@ -2035,6 +2081,10 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             overlapRejections++;
         }
         void recordChunkNotReady() { chunkNotReady++; }
+
+        void recordPlacementSuccess() {
+            successfulPlacements++;
+        }
         
         @Override
         public String toString() {
@@ -2050,6 +2100,51 @@ public class VillagePlacementServiceImpl implements VillagePlacementService {
             int totalRejections = siteValidationRejects + terraformRejects + spacingRejections + overlapRejections;
             return totalAttempts > 0 ? (double) totalRejections / totalAttempts : 0.0;
         }
+
+        int getPlacementAttempts() {
+            return totalAttempts > 0
+                ? totalAttempts
+                : successfulPlacements + siteValidationRejects + terraformRejects + spacingRejections + overlapRejections;
+        }
+
+        double getPlacementRejectionRate() {
+            int placementAttempts = getPlacementAttempts();
+            int totalRejections = siteValidationRejects + terraformRejects + spacingRejections + overlapRejections;
+            if (placementAttempts <= 0) {
+                return 0.0;
+            }
+            return Math.min(1.0, (double) totalRejections / placementAttempts);
+        }
+    }
+
+    private boolean shouldAdaptiveAbort(PlacementRejectionTracker tracker) {
+        return tracker.getPlacementAttempts() >= ADAPTIVE_ABORT_MIN_ATTEMPTS
+            && tracker.getPlacementRejectionRate() >= ADAPTIVE_ABORT_REJECTION_RATE;
+    }
+
+    private void mergePlacementAttemptDiagnostics(PlacementRejectionTracker tracker, Map<String, Integer> attemptDiagnostics) {
+        if (tracker == null || attemptDiagnostics == null || attemptDiagnostics.isEmpty()) {
+            return;
+        }
+
+        tracker.totalAttempts += attemptDiagnostics.getOrDefault("placementAttempts", 0);
+        int siteValidationRejects = attemptDiagnostics.getOrDefault("siteValidationRejects",
+            attemptDiagnostics.getOrDefault("terrainInvalid", 0));
+        int terraformRejects = attemptDiagnostics.getOrDefault("terraformRejects", 0);
+        if (terraformRejects == 0) {
+            terraformRejects = attemptDiagnostics.getOrDefault("terraformCommitFailed", 0);
+        }
+
+        tracker.terrainRejections += siteValidationRejects;
+        tracker.siteValidationRejects += siteValidationRejects;
+        tracker.terraformRejects += terraformRejects;
+        tracker.chunkNotReady += attemptDiagnostics.getOrDefault("chunkNotReady", 0);
+        tracker.overlapRejections += attemptDiagnostics.getOrDefault("overlap", 0);
+
+        int fluidCount = attemptDiagnostics.getOrDefault("fluid", attemptDiagnostics.getOrDefault("water", 0));
+        tracker.fluidRejections += fluidCount;
+        tracker.steepRejections += attemptDiagnostics.getOrDefault("steep", 0);
+        tracker.blockedRejections += attemptDiagnostics.getOrDefault("blocked", 0);
     }
     
     /**

@@ -1,6 +1,7 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.worldgen.PlacementResult;
+import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import com.davisodom.villageoverhaul.worldgen.SiteValidator;
 import com.davisodom.villageoverhaul.worldgen.StructureService;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
@@ -477,13 +478,15 @@ public class StructureServiceImpl implements StructureService {
             template.id, formatLocation(origin), seed));
         if (attemptDiagnostics != null) attemptDiagnostics.merge("placementAttempts", 1, Integer::sum);
         
-        // T057g/T083: Ensure all chunks covering structure footprint are loaded BEFORE validation
-        // Avoid synchronous chunk loads on the main thread; skip candidates if any chunk is missing.
         int width = template.dimensions[0];
         int depth = template.dimensions[2];
-        if (!ensureFootprintChunksLoaded(world, origin, width, depth)) {
-            LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Chunk not ready for '%s' at %s - skipping candidate",
-                template.id, formatLocation(origin)));
+        int height = template.dimensions[1];
+        int[] bounds = computeAABB(origin, template.clipboard, width, depth, height, rotationDegrees);
+
+        // T085: Use exact rotated bounds and require currently-loaded chunks only.
+        if (!SurfaceSolver.isFootprintReady(world, bounds)) {
+            LOGGER.warning(String.format("[STRUCT] candidate rejected: chunk-not-ready structure='%s' origin=%s bounds=(%d..%d,%d..%d,%d..%d)",
+                template.id, formatLocation(origin), bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5]));
             if (attemptDiagnostics != null) attemptDiagnostics.merge("chunkNotReady", 1, Integer::sum);
             return Optional.empty();
         }
@@ -555,12 +558,6 @@ public class StructureServiceImpl implements StructureService {
         LOGGER.info("[STRUCT] DIAGNOSTIC: Validation passed, computing AABB for collision check");
         
         // Compute exact AABB using the deterministic rotation already calculated
-        int baseWidth = template.dimensions[0];
-        int baseDepth = template.dimensions[2];
-        int height = template.dimensions[1];
-        
-        int[] bounds = computeAABB(origin, template.clipboard, baseWidth, baseDepth, height, rotationDegrees);
-            
         LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: Computed AABB: bounds=(%d..%d, %d..%d, %d..%d) rot=%d°",
                 bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], rotationDegrees));
         
@@ -916,20 +913,18 @@ public class StructureServiceImpl implements StructureService {
                  }
                  
                  LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
-                 
-                 // Foundation backfilling disabled - let structures sit naturally on terrain
-                 // Previous aggressive backfilling created visible dirt walls and terracing
-                 /*
+
+                 int backfillWidth = sampleBounds[1] - sampleBounds[0] + 1;
+                 int backfillDepth = sampleBounds[5] - sampleBounds[4] + 1;
                  int backfilled = TerraformingUtil.backfillFoundation(
                      world,
-                     new Location(world, weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()),
-                     template.dimensions[0],
-                     template.dimensions[2],
+                     new Location(world, sampleBounds[0], sampleBounds[2], sampleBounds[4]),
+                     backfillWidth,
+                     backfillDepth,
                      Material.DIRT
                  );
-                 
-                 LOGGER.fine(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
-                 */
+
+                 LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
                  
                  LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
                  return true;
@@ -1067,6 +1062,18 @@ public class StructureServiceImpl implements StructureService {
                 // Fallback to generic building
                 buildRomanHouse(world, origin, groundY, width, height, depth, random, "generic");
             }
+
+            int[] bounds = computeAABB(origin, template.clipboard, width, depth, height, rotationDegrees);
+            int backfillWidth = bounds[1] - bounds[0] + 1;
+            int backfillDepth = bounds[5] - bounds[4] + 1;
+            int backfilled = TerraformingUtil.backfillFoundation(
+                world,
+                new Location(world, bounds[0], bounds[2], bounds[4]),
+                backfillWidth,
+                backfillDepth,
+                Material.DIRT
+            );
+            LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
             
             LOGGER.fine(String.format("[STRUCT] Paper API placement complete for '%s'", template.id));
             return true;
@@ -1565,24 +1572,66 @@ public class StructureServiceImpl implements StructureService {
             return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
         }
         
-        // Fallback for procedural structures (no clipboard)
-        int effectiveWidth, effectiveDepth;
-        if (rotation == 90 || rotation == 270) {
-            effectiveWidth = baseDepth;
-            effectiveDepth = baseWidth;
-        } else {
-            effectiveWidth = baseWidth;
-            effectiveDepth = baseDepth;
+        // Fallback for procedural structures (no clipboard): use the same corner-rotation
+        // approach as candidate filtering so collision math stays consistent.
+        int[][] corners = new int[8][3];
+        int idx = 0;
+        for (int x : new int[]{0, baseWidth}) {
+            for (int y : new int[]{0, height}) {
+                for (int z : new int[]{0, baseDepth}) {
+                    corners[idx][0] = x;
+                    corners[idx][1] = y;
+                    corners[idx][2] = z;
+                    idx++;
+                }
+            }
         }
-        
-        // Simple bounds assuming origin is minimum corner
-        int minX = originX;
-        int maxX = originX + effectiveWidth - 1;
-        int minY = originY;
-        int maxY = originY + height - 1;
-        int minZ = originZ;
-        int maxZ = originZ + effectiveDepth - 1;
-        
+
+        int minRotX = Integer.MAX_VALUE, maxRotX = Integer.MIN_VALUE;
+        int minRotY = Integer.MAX_VALUE, maxRotY = Integer.MIN_VALUE;
+        int minRotZ = Integer.MAX_VALUE, maxRotZ = Integer.MIN_VALUE;
+
+        for (int i = 0; i < corners.length; i++) {
+            int x = corners[i][0];
+            int y = corners[i][1];
+            int z = corners[i][2];
+
+            int rotX = x;
+            int rotZ = z;
+            switch (rotation) {
+                case 90:
+                    rotX = z;
+                    rotZ = -x;
+                    break;
+                case 180:
+                    rotX = -x;
+                    rotZ = -z;
+                    break;
+                case 270:
+                    rotX = -z;
+                    rotZ = x;
+                    break;
+                default:
+                    rotX = x;
+                    rotZ = z;
+                    break;
+            }
+
+            minRotX = Math.min(minRotX, rotX);
+            maxRotX = Math.max(maxRotX, rotX);
+            minRotY = Math.min(minRotY, y);
+            maxRotY = Math.max(maxRotY, y);
+            minRotZ = Math.min(minRotZ, rotZ);
+            maxRotZ = Math.max(maxRotZ, rotZ);
+        }
+
+        int minX = originX + minRotX;
+        int maxX = originX + maxRotX - 1;
+        int minY = originY + minRotY;
+        int maxY = originY + maxRotY - 1;
+        int minZ = originZ + minRotZ;
+        int maxZ = originZ + maxRotZ - 1;
+
         return new int[]{minX, maxX, minY, maxY, minZ, maxZ};
     }
     

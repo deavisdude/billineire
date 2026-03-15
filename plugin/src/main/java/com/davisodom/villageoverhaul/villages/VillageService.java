@@ -1,5 +1,7 @@
 package com.davisodom.villageoverhaul.villages;
 
+import org.bukkit.World;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,14 +21,26 @@ public class VillageService {
      * Register a new village with a random UUID.
      */
     public Village createVillage(String cultureId, String name, String worldName, int x, int y, int z) {
-        return createVillage(UUID.randomUUID(), cultureId, name, worldName, x, y, z);
+        return createVillage(UUID.randomUUID(), cultureId, name, worldName, null, x, y, z);
+    }
+
+    public Village createVillage(String cultureId, String name, World world, int x, int y, int z) {
+        return createVillage(UUID.randomUUID(), cultureId, name, world, x, y, z);
     }
     
     /**
      * Register a new village with an explicit UUID (for deterministic/test scenarios).
      */
     public Village createVillage(UUID id, String cultureId, String name, String worldName, int x, int y, int z) {
-        Village village = new Village(id, cultureId, name, worldName, x, y, z);
+        return createVillage(id, cultureId, name, worldName, null, x, y, z);
+    }
+
+    public Village createVillage(UUID id, String cultureId, String name, World world, int x, int y, int z) {
+        return createVillage(id, cultureId, name, world.getName(), world.getUID(), x, y, z);
+    }
+
+    public Village createVillage(UUID id, String cultureId, String name, String worldName, UUID worldUuid, int x, int y, int z) {
+        Village village = new Village(id, cultureId, name, worldName, worldUuid, x, y, z);
         villages.put(id, village);
         return village;
     }
@@ -45,6 +59,10 @@ public class VillageService {
         return Collections.unmodifiableCollection(villages.values());
     }
 
+    public void clearAll() {
+        villages.clear();
+    }
+
     /**
      * Remove a village by ID.
      */
@@ -56,7 +74,15 @@ public class VillageService {
      * Load village from persistence
      */
     public void loadVillage(UUID id, String cultureId, String name, long wealthMillz, String worldName, int x, int y, int z) {
-        Village village = new Village(id, cultureId, name, worldName, x, y, z);
+        loadVillage(id, cultureId, name, wealthMillz, worldName, null, x, y, z);
+    }
+
+    public void loadVillage(UUID id, String cultureId, String name, long wealthMillz, World world, int x, int y, int z) {
+        loadVillage(id, cultureId, name, wealthMillz, world.getName(), world.getUID(), x, y, z);
+    }
+
+    public void loadVillage(UUID id, String cultureId, String name, long wealthMillz, String worldName, UUID worldUuid, int x, int y, int z) {
+        Village village = new Village(id, cultureId, name, worldName, worldUuid, x, y, z);
         village.addWealth(wealthMillz);
         villages.put(id, village);
     }
@@ -82,7 +108,7 @@ public class VillageService {
         
         for (Village village : villages.values()) {
             // Only consider villages in same world
-            if (!village.getWorldName().equals(location.getWorld().getName())) {
+            if (!village.matchesWorld(location.getWorld())) {
                 continue;
             }
             

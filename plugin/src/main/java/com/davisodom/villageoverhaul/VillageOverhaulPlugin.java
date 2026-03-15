@@ -140,6 +140,7 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
 
         try {
             metadataStore.loadAll();
+            rehydrateVillageServiceFromMetadata();
             logger.info("OK Village metadata loaded");
         } catch (Exception e) {
             logger.warning("Failed to load village metadata: " + e.getMessage());
@@ -163,6 +164,37 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
         }
         
         logger.info("Village Overhaul enabled successfully!");
+    }
+
+    private void rehydrateVillageServiceFromMetadata() {
+        if (villageService == null || metadataStore == null) {
+            return;
+        }
+
+        villageService.clearAll();
+        for (VillageMetadataStore.VillageMetadata metadata : metadataStore.getAllVillages()) {
+            org.bukkit.World world = metadata.getOrigin().getWorld();
+            if (world == null) {
+                continue;
+            }
+
+            String villageName = metadata.getVillageName();
+            if (villageName == null || villageName.isBlank()) {
+                String shortId = metadata.getVillageId().toString().substring(0, 8);
+                villageName = metadata.getCultureId() + "-" + shortId;
+            }
+
+            villageService.loadVillage(
+                metadata.getVillageId(),
+                metadata.getCultureId(),
+                villageName,
+                0L,
+                world,
+                metadata.getOrigin().getBlockX(),
+                metadata.getOrigin().getBlockY(),
+                metadata.getOrigin().getBlockZ()
+            );
+        }
     }
     
     @Override

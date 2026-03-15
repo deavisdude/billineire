@@ -29,6 +29,7 @@ import java.util.logging.Logger;
 public class SiteValidator {
     
     private static final Logger LOGGER = Logger.getLogger(SiteValidator.class.getName());
+    private final TerrainClassifier.SamplingCache terrainSamplingCache = new TerrainClassifier.SamplingCache();
     
     // === Configurable Thresholds (T057) ===
     // These can be overridden via constructor for testing or config-driven values
@@ -122,6 +123,7 @@ public class SiteValidator {
         boolean foundationOk = validateFoundation(world, origin, width, depth, classificationResult);
         result.foundationOk = foundationOk;
         result.classificationResult = classificationResult;
+        result.cacheStats = terrainSamplingCache.snapshotStats();
         
         // Interior air and entrance checks removed - schematic defines its own interior/entrances
         // Terraforming will clear obstructions, so we only validate foundation suitability
@@ -129,6 +131,23 @@ public class SiteValidator {
         result.entranceOk = true;
         
         result.passed = foundationOk;
+
+        if (foundationOk) {
+            terrainSamplingCache.invalidateFootprint(
+                world,
+                origin.getBlockX(), origin.getBlockX() + width - 1,
+                origin.getBlockZ(), origin.getBlockZ() + depth - 1,
+                1);
+        }
+
+        if (result.cacheStats != null) {
+            LOGGER.fine(String.format(
+                "[STRUCT][CACHE] groundHits=%d groundMisses=%d classificationHits=%d classificationMisses=%d",
+                result.cacheStats.getGroundHits(),
+                result.cacheStats.getGroundMisses(),
+                result.cacheStats.getClassificationHits(),
+                result.cacheStats.getClassificationMisses()));
+        }
         
         if (!result.passed) {
             LOGGER.fine(String.format("[STRUCT] Site validation failed at %s: foundation=%b, classification: %s",
@@ -174,7 +193,7 @@ public class SiteValidator {
                 totalCount++;
                 
                 // Classify terrain at the ACTUAL ground position
-                Classification classification = TerrainClassifier.classify(world, worldX, actualGroundY, worldZ);
+                Classification classification = TerrainClassifier.classify(world, worldX, actualGroundY, worldZ, terrainSamplingCache);
                 classificationResult.increment(classification);
                 
                 // T057: Count solid blocks REGARDLESS of terrain classification
@@ -291,44 +310,7 @@ public class SiteValidator {
      * @return The Y coordinate of the ground (solid block beneath air/vegetation)
      */
     private int findGroundLevelAt(World world, int x, int z, int hintY) {
-        int highestY = world.getHighestBlockYAt(x, z);
-        
-        // Check if the highest block itself is the ground (solid with air above)
-        // This is the common case for normal terrain without trees
-        Block highestBlock = world.getBlockAt(x, highestY, z);
-        Block aboveHighest = world.getBlockAt(x, highestY + 1, z);
-        Classification highestClass = TerrainClassifier.classify(highestBlock);
-        Classification aboveClass = TerrainClassifier.classify(aboveHighest);
-        
-        // If highest block is solid ground and above is air, we found ground
-        if (highestClass == Classification.ACCEPTABLE && 
-            (aboveClass == Classification.BLOCKED || aboveClass == Classification.VEGETATION)) {
-            return highestY;
-        }
-        
-        // Search downward to find solid ground beneath air/vegetation
-        // Start from highest block and search down, but constrain to reasonable range
-        int maxSearchDepth = 32; // Don't search too deep - prevents cave detection
-        for (int y = highestY; y > highestY - maxSearchDepth && y > world.getMinHeight(); y--) {
-            Block block = world.getBlockAt(x, y, z);
-            Block below = world.getBlockAt(x, y - 1, z);
-            
-            // Found ground: current block is air/vegetation AND block below is solid
-            Classification currentClass = TerrainClassifier.classify(block);
-            Classification belowClass = TerrainClassifier.classify(below);
-            
-            boolean currentIsEmpty = (currentClass == Classification.BLOCKED || 
-                                     currentClass == Classification.VEGETATION);
-            boolean belowIsSolid = (belowClass == Classification.ACCEPTABLE);
-            
-            if (currentIsEmpty && belowIsSolid) {
-                return y - 1; // Return Y of the solid ground block
-            }
-        }
-        
-        // Fallback: use the highest block Y (best guess for surface)
-        // Don't use hintY-1 as that could be underground
-        return highestY;
+        return TerrainClassifier.getGroundLevel(world, x, z, terrainSamplingCache);
     }
 
     private FluidPatchCheckResult checkSmallWaterPatches(World world, Location origin, int width, int depth) {
@@ -477,6 +459,7 @@ public class SiteValidator {
         public boolean interiorAirOk = false;
         public boolean entranceOk = false;
         public ClassificationResult classificationResult = null;
+        public TerrainClassifier.CacheStats cacheStats = null;
         
         /**
          * Get human-readable rejection reasons (if validation failed).
@@ -488,13 +471,24 @@ public class SiteValidator {
             }
             return new ArrayList<>();
         }
+
+        public TerrainClassifier.CacheStats getCacheStats() {
+            return cacheStats;
+        }
         
         @Override
         public String toString() {
             String classStr = classificationResult != null ? ", classification: " + classificationResult : "";
             String reasonsStr = !getRejectionReasons().isEmpty() ? ", reasons=" + getRejectionReasons() : "";
-            return String.format("ValidationResult{passed=%b, foundation=%b, interior=%b, entrance=%b%s%s}",
-                    passed, foundationOk, interiorAirOk, entranceOk, classStr, reasonsStr);
+            String cacheStr = cacheStats != null
+                    ? String.format(", cache={groundHits=%d, groundMisses=%d, classificationHits=%d, classificationMisses=%d}",
+                        cacheStats.getGroundHits(),
+                        cacheStats.getGroundMisses(),
+                        cacheStats.getClassificationHits(),
+                        cacheStats.getClassificationMisses())
+                    : "";
+            return String.format("ValidationResult{passed=%b, foundation=%b, interior=%b, entrance=%b%s%s%s}",
+                    passed, foundationOk, interiorAirOk, entranceOk, classStr, reasonsStr, cacheStr);
         }
     }
 }

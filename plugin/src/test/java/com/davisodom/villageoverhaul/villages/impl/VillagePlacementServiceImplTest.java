@@ -166,6 +166,7 @@ public class VillagePlacementServiceImplTest {
 
         World world = Mockito.mock(World.class);
         Mockito.when(world.getName()).thenReturn("test-world");
+    Mockito.when(world.getUID()).thenReturn(UUID.randomUUID());
         Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
         Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
@@ -887,6 +888,166 @@ public class VillagePlacementServiceImplTest {
         assertEquals(1, store.getPlacementReceipts(villageId).size(),
             "T061: Receipt count should match placement count for summary logging");
 
+    }
+
+    @Test
+    @DisplayName("computeFootprintBaseY uses median height to avoid embedding on low outliers")
+    public void testComputeFootprintBaseYUsesMedianSampling() throws Exception {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+        VillageMetadataStore store = Mockito.mock(VillageMetadataStore.class);
+        CultureService cs = Mockito.mock(CultureService.class);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+        SurfaceSolver solver = Mockito.mock(SurfaceSolver.class);
+
+        Mockito.when(solver.getSurfaceHeight(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(solver.getSurfaceHeight(0, 0)).thenReturn(50);
+
+        java.lang.reflect.Method method = VillagePlacementServiceImpl.class.getDeclaredMethod(
+            "computeFootprintBaseY", SurfaceSolver.class, int.class, int.class, int.class, int.class);
+        method.setAccessible(true);
+
+        int baseY = (int) method.invoke(svc, solver, 0, 4, 0, 4);
+
+        assertEquals(64, baseY, "Median sampling should ignore a single low outlier and keep structures from embedding");
+    }
+
+    @Test
+    @DisplayName("adaptive abort stops pathological candidate retry loops")
+    public void testAdaptiveAbortStopsPathologicalRetries() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", Arrays.asList("house_roman_small"), null)));
+
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
+            .thenReturn(Optional.of(new int[]{3, 3, 3}));
+
+        java.util.concurrent.atomic.AtomicInteger attemptCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(
+            Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+            Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
+            .thenAnswer(inv -> {
+                attemptCount.incrementAndGet();
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Integer> diagnostics = (java.util.Map<String, Integer>) inv.getArgument(7);
+                diagnostics.put("placementAttempts", 1);
+                diagnostics.put("siteValidationRejects", 1);
+                diagnostics.put("steep", 1);
+                return Optional.empty();
+            });
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        Optional<UUID> result = svc.placeVillage(world, new Location(world, 0, 64, 0), "test-culture", 777L);
+
+        assertFalse(result.isPresent(), "Expected placement to abort after pathological rejections");
+        assertTrue(attemptCount.get() < 100,
+            "Adaptive abort should stop retries well before the full candidate budget (attempts=" + attemptCount.get() + ")");
+    }
+
+    @Test
+    @DisplayName("adaptive abort skips one structure without stopping later starter placements")
+    public void testAdaptiveAbortSkipsOnlyCurrentStructure() {
+        com.davisodom.villageoverhaul.worldgen.StructureService mockStructure = Mockito.mock(
+            com.davisodom.villageoverhaul.worldgen.StructureService.class);
+
+        VillageOverhaulPlugin plugin = Mockito.mock(VillageOverhaulPlugin.class);
+        Mockito.when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getLogger("test"));
+        Mockito.when(plugin.getDataFolder()).thenReturn(new java.io.File("build/test-data"));
+
+        VillageMetadataStore store = new VillageMetadataStore(plugin);
+
+        CultureService cs = Mockito.mock(CultureService.class);
+        Mockito.when(cs.get("test-culture")).thenReturn(Optional.of(new CultureService.Culture(
+            "test-culture", "Test", Arrays.asList("main_hall", "bad_house", "good_house"), null)));
+
+        Mockito.when(mockStructure.getStructureDimensions(Mockito.anyString()))
+            .thenReturn(Optional.of(new int[]{3, 3, 3}));
+
+        java.util.concurrent.atomic.AtomicInteger badAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
+        Mockito.when(mockStructure.placeStructureAndGetReceipt(
+            Mockito.anyString(), Mockito.any(World.class), Mockito.any(Location.class),
+            Mockito.anyLong(), Mockito.any(UUID.class), Mockito.anyList(), Mockito.anyInt(), Mockito.anyMap(), Mockito.any()))
+            .thenAnswer(inv -> {
+                String structureId = inv.getArgument(0);
+                World receiptWorld = inv.getArgument(1);
+                Location buildingLocation = inv.getArgument(2);
+                UUID villageId = inv.getArgument(4);
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Integer> diagnostics = (java.util.Map<String, Integer>) inv.getArgument(7);
+
+                if ("bad_house".equals(structureId)) {
+                    badAttempts.incrementAndGet();
+                    diagnostics.put("placementAttempts", 1);
+                    diagnostics.put("siteValidationRejects", 1);
+                    diagnostics.put("steep", 1);
+                    return Optional.empty();
+                }
+
+                int originX = buildingLocation.getBlockX();
+                int originY = buildingLocation.getBlockY();
+                int originZ = buildingLocation.getBlockZ();
+                PlacementReceipt receipt = new PlacementReceipt.Builder()
+                    .structureId(structureId)
+                    .villageId(villageId)
+                    .world(receiptWorld)
+                    .origin(originX, originY, originZ)
+                    .rotation(0)
+                    .bounds(originX, originX + 2, originY, originY + 2, originZ, originZ + 2)
+                    .dimensions(3, 3, 3)
+                    .entrance(originX + 1, originY, originZ - 1)
+                    .foundationCorners(new PlacementReceipt.CornerSample[]{
+                        new PlacementReceipt.CornerSample(originX, originY - 1, originZ, Material.DIRT),
+                        new PlacementReceipt.CornerSample(originX + 2, originY - 1, originZ, Material.DIRT),
+                        new PlacementReceipt.CornerSample(originX + 2, originY - 1, originZ + 2, Material.DIRT),
+                        new PlacementReceipt.CornerSample(originX, originY - 1, originZ + 2, Material.DIRT)
+                    })
+                    .build();
+                return Optional.of(receipt);
+            });
+
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("test-world");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenReturn(64);
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+
+        Block dirt = Mockito.mock(Block.class);
+        Mockito.when(dirt.getType()).thenReturn(Material.DIRT);
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(dirt);
+
+        VillagePlacementServiceImpl svc = new VillagePlacementServiceImpl(mockStructure, store, cs);
+
+        Optional<UUID> result = svc.placeVillage(world, new Location(world, 0, 64, 0), "test-culture", 9876L);
+
+        assertTrue(result.isPresent(), "Village placement should still succeed when one structure hits adaptive abort");
+        assertTrue(badAttempts.get() >= 40, "Bad structure should exhaust the adaptive abort window before being skipped");
+        assertEquals(2, store.getVillageBuildings(result.get()).size(),
+            "Main building and later good structure should both be retained after skipping the pathological structure");
     }
 
     private Object createCandidateSite(int x, int y, int z, int distanceSquared, int dx, int dz,

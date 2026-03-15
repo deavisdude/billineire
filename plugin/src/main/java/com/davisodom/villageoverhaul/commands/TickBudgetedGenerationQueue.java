@@ -378,11 +378,12 @@ public class TickBudgetedGenerationQueue {
             deterministicVillageId,
                 currentRequest.getCultureId(),
                 currentRequest.getVillageName(),
-                loc.getWorld().getName(),
+                loc.getWorld(),
                 loc.getBlockX(),
                 loc.getBlockY(),
                 loc.getBlockZ()
         );
+        plugin.getMetadataStore().setVillageName(deterministicVillageId, currentRequest.getVillageName());
 
         currentState.villageName = currentRequest.getVillageName();
         

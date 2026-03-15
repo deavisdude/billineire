@@ -290,4 +290,54 @@ public class PathEmitterTest {
 
         assertTrue(afterSlabCount > beforeSlabCount, "Slab count should increase after smoothing");
     }
+
+    @Test
+    @DisplayName("emitPath clears corridor vegetation and reroutes onto natural surface")
+    public void testEmitPath_clearsVegetationCorridorAndReroutes() {
+        makeFlatGround(500, 500, 500, 500, 69);
+        ensureBlock(500, 70, 500).type = Material.OAK_LEAVES; toMock(ensureBlock(500, 70, 500));
+        ensureBlock(500, 71, 500).type = Material.OAK_LEAVES; toMock(ensureBlock(500, 71, 500));
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return toMock(ensureBlock(x, y, z));
+        });
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int z = inv.getArgument(1);
+            return blocks.entrySet().stream()
+                    .map(Map.Entry::getValue)
+                    .filter(mb -> mb.x == x && mb.z == z && mb.type != Material.AIR)
+                    .mapToInt(mb -> mb.y)
+                    .max().orElse(0);
+        });
+
+        List<Block> path = Collections.singletonList(toMock(ensureBlock(500, 70, 500)));
+        int placed = emitter.emitPath(world, path, "default", Collections.emptyList());
+
+        assertEquals(1, placed, "Expected a rerouted path placement on the natural surface");
+        assertEquals(Material.DIRT_PATH, world.getBlockAt(500, 69, 500).getType());
+        assertEquals(Material.AIR, world.getBlockAt(500, 70, 500).getType(), "Vegetation corridor should be cleared above the path");
+    }
+
+    @Test
+    @DisplayName("smoothPath skips stairs when below block is not a whitelisted surface")
+    public void testSmoothPath_skipsUnsupportedSurface() {
+        ensureBlock(600, 63, 600).type = Material.DIRT; toMock(ensureBlock(600, 63, 600));
+        ensureBlock(600, 64, 600).type = Material.DIRT; toMock(ensureBlock(600, 64, 600));
+        ensureBlock(601, 64, 600).type = Material.OAK_LOG; toMock(ensureBlock(601, 64, 600));
+        ensureBlock(601, 65, 600).type = Material.DIRT; toMock(ensureBlock(601, 65, 600));
+        ensureBlock(602, 65, 600).type = Material.DIRT; toMock(ensureBlock(602, 65, 600));
+
+        Block prev = toMock(ensureBlock(600, 64, 600));
+        Block current = toMock(ensureBlock(601, 65, 600));
+        Block next = toMock(ensureBlock(602, 65, 600));
+
+        int smoothed = emitter.smoothPath(world, Arrays.asList(prev, current, next), "roman");
+
+        assertEquals(0, smoothed, "Non-whitelisted support should prevent stair placement");
+        assertEquals(Material.DIRT, current.getType(), "Current block should remain unchanged when support is not natural terrain");
+    }
 }

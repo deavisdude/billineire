@@ -37,6 +37,7 @@ param(
     ,[int]$MaxBoundsRadiusBlocks = 0
     ,[switch]$FixedLayout = $false
     ,[int]$FixedLayoutCount = 3
+    ,[int]$PathCoverageThresholdPct = 50
     ,[switch]$ForceZeroPlacement = $false
 )
 
@@ -214,6 +215,21 @@ Write-Host "Ticks: $Ticks" -ForegroundColor White
 Write-Host "Seed: $Seed" -ForegroundColor White
 Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+if (-not [System.IO.Path]::IsPathRooted($ServerDir)) {
+    $ServerDir = Join-Path $RepoRoot $ServerDir
+}
+if (-not [System.IO.Path]::IsPathRooted($SnapshotFile)) {
+    $SnapshotFile = Join-Path $RepoRoot $SnapshotFile
+}
+
+$PluginDir = Join-Path $RepoRoot 'plugin'
+$BuildLibsDir = Join-Path $PluginDir 'build\libs'
+$TestServerPluginsDir = Join-Path $ServerDir 'plugins'
+
+Write-Host "Resolved server dir: $ServerDir" -ForegroundColor DarkGray
+Write-Host "Resolved snapshot: $SnapshotFile" -ForegroundColor DarkGray
+
 # Ensure a minimal server.properties exists before enabling RCON (precondition for BotPlayer)
 $serverPropsCheckPath = Join-Path $ServerDir "server.properties"
 if (-not (Test-Path $serverPropsCheckPath)) {
@@ -233,6 +249,22 @@ spawn-monsters=false
 # Enable RCON for verification (R010)
 Import-Module "$PSScriptRoot/BotPlayer.psm1" -ErrorAction Stop
 $rconPassword = Enable-Rcon -ServerDir $ServerDir
+
+# Deploy the newest built plugin jar into the test server before startup.
+New-Item -ItemType Directory -Path $TestServerPluginsDir -Force | Out-Null
+$JarFile = Get-ChildItem -Path (Join-Path $BuildLibsDir '*.jar') -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike '*-sources.jar' -and $_.Name -notlike '*-javadoc.jar' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if (-not $JarFile) {
+    Write-Host "X No plugin JAR found in $BuildLibsDir" -ForegroundColor Red
+    exit 1
+}
+
+$DestJar = Join-Path $TestServerPluginsDir 'VillageOverhaul.jar'
+Copy-Item -Path $JarFile.FullName -Destination $DestJar -Force
+Write-Host "OK Deployed plugin jar: $($JarFile.Name) -> $DestJar" -ForegroundColor Green
 
 # Heuristic: user may have passed an unquoted JavaPath into the first positional parameter (ServerDir)
 # e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
@@ -1215,6 +1247,38 @@ if (Test-Path "$ServerDir/server.log") {
         Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
     }
 }
+
+    Write-Host ""
+    Write-Host "=== Path Coverage Validation (T055) ===" -ForegroundColor Cyan
+
+    $pathCoveragePattern = 'PATH-COVERAGE village=([a-f0-9\-]+) attempted=([0-9]+) spawnedPairs=([0-9]+) coverage=([0-9]+)%'
+    $coverageMatches = [regex]::Matches($logContent, $pathCoveragePattern)
+
+    if ($coverageMatches.Count -eq 0) {
+        Write-Host "! No PATH-COVERAGE lines found in logs" -ForegroundColor Yellow
+    } else {
+        $coverageFailures = 0
+        foreach ($match in $coverageMatches) {
+            $villageId = $match.Groups[1].Value
+            $attempted = [int]$match.Groups[2].Value
+            $spawnedPairs = [int]$match.Groups[3].Value
+            $coverage = [int]$match.Groups[4].Value
+
+            Write-Host "PATH-COVERAGE village=$villageId attempted=$attempted spawnedPairs=$spawnedPairs coverage=$coverage%"
+
+            if ($attempted -gt 0 -and $coverage -lt $PathCoverageThresholdPct) {
+                $coverageFailures++
+                Write-Host "X Village $villageId path coverage $coverage% is below threshold $PathCoverageThresholdPct%" -ForegroundColor Red
+            }
+        }
+
+        if ($coverageFailures -eq 0) {
+            Write-Host "OK All villages meet the $PathCoverageThresholdPct% path coverage threshold" -ForegroundColor Green
+        } elseif ($env:CI -eq 'true') {
+            Write-Host "X $coverageFailures village(s) failed the $PathCoverageThresholdPct% path coverage threshold" -ForegroundColor Red
+            exit 7
+        }
+    }
 
     # T060: Path emission verification
     Write-Host ""

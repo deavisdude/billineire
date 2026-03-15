@@ -31,6 +31,14 @@ Java 17 (Paper 1.20+), optional Kotlin 1.9 (JVM 17): Follow standard conventions
 <!-- MANUAL ADDITIONS START -->
 Before beginning a task, consider using any/all of the skills avaialble to you in /.github/skills/. Review relevant skill files for best practices, code patterns, and critical rules related to the task at hand.
 
+Tool routing and MCP priorities:
+- Prefer Serena first for non-trivial codebase navigation and editing when it is available. Ideal use cases: symbol lookup, reference tracing, rename/refactor, cross-file API discovery, targeted body replacement, and large Java/Kotlin code comprehension. Only skip Serena for tiny 1-2 file tasks, exact-string hunts, or plain docs/shell edits where file-level tools are faster.
+- Prefer the local `specBillineirePlaytest` MCP server for build, deploy, test, playtest, RCON, and latest-log inspection work instead of ad-hoc terminal commands. Ideal tools: `gradle_build`, `gradle_test`, `deploy_plugin_jar`, `run_fast_village_generation`, `run_headless_scenario`, `inspect_latest_playtest`, and `send_rcon_command`.
+- Prefer `context7` for version-sensitive external library/framework documentation and current examples.
+- Prefer `github` MCP for issues, pull requests, branches, commits, releases, and repository search.
+- When MCP or Serena are unavailable, fall back explicitly to `rg`, `fd`, `jq`, `delta`, and the existing PowerShell harness scripts rather than slower or more manual alternatives.
+- Do not ignore these tools when the task overlaps their ideal use case; use them proactively and only fall back when the preferred tool is unavailable or clearly lower-value for the task.
+
 When completing a task:
 1. Validate all acceptance criteria are fully met
 2. Run all applicable automated/headless tests

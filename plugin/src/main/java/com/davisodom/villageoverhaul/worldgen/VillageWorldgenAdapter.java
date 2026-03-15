@@ -249,8 +249,9 @@ public class VillageWorldgenAdapter implements Listener {
 
             if (placedVillageId.isPresent()) {
                 VillageService vs = plugin.getVillageService();
-                var village = vs.createVillage(villageId, cultureId, villageName, world.getName(),
+                var village = vs.createVillage(villageId, cultureId, villageName, world,
                     baseX, baseY + 1, baseZ);
+                plugin.getMetadataStore().setVillageName(villageId, villageName);
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
                     + world.getName() + " @ (" + baseX + "," + (baseY + 1) + "," + baseZ + ")");
                 if (plugin.getProjectGenerator() != null) {

@@ -24,7 +24,10 @@ plugin/build/
 plugin/.gradle/
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/mcp.json
+!.vscode/settings.json
 .plugin/
 .settings/
 plugin/.classpath

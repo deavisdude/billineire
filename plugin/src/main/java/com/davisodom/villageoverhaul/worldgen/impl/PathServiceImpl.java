@@ -124,6 +124,7 @@ public class PathServiceImpl implements PathService {
                 .generatedTimestamp(System.currentTimeMillis());
         
         // Connect main building to all other buildings
+        int attemptedPairs = 0;
         int successfulPaths = 0;
         for (int i = 0; i < buildingLocations.size(); i++) {
             Location building = buildingLocations.get(i);
@@ -132,6 +133,7 @@ public class PathServiceImpl implements PathService {
             if (building.distance(mainBuildingLocation) < 5) {
                 continue;
             }
+            attemptedPairs++;
             
             // Generate path with building-specific seed
             long pathSeed = seed + i;
@@ -147,6 +149,12 @@ public class PathServiceImpl implements PathService {
         
         // Clear village context after path generation
         currentVillageContext = null;
+
+        int coveragePercent = attemptedPairs > 0
+            ? (int) Math.round(((double) successfulPaths / (double) attemptedPairs) * 100.0)
+            : 0;
+        LOGGER.info(String.format("PATH-COVERAGE village=%s attempted=%d spawnedPairs=%d coverage=%d%%",
+            villageId, attemptedPairs, successfulPaths, coveragePercent));
         
         if (successfulPaths == 0) {
             return false;
@@ -194,8 +202,8 @@ public class PathServiceImpl implements PathService {
             SurfaceSolver solver = new SurfaceSolver(world, masks);
             graph = new WalkableGraph(solver, masks, 2); // Buffer=2
 
-            Optional<Location> resolvedStart = resolveEndpointOutsideMasks(world, solver, graph, start, 8);
-            Optional<Location> resolvedEnd = resolveEndpointOutsideMasks(world, solver, graph, end, 8);
+            Optional<Location> resolvedStart = resolveEndpointOutsideMasks(world, solver, graph, start, 32);
+            Optional<Location> resolvedEnd = resolveEndpointOutsideMasks(world, solver, graph, end, 32);
             if (resolvedStart.isEmpty() || resolvedEnd.isEmpty()) {
                 LOGGER.warning(String.format("[PATH] Unable to resolve walkable endpoints for path: start=%s end=%s",
                     formatLocation(start), formatLocation(end)));
@@ -231,7 +239,7 @@ public class PathServiceImpl implements PathService {
     private Optional<Location> resolveEndpointOutsideMasks(World world, SurfaceSolver solver, WalkableGraph graph,
                                                           Location target, int maxRadius) {
         OptionalInt directY = solver.nearestWalkable(target.getBlockX(), target.getBlockZ(), target.getBlockY());
-        if (directY.isPresent() && !graph.isObstacle(target.getBlockX(), directY.getAsInt(), target.getBlockZ())) {
+        if (directY.isPresent() && isNavigableEndpoint(world, graph, target.getBlockX(), directY.getAsInt(), target.getBlockZ())) {
             return Optional.of(new Location(world, target.getBlockX(), directY.getAsInt(), target.getBlockZ()));
         }
 
@@ -244,7 +252,7 @@ public class PathServiceImpl implements PathService {
                     int x = target.getBlockX() + dx;
                     int z = target.getBlockZ() + dz;
                     OptionalInt y = solver.nearestWalkable(x, z, target.getBlockY());
-                    if (y.isPresent() && !graph.isObstacle(x, y.getAsInt(), z)) {
+                    if (y.isPresent() && isNavigableEndpoint(world, graph, x, y.getAsInt(), z)) {
                         return Optional.of(new Location(world, x, y.getAsInt(), z));
                     }
                 }
@@ -252,6 +260,25 @@ public class PathServiceImpl implements PathService {
         }
 
         return Optional.empty();
+    }
+
+    private boolean isNavigableEndpoint(World world, WalkableGraph graph, int x, int y, int z) {
+        if (graph.isObstacle(x, y, z)) {
+            return false;
+        }
+        List<int[]> neighbors = graph.getNeighbors(x, y, z);
+        if (neighbors.isEmpty()) {
+            return false;
+        }
+
+        Location here = new Location(world, x, y, z);
+        for (int[] neighbor : neighbors) {
+            Location there = new Location(world, neighbor[0], neighbor[1], neighbor[2]);
+            if (calculateTerrainCost(world, here, there) < OBSTACLE_COST) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String formatLocation(Location location) {

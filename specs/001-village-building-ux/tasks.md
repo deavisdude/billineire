@@ -226,6 +226,7 @@ border tracking, and align site selection with spawn proximity and nearest-neigh
     - VillageWorldgenAdapter updated: `VillageMetadataStore metadataStore = plugin.getMetadataStore();` (replaces `new VillageMetadataStore(plugin)`)
     - All callers now use shared singleton instance via `plugin.getMetadataStore()`
     - BUILD SUCCESSFUL with all 14 tests passing (6 TickHarnessTest, 8 EconomyAntiDupeTest)
+  - Playtest note (2026-03-14): A regenerated world with the same name (`world`) still restored old villages/villagers and suppressed fresh spawn seeding. Singleton scope is working, but persisted world identity is still keyed too loosely; follow up in `T088`.
 
 **Checkpoint**: Inter-village rules enforced and observable; borders persisted; ready for US1.
 
@@ -603,6 +604,17 @@ R011 [Core] Receipt vs world alignment & non-overlap hardening
     - No foundation defects detected (0/4 AIR corners)
     - Terraforming aligned with PlacementReceipt AABB
     - Ready for multi-seed validation (R011a acceptance: 3+ seeds)
+    - 2026-03-14 live playtest still showed a continuous air layer beneath the interior footprint of placed buildings. Current work guarantees corners/perimeter only; fill the underside of the full footprint with predominant local material in a follow-up task.
+
+- [X] T090 [P1] Fill full structure underside with predominant local material
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingPlan.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtilTest.java`
+  - Description: Extend post-placement backfill so it does not stop at the perimeter ring. Any unsupported air shelf beneath the placed footprint should be filled from natural ground up to the structure base using the predominant local surface material selected by the terraforming pipeline.
+  - Repro (2026-03-14): Live villages generated with a visible layer of air beneath each structure even though the perimeter/corner checks passed.
+  - Acceptance:
+    - No placed structure has a continuous air layer beneath its footprint in manual or headless verification.
+    - Underfill uses the predominant local surface material (for example sand in deserts, dirt/grass in plains, stone where appropriate) rather than a hard-coded dirt fallback.
+    - `/votest verify-persistence` or equivalent audit samples include interior underside points so the regression is detectable in automation.
+  - Implementation (2026-03-14): Expanded `backfillFoundation()` from perimeter-only support to full-footprint underfill with preserved local surface material selection, re-enabled the call from the live placement path(s), and extended `/votest verify-persistence` to sample underside interior points. Focused `TerraformingUtilTest` coverage passes and live generation logs now show `[STRUCT] Foundation backfilled ...` on placed structures.
 
 
 - [X] R011b [P0] Rotation-aware non-overlap enforcement
@@ -1581,6 +1593,28 @@ Notes:
   - Acceptance:
     - Collision checks use a single consistent strategy and documentation reflects the choice.
 
+## March 2026 Live Playtest Regressions
+
+- [X] T088 [P0] Persist world identity strongly enough to isolate regenerated worlds
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/VillageWorldgenAdapter.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/Village.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/model/PlacementReceipt.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/CustomVillagerService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/VillageCommands.java`
+  - Description: Persist and compare a stronger world identity than `worldName` alone (for example world UUID plus seed/folder fingerprint) when restoring villages, receipts, masks, and villagers. Startup seeding must only skip when the currently loaded world instance already has villages, and `/v list` must agree with that same world identity.
+  - Repro (2026-03-14): Live startup log showed `Attempting to seed village in world: world` immediately followed by `[WORLDGEN] Existing villages detected for world world; skipping spawn seeding.` while old villagers were restored from a deleted/recreated world and `/v list` showed no villages.
+  - Acceptance:
+    - Deleting and regenerating a world named `world` does not restore stale villages or villagers from the previous world instance.
+    - Spawn seeding proceeds for the new world when no villages exist for the current world identity.
+    - `/v list`, villager restoration, and worldgen skip logic all use the same world identity check and produce consistent results.
+  - Implementation (2026-03-14): Added world UUID persistence to village metadata, placement receipts, and villager records; restore paths now require UUID matches instead of world-name matches; `VillageService` now carries world UUIDs and `VillageCommands` filters by `matchesWorld`; plugin startup rehydrates `VillageService` from filtered metadata so `/v list` stays aligned with loaded villages. Focused persistence and villager restore tests pass, and a direct headless run now logs `Loaded 0 villages from disk` plus `OK Restored 0 persisted villagers` when stale same-name worlds are present.
+
+- [X] T089 [P0] Scope adaptive-abort per structure and protect starter building count
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImplTest.java`, `scripts/ci/sim/test-village-generation.ps1`
+  - Description: Ensure adaptive abort / rejection-rate heuristics are evaluated per structure attempt (or another fresh retry window), not against cumulative village-wide rejection totals that include earlier successful placements. Preserve the fast-fail benefit on pathological seeds, but do not let one structure's rejection history strand the rest of the starter set.
+  - Repro (2026-03-14): Live generation placed the main building, then the next structure aborted after its first failed candidate with logs like `[STRUCT] adaptive-abort structure=house_roman_medium attempts=226 rejectionRate=1.00 candidatesTried=1/240`, leaving villages at `buildings=1`.
+  - Acceptance:
+    - `adaptive-abort` cannot trigger on the second or later structure solely because prior structures accumulated rejections.
+    - March 2026 repro seeds no longer collapse to a single-building village unless a structured village-level root-cause summary explains why additional starter structures are impossible.
+    - Headless generation coverage catches regressions by asserting the expected starter structure count on affected seeds.
+  - Implementation (2026-03-14): Split adaptive-abort tracking into per-structure retry windows while preserving village-level rejection summaries, changed abort behavior from “stop village placement” to “skip this structure”, added a regression test proving a later starter structure can still place after one structure exhausts its abort window, tightened the fast-generation harness default to fail when starter structure count stays below the expected minimum, and added `[STRUCT][STARTER-SHORTFALL]` summaries for seeds that still cannot reach the full starter target.
+
 - [X] T051b [P1] SurfaceSolver / Entrance Validation Hardening
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/StructureService.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java
   - Description: Ensure SurfaceSolver.nearestWalkable never returns a y inside any VolumeMask; add entrance validation that rejects entrances that cannot snap to a solid natural ground outside expanded VolumeMask. Log rejection reason.
@@ -1601,19 +1635,19 @@ Notes:
   - Acceptance:
     - Node cap not silently aborting; failure reason present in diagnostics; retry attempts logged; overall path spawn coverage improves.
 
-- [ ] T054 [P1] Deterministic Seed Propagation & Fixed-Layout Mode
+- [X] T054 [P1] Deterministic Seed Propagation & Fixed-Layout Mode
   - Files: plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java, plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java, scripts/ci/sim/run-scenario.ps1
   - Description: Ensure path seeding derives deterministically from village seed chain; add `-FixedLayout` harness flag that bypasses search and uses deterministic coordinates for structure footprints to isolate path determinism.
   - Acceptance:
     - `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>` is logged; fixed-layout runs reproduce placements and path hashes consistently.
 
-- [ ] T055 [P1] Harness Assertion: 50% Path Coverage Threshold & Reporting
+- [X] T055 [P1] Harness Assertion: 50% Path Coverage Threshold & Reporting
   - Files: scripts/ci/sim/run-scenario.ps1, scripts/ci/sim/test-path-coverage.ps1, tests/HEADLESS-TESTING.md
   - Description: Add a harness check that for every generated village, spawned path blocks >= 50% of attempted building-to-building path pairs (or configurable threshold). Produce per-village report and exit non-zero when threshold unmet (CI-mode).
   - Acceptance:
     - CI script emits per-village coverage line: `PATH-COVERAGE village=<uuid> attempted=<M> spawnedPairs=<S> coverage=<percent>%` and fails when coverage <50% in CI runs.
 
-- [ ] T056 [P2] Fast Playtest Guide & Verify Steps
+- [X] T056 [P2] Fast Playtest Guide & Verify Steps
   - Files: tests/HEADLESS-TESTING.md, specs/001-village-building-ux/tasks.md
   - Description: Add short playtest steps for the sprint: run fixed-layout with known seed, run 3 headless repeats, collect `PATH-COVERAGE` lines, and inspect `[PATH][DIAG]` counters.
   - Acceptance:
@@ -1623,7 +1657,7 @@ Notes:
 Removed (superseded):
 - T015c (Deferred terraform commit / rollback) is superseded by T058 (commit journaling + rollback) and the P0 stability follow-ups (T059, T065).
 
-- [ ] T021d [P1] [US2] Path ground detection excluding vegetation
+- [X] T021d [P1] [US2] Path ground detection excluding vegetation
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
   - Description: Update `findGroundLevel()` to treat leaves/logs/any VEGETATION classification as non-surface; descend until solid non-vegetation ground or abort node if descent limit exceeded. `PathEmitter` adds `isValidPathSurface()` whitelist (grass, dirt, stone, sand, gravel, snow variants). Skip or reroute nodes landing on vegetation. Optionally clear a single vegetation layer (not trees) before emission.
   - Triage Note (2026-01-17): Jungle canopy interference
@@ -1638,7 +1672,7 @@ Removed (superseded):
     - Visual inspection: no treetop paths; all paths hug natural terrain.
   - Playtest note (2026-01-19): Paths failed entirely with `[PATH] A* failed: explored=1/10000`, suggesting vegetation/ground detection may be producing no walkable nodes.
 
-- [ ] T086 [P1] Clear vegetation/trees in path corridor during generation
+- [X] T086 [P1] Clear vegetation/trees in path corridor during generation
   - Story: Spawn village had no paths despite only trees/grass obstructions
   - Description: When path generation begins, allow the path pipeline to clear obstructing vegetation (leaves/logs/foliage) within the intended corridor before or during emission so A* has viable walkable nodes and emission can place blocks. Ensure clearing is bounded (corridor width, max blocks), respects protections, and is logged.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
@@ -1647,14 +1681,14 @@ Removed (superseded):
     - Logs include a single-line summary: `[PATH][CLEAR] clearedVegetation=<n> corridorWidth=<w> blocks=<n>`.
     - Paths emit in the 2026-01-19 playtest seed where A* previously failed at explored=1.
 
-- [ ] T020b [P1] [US1] Enforce site-prep abort on fluid veto
+- [X] T020b [P1] [US1] Enforce site-prep abort on fluid veto
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
   - Description: If `TerraformingUtil.prepareSite()` returns false (fluid detected), abort placement attempt immediately instead of proceeding to paste; count toward rejection metrics with reason `fluid`.
   - Acceptance:
     - No paste occurs after a fluid rejection log.
     - Final placed footprints contain 0 fluid tiles under structure base.
 
-- [ ] T014c [P1] [US1] Prevent dirt grading on leaf/log canopy
+- [X] T014c [P1] [US1] Prevent dirt grading on leaf/log canopy
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
   - Description: During grading/fill, treat leaves/logs as transparent; never place dirt directly on them. Either trim foliage or skip column; record skipped columns for metrics.
   - Acceptance:
@@ -1665,45 +1699,49 @@ Removed (superseded):
 Removed (duplicate):
 - T018c (Correct final summary building count) duplicates T061.
 
-- [ ] T017c [P2] [US1] Normalize rotated footprint dimensions
+- [X] T017c [P2] [US1] Normalize rotated footprint dimensions
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
   - Description: After rotation, compute width/depth using rotated clipboard dims only (exclude spacing buffer). Store schematic footprint; enforce spacing externally.
   - Acceptance:
     - Footprint logs for all rotations equal original schematic dimensions (or swapped).
     - Downstream systems (paths/borders) show consistent bounds.
 
-- [ ] T012m [P2] [Foundational] Adaptive reseat/backoff heuristics
+- [X] T012m [P0] [Foundational] Adaptive reseat/backoff heuristics
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
-  - Description: Monitor rejection rate; if `>0.95` after threshold attempts, adjust search radius + tighten slope tolerance or abort early with `[STRUCT] adaptive-abort` log.
+  - Description: Monitor rejection rate for the current structure attempt; if `>0.95` after threshold attempts, adjust search radius + tighten slope tolerance or abort early with `[STRUCT] adaptive-abort` log. Do not carry rejection totals from previously seated structures into the next structure's abort decision.
   - Acceptance:
     - Attempts reduced ≥50% on pathological seeds vs baseline.
     - AvgRejected < 0.90 in stress test scenario.
+    - Adaptive-abort decisions are scoped per structure (or equivalent retry window), not cumulative across earlier successful placements.
+    - Starter villages no longer stop at `buildings=1` on the March 2026 repro seeds unless all remaining structures emit a structured root-cause summary.
+  - Playtest note (2026-03-14): Current live logs show `adaptive-abort` firing on the second structure with `attempts=226` and `candidatesTried=1/240`, which indicates cumulative counters are poisoning later placements. Coordinate the immediate fix in `T089`.
+  - Implementation (2026-03-14): Adaptive abort is now evaluated against a fresh per-structure tracker in both new-village and existing-village placement paths, while village-level counters remain available for zero-placement and shortfall diagnostics.
 
-- [ ] T012n [P3] [Foundational] Terrain classification caching
+- [X] T012n [P3] [Foundational] Terrain classification caching
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerrainClassifier.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SiteValidator.java`
   - Description: Cache `findGroundLevel` and 3x3 slope results per (x,z) within placement window; invalidate entries touched by accepted footprint. Provide perf counters.
   - Acceptance:
     - ≥30% reduction in classification calls measured by perf counters.
     - No incorrect terrain decisions (spot-check classification vs raw world state).
 
-- [ ] T022b [P2] [US2] PathEmitter under-support & surface whitelist
+- [X] T022b [P2] [US2] PathEmitter under-support & surface whitelist
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`
   - Description: Emit slabs/stairs only when block below is solid natural ground; fallback to full block else. Combine with vegetation exclusion to eliminate floating or treetop smoothing artifacts.
   - Acceptance:
     - 0 floating slabs/stairs; complements headless test T026f.
     - Emitted blocks restricted to natural whitelist.
 
-- [ ] T081 [P1] Fix terraforming to respect local surface materials
+- [X] T081 [P1] Fix terraforming to respect local surface materials
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
   - Description: Ensure terraforming operations (grading/filling) detect and use the dominant local surface material (e.g., SAND in deserts, MYCELIUM in mushroom fields, PODZOL in taigas) instead of defaulting to grass/dirt.
   - Acceptance: Buildings placed on non-grass surfaces have foundations that match the surrounding terrain (e.g., sand foundations in deserts).
 
-- [ ] T082 [P1] Fix embedded structures (1-2 blocks too deep) in high-slope terrain
+- [X] T082 [P1] Fix embedded structures (1-2 blocks too deep) in high-slope terrain
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
   - Description: Investigate and fix cases where buildings are placed 1-2 blocks too deep into terrain. This occurred in a recent playtest (accessible but awkward).
   - Acceptance: Natural-looking placement depth with entrance accessibility and no awkward embedding.
 
-- [ ] T085 [P0] Add footprint chunk-readiness check before SurfaceSolver sampling
+- [X] T085 [P0] Add footprint chunk-readiness check before SurfaceSolver sampling
   - Story: Performance and Non-blocking Placement
   - Description: Before SurfaceSolver performs height sampling for a structure footprint, implement a check to ensure all affected chunks are loaded/ready. Skip the footprint (candidate) if any chunk is unloaded to prevent synchronous loading on the main thread. This prevents the "freeze" issue during the site validation phase.
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/SurfaceSolver.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
@@ -1713,7 +1751,7 @@ Removed (duplicate):
     - Zero synchronous chunk loads during `/votest` generation in unloaded areas.
     - Log diagnostic: `[STRUCT] candidate rejected: chunk-not-ready`.
 
-Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b, T012m) → P3 (T012n).
+Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1 (T061, T062, T063, T021d, T020b, T014c) → P2 (T017c, T022b) → P3 (T012n).
 
 **Checkpoint (goal)**: No treetop path blocks; no stray terraformed platforms; accurate summary counts; reduced attempt inflation; performance improved for classification-heavy seeds.
 

@@ -119,6 +119,19 @@ class SurfaceSolverTest {
         assertFalse(result.isPresent());
     }
 
+    @Test
+    void testIsFootprintReady_requiresLoadedChunks() {
+        int[] bounds = new int[]{0, 31, 64, 70, 0, 31};
+
+        lenient().when(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
+        when(world.isChunkLoaded(1, 1)).thenReturn(false);
+
+        assertFalse(SurfaceSolver.isFootprintReady(world, bounds));
+
+        when(world.isChunkLoaded(1, 1)).thenReturn(true);
+        assertTrue(SurfaceSolver.isFootprintReady(world, bounds));
+    }
+
     private void setupColumn(int x, int z, int groundY, Material groundType) {
         lenient().when(world.getHighestBlockYAt(x, z)).thenReturn(groundY);
         

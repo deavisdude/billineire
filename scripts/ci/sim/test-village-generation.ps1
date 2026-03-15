@@ -25,7 +25,7 @@
     Maximum time to wait for generation (default: 60)
 
 .PARAMETER MinExpectedStructures
-    Minimum structures to consider test a success (default: 1 due to T067/T070 bugs)
+    Minimum structures to consider test a success (default: matches starter structure expectation)
 
 .EXAMPLE
     .\test-village-generation.ps1
@@ -41,7 +41,7 @@ param(
     [string]$VillageName = "TestVillage",
     [int]$MaxWaitSeconds = 60
     , [int]$ExpectedStructures = 5
-    , [int]$MinExpectedStructures = 1  # Lowered due to T067/T069/T070 bugs
+    , [int]$MinExpectedStructures = 5
     , [int]$PathConnectivityThreshold = 90
     , [switch]$ExistingVillageFillIn = $false
     , [int]$MaxBoundsRadiusBlocks = 0
@@ -56,6 +56,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path "$ScriptDir\..\..\..").Path
 $ServerDir = Join-Path $RepoRoot "test-server"
 $LogFile = Join-Path $ServerDir "logs\latest.log"
+$BotPlayerModule = Join-Path $ScriptDir "BotPlayer.psm1"
+
+Import-Module $BotPlayerModule -ErrorAction Stop
+$rconPassword = Enable-Rcon -ServerDir $ServerDir
 
 Write-Host "=== Fast Village Generation Test ===" -ForegroundColor Cyan
 Write-Host "Seed: $Seed" -ForegroundColor Gray
@@ -197,14 +201,15 @@ Start-Sleep -Seconds 2
 # Trigger village generation via RCON
 Write-Host ""
 Write-Host "Triggering village generation: /vo generate $Culture $VillageName $Seed" -ForegroundColor Cyan
-
-# Use mcrcon if available, otherwise skip RCON trigger (server will auto-generate)
-$rconPath = Join-Path $ServerDir "plugins\mcrcon.exe"
-if (Test-Path $rconPath) {
-    $rconResult = & $rconPath -H localhost -p 25575 -P admin "vo generate $Culture $VillageName $Seed" 2>&1
-    Write-Host "  RCON response: $rconResult" -ForegroundColor Gray
-} else {
-    Write-Host "  Note: RCON not available, relying on auto-generation or manual trigger" -ForegroundColor Yellow
+try {
+    $rconResult = Send-RconCommand -ServerAddress "localhost" -Port 25575 -Password $rconPassword -Command "vo generate $Culture $VillageName $Seed"
+    if ($rconResult) {
+        Write-Host "  RCON response: $rconResult" -ForegroundColor Gray
+    } else {
+        Write-Host "  ! RCON returned no response" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "  X RCON command failed: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 # Monitor logs for generation completion
@@ -224,6 +229,7 @@ $fillInTriggered = $false
 $seenReceipts = @{}
 $pathsComplete = $false
 $pathsConnectivity = $null
+$starterShortfallLines = @()
 
 while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
     Start-Sleep -Seconds 1
@@ -283,6 +289,27 @@ while (((Get-Date) - $generationStart).TotalSeconds -lt $MaxWaitSeconds) {
             $generationComplete = $true
             break
         }
+
+        if ($line -match "\[GEN-QUEUE\] Successfully generated village '.*' with ([0-9]+) buildings") {
+            $generationComplete = $true
+            $reportedStructureCount = [int]$Matches[1]
+            if ($reportedStructureCount -gt $structureCount) {
+                $structureCount = $reportedStructureCount
+            }
+            break
+        }
+
+        if ($line -match "\[STRUCT\] village: id=.* buildings=([0-9]+)") {
+            $reportedStructureCount = [int]$Matches[1]
+            if ($reportedStructureCount -gt $structureCount) {
+                $structureCount = $reportedStructureCount
+            }
+        }
+        if ($line -match "\[STRUCT\]\[STARTER-SHORTFALL\]") {
+            if ($starterShortfallLines -notcontains $line) {
+                $starterShortfallLines += $line
+            }
+        }
     }
     
     if ($generationComplete) {
@@ -298,11 +325,11 @@ if ($generationComplete -and $ExistingVillageFillIn -and $villageId) {
     $initialStructureCount = $structureCount
     Write-Host "" 
     Write-Host "Triggering existing-village fill-in: /votest generate-structures $villageId" -ForegroundColor Cyan
-    if (Test-Path $rconPath) {
-        $rconResult = & $rconPath -H localhost -p 25575 -P admin "votest generate-structures $villageId" 2>&1
+    try {
+        $rconResult = Send-RconCommand -ServerAddress "localhost" -Port 25575 -Password $rconPassword -Command "votest generate-structures $villageId"
         Write-Host "  RCON response: $rconResult" -ForegroundColor Gray
-    } else {
-        Write-Host "  X RCON not available; cannot run generate-structures" -ForegroundColor Red
+    } catch {
+        Write-Host "  X RCON generate-structures failed: $($_.Exception.Message)" -ForegroundColor Red
     }
 
     $fillInTriggered = $true
@@ -390,6 +417,10 @@ if ($villageId) {
                 MaxZ = [int]$Matches[11]
             }
         }
+    }
+
+    if ($receipts.Count -gt $structureCount) {
+        $structureCount = $receipts.Count
     }
     
     Write-Host "Found $($receipts.Count) placement receipts" -ForegroundColor Gray
@@ -487,8 +518,13 @@ if ($ExistingVillageFillIn) {
 
 if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk -and $additionalOk -and $boundsOk) {
     if ($structureCount -lt $ExpectedStructures) {
-        Write-Host "OK Minimum checks passed (degraded: $structureCount/$ExpectedStructures structures due to T067/T070)" -ForegroundColor Yellow
-        Write-Host "  Resolve T067/T069/T070 to achieve full structure placement" -ForegroundColor Yellow
+        Write-Host "OK Minimum checks passed (degraded: $structureCount/$ExpectedStructures structures)" -ForegroundColor Yellow
+        if ($starterShortfallLines.Count -gt 0) {
+            Write-Host "  Starter shortfall diagnostics:" -ForegroundColor Yellow
+            foreach ($diag in $starterShortfallLines) {
+                Write-Host "    $diag" -ForegroundColor Yellow
+            }
+        }
     } else {
         Write-Host "OK All checks passed" -ForegroundColor Green
     }
@@ -503,7 +539,12 @@ if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk
     # Provide explicit failure reasons for CI
     if ($structureCount -lt $MinExpectedStructures) { 
         Write-Host "  X Expected at least $MinExpectedStructures structure(s) but found $structureCount (HARD FAIL)" -ForegroundColor Red
-        Write-Host "    Check T067 (terrain fallback) and T070 (candidate search) for root cause" -ForegroundColor Red
+        if ($starterShortfallLines.Count -gt 0) {
+            Write-Host "  Starter shortfall diagnostics:" -ForegroundColor Yellow
+            foreach ($diag in $starterShortfallLines) {
+                Write-Host "    $diag" -ForegroundColor Yellow
+            }
+        }
     }
     if ($ExistingVillageFillIn -and (-not $additionalOk)) {
         Write-Host "  X Expected at least $MinAdditionalStructures additional structures but found $additionalStructures" -ForegroundColor Red
@@ -513,7 +554,7 @@ if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk
         Write-Host "  X Missing [STRUCT][BOUNDS] coverage logs" -ForegroundColor Red
     }
     if ($structureCount -lt $ExpectedStructures -and $structureCount -ge $MinExpectedStructures) {
-        Write-Host "  ! Expected $ExpectedStructures structures but only $structureCount placed (known bug: T067/T070)" -ForegroundColor Yellow
+        Write-Host "  ! Expected $ExpectedStructures structures but only $structureCount placed" -ForegroundColor Yellow
     }
     if ($overlaps -gt 0) { Write-Host "  X Detected $overlaps overlapping structures" -ForegroundColor Red }
     if ($pathsConnectivity -ne $null -and $pathsConnectivity -lt $PathConnectivityThreshold) { Write-Host "  X Path connectivity $pathsConnectivity% is below threshold $PathConnectivityThreshold%" -ForegroundColor Red }
