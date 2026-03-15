@@ -40,7 +40,6 @@ import java.util.logging.Logger;
 public class VillageOverhaulPlugin extends JavaPlugin {
     
     private static final int DEFAULT_VILLAGE_SPACING = 200;
-    private static VillageOverhaulPlugin instance;
     private Logger logger;
     
     // Configuration values
@@ -84,7 +83,6 @@ public class VillageOverhaulPlugin extends JavaPlugin {
     
     @Override
     public void onEnable() {
-        instance = this;
         logger = getLogger();
         
         logger.info("Village Overhaul v" + getPluginMeta().getVersion() + " starting...");
@@ -301,7 +299,7 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
         
         // Admin HTTP server (for CI/testing)
         try {
-            adminServer = new AdminHttpServer(logger, 8080);
+            adminServer = new AdminHttpServer(logger, 8080, walletService, villageService);
             adminServer.start();
             logger.info("OK Admin HTTP server started on port 8080");
         } catch (Exception e) {
@@ -361,14 +359,6 @@ logger.info("OK Configuration loaded (minBuildingSpacing=" + minBuildingSpacing 
         return derived;
     }
 
-    /**
-     * Get the plugin instance
-     * @return Plugin singleton
-     */
-    public static VillageOverhaulPlugin getInstance() {
-        return instance;
-    }
-    
     // Getters for services (used by subsystems)
     
     public TickEngine getTickEngine() {

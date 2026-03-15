@@ -1761,12 +1761,12 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Purpose**: Align codebase with Paper developer skill guidelines (SKILL.md) for maintainability and modern API usage.
 
-- [ ] T052 [P] Complete Adventure API migration for admin/test commands
+- [X] T052 [P] Complete Adventure API migration for admin/test commands
   - **Files**: `TestCommands.java` (~60 sendMessage calls), `ProjectCommands.java` (~60 sendMessage calls)
   - **Pattern**: Replace legacy `§` color codes with `Component.text()` + `NamedTextColor`
   - **Reference**: TradeListener.java, VillageCommands.java, GenerateCommand.java (already migrated)
 
-- [ ] T053 Refactor static plugin singleton to dependency injection pattern
+- [X] T053 Refactor static plugin singleton to dependency injection pattern
   - **File**: `VillageOverhaulPlugin.java` (lines 40, 250)
   - **Issue**: `private static VillageOverhaulPlugin instance` + `getInstance()` violates Paper skill anti-patterns
   - **Solution**: Pass plugin instance via constructor injection to all dependent services

@@ -1,7 +1,7 @@
 package com.davisodom.villageoverhaul.admin;
 
-import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.economy.WalletService;
+import com.davisodom.villageoverhaul.villages.VillageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -29,12 +29,16 @@ import java.util.logging.Logger;
 public class AdminHttpServer {
     
     private final Logger logger;
+    private final WalletService walletService;
+    private final VillageService villageService;
     private HttpServer server;
     private final int port;
     
-    public AdminHttpServer(Logger logger, int port) {
+    public AdminHttpServer(Logger logger, int port, WalletService walletService, VillageService villageService) {
         this.logger = logger;
         this.port = port;
+        this.walletService = walletService;
+        this.villageService = villageService;
     }
     
     /**
@@ -45,8 +49,8 @@ public class AdminHttpServer {
         
         // Register endpoints per OpenAPI spec
         server.createContext("/healthz", new HealthCheckHandler());
-        server.createContext("/v1/wallets", new WalletsHandler());
-        server.createContext("/v1/villages", new VillagesHandler());
+        server.createContext("/v1/wallets", new WalletsHandler(walletService));
+        server.createContext("/v1/villages", new VillagesHandler(villageService));
         server.createContext("/v1/contracts", new ContractsHandler());
         server.createContext("/v1/properties", new PropertiesHandler());
         
@@ -85,6 +89,12 @@ public class AdminHttpServer {
      * TODO: Wire to WalletService in Phase 2/3
      */
     private static class WalletsHandler implements HttpHandler {
+        private final WalletService walletService;
+
+        private WalletsHandler(WalletService walletService) {
+            this.walletService = walletService;
+        }
+
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -95,7 +105,6 @@ public class AdminHttpServer {
                 return;
             }
 
-            WalletService walletService = VillageOverhaulPlugin.getInstance().getWalletService();
             ObjectMapper om = new ObjectMapper();
             ArrayNode arr = om.createArrayNode();
             walletService.getAllWallets().forEach((uuid, wallet) -> {
@@ -116,6 +125,12 @@ public class AdminHttpServer {
      * GET /v1/villages - List all villages with basic info
      */
     private static class VillagesHandler implements HttpHandler {
+        private final VillageService villageService;
+
+        private VillagesHandler(VillageService villageService) {
+            this.villageService = villageService;
+        }
+
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -126,7 +141,6 @@ public class AdminHttpServer {
                 return;
             }
 
-            var villageService = VillageOverhaulPlugin.getInstance().getVillageService();
             ObjectMapper om = new ObjectMapper();
             ArrayNode arr = om.createArrayNode();
             villageService.getAllVillages().forEach(village -> {

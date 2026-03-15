@@ -3,6 +3,8 @@ package com.davisodom.villageoverhaul.commands;
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.npc.CustomVillagerService;
 import com.davisodom.villageoverhaul.npc.VillagerInteractionController;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.command.Command;
@@ -53,13 +55,13 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             @NotNull String label, @NotNull String[] args) {
 
         if (!sender.hasPermission("villageoverhaul.test")) {
-            sender.sendMessage("§cYou do not have permission to use /votest.");
+            CommandFeedback.error(sender, "You do not have permission to use /votest.");
             plugin.getLogger().warning("[TEST] Unauthorized /votest access attempt by " + sender.getName());
             return true;
         }
 
         if (args.length == 0) {
-            sender.sendMessage("§cUsage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
+            CommandFeedback.error(sender, "Usage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
             return true;
         }
 
@@ -95,7 +97,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "write-placement-counters":
                 if (args.length < 2) {
-                    sender.sendMessage("§cUsage: /votest write-placement-counters <villageId>");
+                    CommandFeedback.error(sender, "Usage: /votest write-placement-counters <villageId>");
                     return true;
                 }
 
@@ -106,9 +108,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                         com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters counters =
                             store.getPlacementRejectionCounters(target).orElse(new com.davisodom.villageoverhaul.villages.VillageMetadataStore.PlacementRejectionCounters(0,0,0,0,0,0,0,0,0,0));
                     store.recordPlacementRejectionCounters(target, counters);
-                    sender.sendMessage("§aPlacement counters written for village: " + target.toString());
+                    CommandFeedback.info(sender, "Placement counters written for village: " + target);
                 } catch (Exception ex) {
-                    sender.sendMessage("§cFailed to write counters: " + ex.getMessage());
+                    CommandFeedback.error(sender, "Failed to write counters: " + ex.getMessage());
                 }
                 return true;
                 
@@ -119,7 +121,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 return handlePerformance(sender);
                 
             default:
-                sender.sendMessage("§cUnknown subcommand: " + subCommand);
+                CommandFeedback.error(sender, "Unknown subcommand: " + subCommand);
                 return true;
         }
     }
@@ -130,7 +132,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleCreateVillage(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest create-village <name> [x] [y] [z]");
+            CommandFeedback.error(sender, "Usage: /votest create-village <name> [x] [y] [z]");
             return true;
         }
         
@@ -144,7 +146,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 y = Integer.parseInt(args[3]);
                 z = Integer.parseInt(args[4]);
             } catch (NumberFormatException e) {
-                sender.sendMessage("§cInvalid coordinates");
+                CommandFeedback.error(sender, "Invalid coordinates");
                 return true;
             }
         }
@@ -168,9 +170,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             new java.util.ArrayList<>()
         );
         
-        sender.sendMessage("§aCreated test village '" + villageName + "' with ID: " + village.getId());
-        sender.sendMessage("§7Culture: " + cultureId + ", Location: " + x + "," + y + "," + z);
-        sender.sendMessage("§7Initial wealth: 1000 millz, Active project: test_building (500 millz)");
+        CommandFeedback.info(sender, "Created test village '" + villageName + "' with ID: " + village.getId());
+        CommandFeedback.detail(sender, "Culture: " + cultureId + ", Location: " + x + "," + y + "," + z);
+        CommandFeedback.detail(sender, "Initial wealth: 1000 millz, Active project: test_building (500 millz)");
         
         plugin.getLogger().info("[TEST] Created test village: " + villageName + 
                 " (ID: " + village.getId() + ") at " + x + "," + y + "," + z);
@@ -184,7 +186,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleGenerateStructures(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest generate-structures <village-id>");
+            CommandFeedback.error(sender, "Usage: /votest generate-structures <village-id>");
             return true;
         }
         
@@ -194,7 +196,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             villageId = UUID.fromString(villageIdStr);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid village ID format");
+            CommandFeedback.error(sender, "Invalid village ID format");
             return true;
         }
         
@@ -203,7 +205,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         Optional<com.davisodom.villageoverhaul.villages.Village> villageOpt = villageService.getVillage(villageId);
         
         if (!villageOpt.isPresent()) {
-            sender.sendMessage("§cVillage not found: " + villageId);
+            CommandFeedback.error(sender, "Village not found: " + villageId);
             return true;
         }
         
@@ -212,7 +214,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // Get world
         org.bukkit.World world = plugin.getServer().getWorld(village.getWorldName());
         if (world == null) {
-            sender.sendMessage("§cWorld not found: " + village.getWorldName());
+            CommandFeedback.error(sender, "World not found: " + village.getWorldName());
             return true;
         }
         
@@ -232,10 +234,10 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         // Enqueue request for tick-budgeted processing
         plugin.getGenerationQueue().enqueue(request);
         
-        sender.sendMessage("§aStructure generation enqueued for village: " + village.getName());
-        sender.sendMessage("§7Fill-in mode: existing village detected; missing structures will be attempted.");
-        sender.sendMessage("§7Max village bounds radius: " + plugin.getMaxBoundsRadiusBlocks() + " blocks");
-        sender.sendMessage("§7Generation will occur over multiple ticks - watch for [GEN-PROGRESS] logs");
+        CommandFeedback.info(sender, "Structure generation enqueued for village: " + village.getName());
+        CommandFeedback.detail(sender, "Fill-in mode: existing village detected; missing structures will be attempted.");
+        CommandFeedback.detail(sender, "Max village bounds radius: " + plugin.getMaxBoundsRadiusBlocks() + " blocks");
+        CommandFeedback.detail(sender, "Generation will occur over multiple ticks - watch for [GEN-PROGRESS] logs");
         
         return true;
     }
@@ -246,7 +248,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleGeneratePaths(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest generate-paths <village-id>");
+            CommandFeedback.error(sender, "Usage: /votest generate-paths <village-id>");
             return true;
         }
         
@@ -256,7 +258,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             villageId = UUID.fromString(villageIdStr);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid village ID format");
+            CommandFeedback.error(sender, "Invalid village ID format");
             return true;
         }
         
@@ -269,7 +271,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             metadataStore.getVillage(villageId);
         
         if (villageOpt.isEmpty()) {
-            sender.sendMessage("§cVillage not found: " + villageId);
+            CommandFeedback.error(sender, "Village not found: " + villageId);
             return true;
         }
         
@@ -281,8 +283,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             metadataStore.getVillageBuildings(villageId);
         
         if (buildings.isEmpty()) {
-            sender.sendMessage("§cNo buildings found for village: " + villageId);
-            sender.sendMessage("§7Run /votest generate-structures first");
+            CommandFeedback.error(sender, "No buildings found for village: " + villageId);
+            CommandFeedback.detail(sender, "Run /votest generate-structures first");
             return true;
         }
         
@@ -308,19 +310,19 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             // Persist designation so subsequent calls see it
             metadataStore.setMainBuilding(villageId, mainBuildingId);
             plugin.getLogger().info(String.format("[STRUCT] Auto-designated main building %s for village %s (test fallback)", mainBuildingId, villageId));
-            sender.sendMessage("§eNo main building previously designated - using first building as main for path generation");
+            CommandFeedback.warn(sender, "No main building previously designated - using first building as main for path generation");
         }
 
         if (mainBuilding == null) {
-            sender.sendMessage("§cNo main building available for village: " + villageId);
-            sender.sendMessage("§7Ensure structures exist for this village before path generation");
+            CommandFeedback.error(sender, "No main building available for village: " + villageId);
+            CommandFeedback.detail(sender, "Ensure structures exist for this village before path generation");
             return true;
         }
         
         // Get world from village origin
         org.bukkit.World world = village.getOrigin().getWorld();
         if (world == null) {
-            sender.sendMessage("§cWorld not found for village");
+            CommandFeedback.error(sender, "World not found for village");
             return true;
         }
         
@@ -347,8 +349,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             "[STRUCT] Begin path network generation for village %s: buildings=%d, mainBuilding=%s",
             villageId, buildings.size(), mainBuildingId));
         
-        sender.sendMessage("§aGenerating path network for village: " + villageId);
-        sender.sendMessage(String.format("§7Buildings: %d, Main building: %s", 
+        CommandFeedback.info(sender, "Generating path network for village: " + villageId);
+        CommandFeedback.detail(sender, String.format("Buildings: %d, Main building: %s",
             buildings.size(), mainBuilding.getStructureId()));
         
         // Generate path network
@@ -364,9 +366,11 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             pathService.getVillagePathNetwork(villageId);
 
         if (!pathSegments.isEmpty()) {
-            sender.sendMessage(success
-                ? "§aPath network generated successfully!"
-                : "§ePath network generated partially; emitting successful segments anyway.");
+            if (success) {
+                CommandFeedback.info(sender, "Path network generated successfully!");
+            } else {
+                CommandFeedback.warn(sender, "Path network generated partially; emitting successful segments anyway.");
+            }
 
             // Emit path blocks using PathEmitter
             com.davisodom.villageoverhaul.worldgen.impl.PathEmitter pathEmitter = 
@@ -386,15 +390,15 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 totalBlocksPlaced += blocksPlaced;
             }
             
-            sender.sendMessage(String.format("§7Path segments: %d, Blocks placed: %d", 
+            CommandFeedback.detail(sender, String.format("Path segments: %d, Blocks placed: %d",
                 pathSegments.size(), totalBlocksPlaced));
             
             plugin.getLogger().info(String.format(
                 "[STRUCT] Path network %s for village %s: segments=%d, blocks=%d",
                 success ? "complete" : "partial", villageId, pathSegments.size(), totalBlocksPlaced));
         } else {
-            sender.sendMessage("§cPath network generation failed");
-            sender.sendMessage("§7Check logs for [STRUCT] markers with failure details");
+            CommandFeedback.error(sender, "Path network generation failed");
+            CommandFeedback.detail(sender, "Check logs for [STRUCT] markers with failure details");
             
             plugin.getLogger().warning(String.format(
                 "[STRUCT] Path network generation failed for village %s", villageId));
@@ -409,7 +413,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleSpawnVillager(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage("§cUsage: /votest spawn-villager <type> <village-id> [x] [y] [z]");
+            CommandFeedback.error(sender, "Usage: /votest spawn-villager <type> <village-id> [x] [y] [z]");
             return true;
         }
         
@@ -424,7 +428,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 y = Integer.parseInt(args[4]);
                 z = Integer.parseInt(args[5]);
             } catch (NumberFormatException e) {
-                sender.sendMessage("§cInvalid coordinates");
+                CommandFeedback.error(sender, "Invalid coordinates");
                 return true;
             }
         }
@@ -437,10 +441,10 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         UUID villagerId = customVillagerService.spawnCustomVillager(location, villagerType, villageIdStr);
         
         if (villagerId != null) {
-            sender.sendMessage("§aSpawned custom villager '" + villagerType + "' with UUID: " + villagerId);
+            CommandFeedback.info(sender, "Spawned custom villager '" + villagerType + "' with UUID: " + villagerId);
             plugin.getLogger().info("[TEST] Spawned custom villager: " + villagerType + " at " + x + "," + y + "," + z);
         } else {
-            sender.sendMessage("§cFailed to spawn custom villager");
+            CommandFeedback.error(sender, "Failed to spawn custom villager");
         }
         
         return true;
@@ -452,7 +456,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleTriggerInteraction(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage("§cUsage: /votest trigger-interaction <player> <villager-uuid>");
+            CommandFeedback.error(sender, "Usage: /votest trigger-interaction <player> <villager-uuid>");
             return true;
         }
         
@@ -461,7 +465,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         Player player = Bukkit.getPlayer(playerName);
         if (player == null) {
-            sender.sendMessage("§cPlayer not found: " + playerName);
+            CommandFeedback.error(sender, "Player not found: " + playerName);
             return true;
         }
         
@@ -469,24 +473,24 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             villagerUuid = UUID.fromString(villagerUuidStr);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid UUID: " + villagerUuidStr);
+            CommandFeedback.error(sender, "Invalid UUID: " + villagerUuidStr);
             return true;
         }
         
         // Find the villager entity
         Entity villagerEntity = Bukkit.getEntity(villagerUuid);
         if (villagerEntity == null || !(villagerEntity instanceof Villager)) {
-            sender.sendMessage("§cVillager not found with UUID: " + villagerUuid);
+            CommandFeedback.error(sender, "Villager not found with UUID: " + villagerUuid);
             return true;
         }
         
         // Trigger the interaction through the controller
         try {
             interactionController.handleInteraction(player, (Villager) villagerEntity);
-            sender.sendMessage("§aTriggered interaction between " + playerName + " and custom villager");
+            CommandFeedback.info(sender, "Triggered interaction between " + playerName + " and custom villager");
             plugin.getLogger().info("[TEST] Player " + playerName + " interacted with custom villager " + villagerUuid);
         } catch (Exception e) {
-            sender.sendMessage("§cFailed to trigger interaction: " + e.getMessage());
+            CommandFeedback.error(sender, "Failed to trigger interaction: " + e.getMessage());
             plugin.getLogger().severe("[TEST] Interaction failed: " + e.getMessage());
             e.printStackTrace();
         }
@@ -502,7 +506,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleSimulateInteraction(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest simulate-interaction <villager-uuid>");
+            CommandFeedback.error(sender, "Usage: /votest simulate-interaction <villager-uuid>");
             return true;
         }
         
@@ -512,14 +516,14 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             villagerUuid = UUID.fromString(villagerUuidStr);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid UUID: " + villagerUuidStr);
+            CommandFeedback.error(sender, "Invalid UUID: " + villagerUuidStr);
             return true;
         }
         
         // Find the villager entity
         Entity villagerEntity = Bukkit.getEntity(villagerUuid);
         if (villagerEntity == null || !(villagerEntity instanceof Villager)) {
-            sender.sendMessage("§cVillager not found with UUID: " + villagerUuid);
+            CommandFeedback.error(sender, "Villager not found with UUID: " + villagerUuid);
             return true;
         }
         
@@ -528,7 +532,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             customVillagerService.getVillagerByEntityId(villagerUuid);
         
         if (customVillager == null) {
-            sender.sendMessage("§cNot a custom villager: " + villagerUuid);
+            CommandFeedback.error(sender, "Not a custom villager: " + villagerUuid);
             return true;
         }
         
@@ -551,7 +555,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             boolean credited = plugin.getWalletService().credit(mockPlayerId, playerEarnings);
             
             if (!credited) {
-                sender.sendMessage("§cFailed to credit mock player wallet");
+                CommandFeedback.error(sender, "Failed to credit mock player wallet");
                 plugin.getLogger().warning("[TEST] Failed to credit mock player wallet");
                 return true;
             }
@@ -570,7 +574,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             if (villageOpt.isEmpty()) {
                 plugin.getLogger().warning("[TEST] No village found for custom villager: " + villageId);
                 plugin.getLogger().info("[TEST] Trade completed without village contribution (isolated villager)");
-                sender.sendMessage("§aSimulated trade completed (no village project to contribute to)");
+                CommandFeedback.info(sender, "Simulated trade completed (no village project to contribute to)");
                 return true;
             }
             
@@ -586,7 +590,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 plugin.getLogger().info(String.format("[TEST] Added %d millz to village treasury (no active projects)",
                         projectContribution));
                 plugin.getLogger().info("[TEST] Project contribution made (treasury)");
-                sender.sendMessage("§aSimulated trade completed! Village treasury increased.");
+                CommandFeedback.info(sender, "Simulated trade completed! Village treasury increased.");
             } else {
                 // Contribute to first active project
                 com.davisodom.villageoverhaul.projects.Project project = activeProjects.get(0);
@@ -601,12 +605,12 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                     plugin.getLogger().info("[TEST] Project contribution made (active project)");
                     
                     if (cr.isCompleted()) {
-                        sender.sendMessage("§aSimulated trade completed! Village project COMPLETED: " + 
+                        CommandFeedback.info(sender, "Simulated trade completed! Village project COMPLETED: " +
                                 project.getBuildingRef());
                         plugin.getLogger().info("[TEST] Project completed: " + project.getId());
                     } else {
                         int percent = project.getCompletionPercent();
-                        sender.sendMessage(String.format("§aSimulated trade completed! Project: %s (%d%% complete)",
+                        CommandFeedback.info(sender, String.format("Simulated trade completed! Project: %s (%d%% complete)",
                                 project.getBuildingRef(), percent));
                     }
                     
@@ -614,7 +618,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                         village.addWealth(cr.getOverflow());
                     }
                 } else {
-                    sender.sendMessage("§cFailed to contribute to project");
+                    CommandFeedback.error(sender, "Failed to contribute to project");
                 }
             }
             
@@ -623,7 +627,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             plugin.getLogger().info("[TEST] Trade completed with custom villager (simulated)");
             
         } catch (Exception e) {
-            sender.sendMessage("§cFailed to simulate interaction: " + e.getMessage());
+            CommandFeedback.error(sender, "Failed to simulate interaction: " + e.getMessage());
             plugin.getLogger().severe("[TEST] Simulated interaction failed: " + e.getMessage());
             e.printStackTrace();
         }
@@ -637,7 +641,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handlePlaceObstacle(CommandSender sender, String[] args) {
         if (args.length < 5) {
-            sender.sendMessage("§cUsage: /votest place-obstacle <water|steep> <x> <z> <radius|width>");
+            CommandFeedback.error(sender, "Usage: /votest place-obstacle <water|steep> <x> <z> <radius|width>");
             return true;
         }
         
@@ -655,19 +659,19 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 switch (obstacleType) {
                     case "water":
                         placeWaterPatch(world, x, z, size);
-                        sender.sendMessage(String.format("§aPlaced water patch at (%d, %d) radius=%d", x, z, size));
+                        CommandFeedback.info(sender, String.format("Placed water patch at (%d, %d) radius=%d", x, z, size));
                         plugin.getLogger().info(String.format("[TEST] Placed water obstacle at (%d, %d) radius=%d", x, z, size));
                         break;
                         
                     case "steep":
                         placeSteepTerrain(world, x, z, size);
-                        sender.sendMessage(String.format("§aPlaced steep terrain at (%d, %d) width=%d", x, z, size));
+                        CommandFeedback.info(sender, String.format("Placed steep terrain at (%d, %d) width=%d", x, z, size));
                         plugin.getLogger().info(String.format("[TEST] Placed steep obstacle at (%d, %d) width=%d", x, z, size));
                         break;
                         
                     default:
-                        sender.sendMessage("§cUnknown obstacle type: " + obstacleType);
-                        sender.sendMessage("§7Valid types: water, steep");
+                        CommandFeedback.error(sender, "Unknown obstacle type: " + obstacleType);
+                        CommandFeedback.detail(sender, "Valid types: water, steep");
                         return true;
                 }
                 
@@ -680,24 +684,24 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             switch (obstacleType) {
                 case "water":
                     placeWaterPatch(world, x, z, size);
-                    sender.sendMessage(String.format("§aPlaced water patch at (%d, %d) radius=%d", x, z, size));
+                    CommandFeedback.info(sender, String.format("Placed water patch at (%d, %d) radius=%d", x, z, size));
                     plugin.getLogger().info(String.format("[TEST] Placed water obstacle at (%d, %d) radius=%d", x, z, size));
                     break;
                     
                 case "steep":
                     placeSteepTerrain(world, x, z, size);
-                    sender.sendMessage(String.format("§aPlaced steep terrain at (%d, %d) width=%d", x, z, size));
+                    CommandFeedback.info(sender, String.format("Placed steep terrain at (%d, %d) width=%d", x, z, size));
                     plugin.getLogger().info(String.format("[TEST] Placed steep obstacle at (%d, %d) width=%d", x, z, size));
                     break;
                     
                 default:
-                    sender.sendMessage("§cUnknown obstacle type: " + obstacleType);
-                    sender.sendMessage("§7Valid types: water, steep");
+                    CommandFeedback.error(sender, "Unknown obstacle type: " + obstacleType);
+                    CommandFeedback.detail(sender, "Valid types: water, steep");
                     return true;
             }
             
         } catch (NumberFormatException e) {
-            sender.sendMessage("§cInvalid coordinates or size");
+            CommandFeedback.error(sender, "Invalid coordinates or size");
             return true;
         }
         
@@ -765,7 +769,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      * Dump current metrics to logs
      */
     private boolean handleMetrics(CommandSender sender) {
-        sender.sendMessage("§aMetrics dumped to server logs");
+        CommandFeedback.info(sender, "Metrics dumped to server logs");
         plugin.getLogger().info("[TEST] === METRICS DUMP ===");
         
         // Get metrics from the Metrics service
@@ -785,8 +789,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         int villagerCount = customVillagerService.getActiveVillagerCount();
         
-        sender.sendMessage("§aPerformance Stats:");
-        sender.sendMessage("§7Active custom villagers: §f" + villagerCount);
+        CommandFeedback.info(sender, "Performance Stats:");
+        CommandFeedback.send(sender, CommandFeedback.detailLine("Active custom villagers: ", villagerCount));
         
         plugin.getLogger().info("[TEST] === PERFORMANCE STATS ===");
         plugin.getLogger().info("[TEST] Active custom villagers: " + villagerCount);
@@ -801,7 +805,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleVerifyPersistence(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest verify-persistence <village-id>");
+            CommandFeedback.error(sender, "Usage: /votest verify-persistence <village-id>");
             return true;
         }
         
@@ -810,7 +814,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             villageId = UUID.fromString(villageIdStr);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid village ID format");
+            CommandFeedback.error(sender, "Invalid village ID format");
             return true;
         }
         
@@ -819,12 +823,12 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         List<com.davisodom.villageoverhaul.model.PlacementReceipt> receipts = metadataStore.getPlacementReceipts(villageId);
         
         if (masks.isEmpty() && receipts.isEmpty()) {
-            sender.sendMessage("§cNo persistence data found for village " + villageId);
+            CommandFeedback.error(sender, "No persistence data found for village " + villageId);
             return true;
         }
         
-        sender.sendMessage("§aVerifying persistence for village " + villageId);
-        sender.sendMessage(String.format("§7Found %d masks and %d receipts", masks.size(), receipts.size()));
+        CommandFeedback.info(sender, "Verifying persistence for village " + villageId);
+        CommandFeedback.detail(sender, String.format("Found %d masks and %d receipts", masks.size(), receipts.size()));
         
         boolean allPass = true;
         int totalChecks = 0;
@@ -984,16 +988,23 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             // R011c: Per-structure summary line
             String structureStatus;
             if (structureCornerFailures > 1) {
-                structureStatus = "§cFAIL";
+                structureStatus = "FAIL";
             } else if (structureCornerFailures == 1 || structurePerimeterFailures > 0 || structureUndersideFailures > 0 || structureOutsideFailures > 0) {
-                structureStatus = structureCornerFailures == 1 ? "§eWARN" : "§cFAIL";
+                structureStatus = structureCornerFailures == 1 ? "WARN" : "FAIL";
             } else {
-                structureStatus = "§aPASS";
+                structureStatus = "PASS";
             }
-            
-            sender.sendMessage(String.format("  Structure %s: %s (corners=%d, perimeter=%d, underside=%d, outside=%d)",
-                mask.getStructureId(), structureStatus, structureCornerFailures, structurePerimeterFailures,
-                structureUndersideFailures, structureOutsideFailures));
+
+            NamedTextColor structureStatusColor = switch (structureStatus) {
+                case "PASS" -> NamedTextColor.GREEN;
+                case "WARN" -> NamedTextColor.YELLOW;
+                default -> NamedTextColor.RED;
+            };
+            CommandFeedback.send(sender, Component.text("Structure " + mask.getStructureId() + ": ", NamedTextColor.GRAY)
+                .append(Component.text(structureStatus, structureStatusColor))
+                .append(Component.text(String.format(" (corners=%d, perimeter=%d, underside=%d, outside=%d)",
+                    structureCornerFailures, structurePerimeterFailures, structureUndersideFailures, structureOutsideFailures),
+                    NamedTextColor.GRAY)));
         }
         
         // 3. Check paths against masks (R010)
@@ -1018,13 +1029,13 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         
         // R011c: Concise summary with categorized failures
         if (allPass) {
-            sender.sendMessage(String.format("§aPASS: All persistence checks passed (%d checks, %d structures)", 
+            CommandFeedback.info(sender, String.format("PASS: All persistence checks passed (%d checks, %d structures)",
                 totalChecks, structuresChecked));
         } else {
-            sender.sendMessage(String.format("§cFAIL: %d/%d checks failed (corner=%d, perimeter=%d, underside=%d, outside-mask=%d, path=%d)",
+            CommandFeedback.error(sender, String.format("FAIL: %d/%d checks failed (corner=%d, perimeter=%d, underside=%d, outside-mask=%d, path=%d)",
                 failedChecks, totalChecks, cornerFailures, perimeterFailures, undersideFailures, outsideMaskFailures, pathMaskFailures));
             if (cornerFailures > 0) {
-                sender.sendMessage("§7Benign edge case: Single AIR corners (1/4) show as WARN, not FAIL");
+                CommandFeedback.detail(sender, "Benign edge case: Single AIR corners (1/4) show as WARN, not FAIL");
             }
         }
         
@@ -1037,7 +1048,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleFixedLayout(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /votest fixed-layout <seed> [count]");
+            CommandFeedback.error(sender, "Usage: /votest fixed-layout <seed> [count]");
             return true;
         }
 
@@ -1045,7 +1056,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         try {
             seed = Long.parseLong(args[1]);
         } catch (NumberFormatException e) {
-            sender.sendMessage("§cInvalid seed: must be a number");
+            CommandFeedback.error(sender, "Invalid seed: must be a number");
             return true;
         }
 
@@ -1057,7 +1068,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
 
         org.bukkit.World world = Bukkit.getWorlds().get(0);
         if (world == null) {
-            sender.sendMessage("§cNo world available");
+            CommandFeedback.error(sender, "No world available");
             return true;
         }
 
@@ -1116,7 +1127,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         plugin.getMetadataStore().setVillageName(villageId, villageName);
         java.util.Optional<com.davisodom.villageoverhaul.villages.Village> villageOpt = plugin.getVillageService().getVillage(villageId);
         if (villageOpt.isEmpty()) {
-            sender.sendMessage("§cFailed to create deterministic village");
+            CommandFeedback.error(sender, "Failed to create deterministic village");
             plugin.getLogger().warning("[STRUCT][TEST] Failed to load deterministic village id=" + villageId);
             return true;
         }
@@ -1283,7 +1294,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             debugSurfaceType = org.bukkit.Material.AIR;
         }
 
-        sender.sendMessage(String.format("§aCreated fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
+        CommandFeedback.info(sender, String.format("Created fixed-layout village '%s' id=%s buildings=%d seed=%d", villageName, village.getId(), count, seed));
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout village=%s buildings=%d seed=%d", village.getId(), count, seed));
         int receiptCount = metadataStore.getPlacementReceipts(village.getId()).size();
         plugin.getLogger().info(String.format("[STRUCT][TEST] Fixed layout receipts=%d village=%s", receiptCount, village.getId()));
