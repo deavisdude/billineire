@@ -13,6 +13,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.WorldLoadEvent;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,6 +35,7 @@ public class VillageWorldgenAdapter implements Listener {
     private final VillageOverhaulPlugin plugin;
     private final Logger logger;
     private final AtomicBoolean seeded = new AtomicBoolean(false);
+    private static final int SPAWN_RETRY_LIMIT = 3;
 
     public VillageWorldgenAdapter(VillageOverhaulPlugin plugin) {
         this.plugin = plugin;
@@ -52,8 +56,18 @@ public class VillageWorldgenAdapter implements Listener {
     /**
      * Can be called from onEnable to eagerly seed when a default world is already present (MockBukkit/CI).
      * For live servers, schedules a delayed check since worlds load before plugin enable.
+     * 
+     * T026d14: If system property "vo.suppress.worldgen" is set to "true", worldgen seeding is
+     * skipped entirely. This allows CI harnesses running fixed-layout determinism tests to
+     * prevent background village generation that would create non-deterministic artifacts.
      */
     public void seedIfPossible() {
+        // T026d14: Check for CI suppression flag
+        if ("true".equalsIgnoreCase(System.getProperty("vo.suppress.worldgen"))) {
+            logger.info("[WORLDGEN] Worldgen seeding suppressed by system property vo.suppress.worldgen=true");
+            return;
+        }
+        
         // Immediate attempt (works in tests where world is added before plugin load)
         if (!Bukkit.getWorlds().isEmpty()) {
             scheduleAsyncSeed(Bukkit.getWorlds().get(0));
@@ -80,7 +94,10 @@ public class VillageWorldgenAdapter implements Listener {
             return;
         }
         
+        logger.info("Scheduling async village seeding for world: " + world.getName());
+        
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            logger.info("ASYNC: Starting village terrain search and seeding (this may take 10-60 seconds)...");
             try {
                 trySeed(world);
             } catch (Exception e) {
@@ -88,6 +105,21 @@ public class VillageWorldgenAdapter implements Listener {
                 e.printStackTrace();
             }
         });
+    }
+
+    private void maybePlaceMarkerPillar(World world, int x, int y, int z, String reason) {
+        if (plugin.isMarkerFallbackAllowed()) {
+            placeMarkerPillar(world, x, y, z, reason);
+        } else {
+            logger.warning(String.format("[WORLDGEN] Marker fallback suppressed (%s); enable worldgen.allowMarkerFallback to place one", reason));
+        }
+    }
+
+    private void placeMarkerPillar(World world, int x, int y, int z, String reason) {
+        logger.warning(String.format("[WORLDGEN] Marker fallback triggered: %s", reason));
+        safeSet(world, x, y, z, Material.STONE);
+        safeSet(world, x, y + 1, z, Material.STONE);
+        safeSet(world, x, y + 2, z, Material.TORCH);
     }
 
     private void trySeed(World world) {
@@ -102,74 +134,198 @@ public class VillageWorldgenAdapter implements Listener {
 
         logger.info("Attempting to seed village in world: " + world.getName());
 
-        // Search for suitable terrain starting from spawn (this is slow, but now async!)
-        Location spawn = world.getSpawnLocation();
-        Location suitableLocation = findSuitableVillageLocation(world, spawn, 512); // Search up to 512 blocks
-        
-        if (suitableLocation == null) {
-            logger.warning("Could not find suitable terrain for village placement, using spawn location as fallback");
-            suitableLocation = spawn.clone().add(16, 0, 16);
+        VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        if (hasExistingVillages(world, metadataStore)) {
+            logger.info("[WORLDGEN] Existing villages detected for world " + world.getName()
+                + "; skipping spawn seeding.");
+            return;
         }
-        
-        int baseX = suitableLocation.getBlockX();
-        int baseZ = suitableLocation.getBlockZ();
-        int y = world.getHighestBlockYAt(baseX, baseZ);
 
-        logger.info("Village placement selected: " + baseX + ", " + y + ", " + baseZ);
-
-        // Register village in service with culture fallback to first available (roman for now)
+        Location spawn = world.getSpawnLocation();
+        int baseRadius = Math.max(1, plugin.getSpawnProximityRadius());
         String cultureId = plugin.getCultureService().all().stream().findFirst()
-                .map(c -> c.getId()).orElse("roman");
-        String name = switch (cultureId) {
+            .map(c -> c.getId()).orElse("roman");
+        String villageName = switch (cultureId) {
             case "roman" -> "Roma I";
             default -> "Village I";
         };
 
-        VillageService vs = plugin.getVillageService();
-        var village = vs.createVillage(cultureId, name, world.getName(), baseX, y + 1, baseZ);
-        
-        // Village creation and structure placement must happen on main thread
-        // We're already async from terrain search, so schedule sync for block operations
-        final UUID villageId = village.getId();
-        final String villageName = village.getName();
-        final int finalY = y;
-        
+        for (int attempt = 0; attempt <= SPAWN_RETRY_LIMIT; attempt++) {
+            Location searchOrigin = computeSpawnRetryOrigin(world, spawn, attempt, baseRadius);
+            int searchRadius = computeSpawnRetryRadius(baseRadius, attempt);
+
+            Location suitableLocation = findSuitableVillageLocation(world, searchOrigin, searchRadius);
+            if (suitableLocation == null) {
+                if (attempt >= SPAWN_RETRY_LIMIT) {
+                    logger.warning("Could not find suitable terrain for village placement; aborting spawn seeding");
+                    maybePlaceMarkerPillar(world, spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ(),
+                        "no suitable terrain found");
+                    return;
+                }
+                continue;
+            }
+
+            int baseX = suitableLocation.getBlockX();
+            int baseZ = suitableLocation.getBlockZ();
+
+            logger.info("Pre-loading chunks for village placement area...");
+            preloadVillageAreaChunks(world, baseX, baseZ, 256);
+
+            int y = world.getHighestBlockYAt(baseX, baseZ);
+            logger.info("Village placement selected: " + baseX + ", " + y + ", " + baseZ);
+
+            UUID deterministicVillageId = buildSpawnVillageId(world, baseX, baseZ, attempt);
+            long seed = world.getSeed() + deterministicVillageId.getMostSignificantBits();
+            Location villageOrigin = new Location(world, baseX, y, baseZ);
+
+            PlacementAttemptResult result = runSpawnPlacementAttempt(
+                world,
+                metadataStore,
+                villageOrigin,
+                cultureId,
+                villageName,
+                seed,
+                deterministicVillageId
+            );
+
+            if (result.success) {
+                return;
+            }
+
+            Optional<VillageMetadataStore.PlacementFailureSummary> summaryOpt =
+                metadataStore.getLastPlacementFailureSummary(deterministicVillageId);
+            String retryReason = resolveSpawnRetryReason(summaryOpt.orElse(null));
+            boolean shouldRetry = shouldSpawnRetry(summaryOpt.orElse(null));
+
+            if (attempt >= SPAWN_RETRY_LIMIT || !shouldRetry) {
+                logger.warning(String.format("[STRUCT][SPAWN-RETRY] exhausted retries after %d attempts reason=%s origin=(%d,%d,%d)",
+                    attempt + 1, retryReason, baseX, y, baseZ));
+                maybePlaceMarkerPillar(world, baseX, y, baseZ, "zero structure placements");
+                return;
+            }
+
+            logger.warning(String.format("[STRUCT][SPAWN-RETRY] attempt=%d reason=%s origin=(%d,%d,%d)",
+                attempt + 1, retryReason, baseX, y, baseZ));
+            metadataStore.removeVillage(deterministicVillageId);
+        }
+    }
+
+    private PlacementAttemptResult runSpawnPlacementAttempt(World world,
+                                                            VillageMetadataStore metadataStore,
+                                                            Location origin,
+                                                            String cultureId,
+                                                            String villageName,
+                                                            long seed,
+                                                            UUID villageId) {
+        java.util.concurrent.CompletableFuture<PlacementAttemptResult> future = new java.util.concurrent.CompletableFuture<>();
+
         Bukkit.getScheduler().runTask(plugin, () -> {
-            // Use shared metadata store (T012l: singleton for cross-session enforcement)
-            VillageMetadataStore metadataStore = plugin.getMetadataStore();
-            VillagePlacementServiceImpl placementService = new VillagePlacementServiceImpl(plugin, metadataStore);
-            
-            // Generate village structures using placement service
-            // Note: Village registration now happens INSIDE placeVillage() after spacing validation
-            Location villageOrigin = new Location(world, baseX, finalY, baseZ);
-            long seed = world.getSeed() + villageId.getMostSignificantBits();
-            
+            VillagePlacementServiceImpl placementService;
+            try {
+                placementService = new VillagePlacementServiceImpl(
+                    plugin, metadataStore, plugin.getCultureService());
+            } catch (NoClassDefFoundError e) {
+                logger.severe("X Failed to initialize VillagePlacementServiceImpl: " + e.getMessage());
+                logger.severe("  This usually means WorldEdit is not installed or incompatible");
+                logger.severe("  Falling back to procedural structures without WorldEdit/FAWE");
+
+                try {
+                    placementService = new VillagePlacementServiceImpl(metadataStore, plugin.getCultureService());
+                    logger.info("OK Using fallback placement service with procedural structures");
+                } catch (Exception ex) {
+                    logger.severe("X Failed to initialize fallback placement service: " + ex.getMessage());
+                    ex.printStackTrace();
+                    future.complete(new PlacementAttemptResult(false));
+                    return;
+                }
+            }
+
+            int baseX = origin.getBlockX();
+            int baseY = origin.getBlockY();
+            int baseZ = origin.getBlockZ();
+
             logger.info("[STRUCT] Generating structures for village '" + villageName + "' (ID: " + villageId + ")");
-            Optional<UUID> placedVillageId = placementService.placeVillage(world, villageOrigin, cultureId, seed);
-            
+            Optional<UUID> placedVillageId = placementService.placeVillage(world, origin, cultureId, seed, villageId);
+
             if (placedVillageId.isPresent()) {
+                VillageService vs = plugin.getVillageService();
+                var village = vs.createVillage(villageId, cultureId, villageName, world,
+                    baseX, baseY + 1, baseZ);
+                plugin.getMetadataStore().setVillageName(villageId, villageName);
                 logger.info("OK Seeded village '" + villageName + "' (" + cultureId + ") with structures at "
-                        + world.getName() + " @ (" + baseX + "," + (finalY + 1) + "," + baseZ + ")");
-            } else {
-                logger.warning("X Failed to place structures for village '" + villageName + "', placing marker pillar");
-                // Fallback: Create a tiny marker pillar (stone + torch) to indicate village center
-                safeSet(world, baseX, finalY, baseZ, Material.STONE);
-                safeSet(world, baseX, finalY + 1, baseZ, Material.STONE);
-                safeSet(world, baseX, finalY + 2, baseZ, Material.TORCH);
+                    + world.getName() + " @ (" + baseX + "," + (baseY + 1) + "," + baseZ + ")");
+                if (plugin.getProjectGenerator() != null) {
+                    plugin.getProjectGenerator().generateInitialProjects(village);
+                }
+                future.complete(new PlacementAttemptResult(true));
+                return;
             }
-            
-            // Generate initial projects for the village
-            if (plugin.getProjectGenerator() != null) {
-                plugin.getProjectGenerator().generateInitialProjects(village);
-            }
-            
-            // Spawn initial custom villagers for the village
-            spawnInitialVillagers(village, world, baseX, finalY + 1, baseZ);
+
+            logger.warning("X Failed to place structures for village '" + villageName + "'");
+            future.complete(new PlacementAttemptResult(false));
         });
+
+        return future.join();
+    }
+
+    private UUID buildSpawnVillageId(World world, int baseX, int baseZ, int attempt) {
+        long worldSeed = world.getSeed();
+        return UUID.nameUUIDFromBytes(
+            ("worldgen-village-" + worldSeed + "-" + baseX + "-" + baseZ + "-" + attempt)
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    private int computeSpawnRetryRadius(int baseRadius, int attempt) {
+        return baseRadius + (attempt * baseRadius);
+    }
+
+    private Location computeSpawnRetryOrigin(World world, Location spawn, int attempt, int baseRadius) {
+        if (attempt <= 0) {
+            return spawn;
+        }
+        long seed = world.getSeed() + (long) attempt * 1640531513L;
+        java.util.Random random = new java.util.Random(seed);
+        double angle = random.nextDouble() * Math.PI * 2.0;
+        int radius = computeSpawnRetryRadius(baseRadius, attempt);
+        int offsetX = (int) Math.round(Math.cos(angle) * radius);
+        int offsetZ = (int) Math.round(Math.sin(angle) * radius);
+        return new Location(world,
+            spawn.getBlockX() + offsetX,
+            spawn.getBlockY(),
+            spawn.getBlockZ() + offsetZ);
+    }
+
+    private boolean shouldSpawnRetry(VillageMetadataStore.PlacementFailureSummary summary) {
+        if (summary == null) {
+            return false;
+        }
+        return summary.steep > 0 || summary.blocked > 0;
+    }
+
+    private String resolveSpawnRetryReason(VillageMetadataStore.PlacementFailureSummary summary) {
+        if (summary == null) {
+            return "unknown";
+        }
+        if (summary.steep >= summary.blocked && summary.steep > 0) {
+            return "steep";
+        }
+        if (summary.blocked > 0) {
+            return "blocked";
+        }
+        return "unknown";
+    }
+
+    private static class PlacementAttemptResult {
+        private final boolean success;
+
+        private PlacementAttemptResult(boolean success) {
+            this.success = success;
+        }
     }
     
     /**
      * Search for suitable flat terrain for village placement.
+     * T052a: Uses time-budgeted chunk loading to prevent main thread blocking.
      * 
      * @param world Target world
      * @param start Starting search location (typically spawn)
@@ -178,42 +334,96 @@ public class VillageWorldgenAdapter implements Listener {
      */
     private Location findSuitableVillageLocation(World world, Location start, int maxRadius) {
         logger.info("Searching for suitable village terrain within " + maxRadius + " blocks of spawn...");
+        logger.info("  Spawn location: " + start.getBlockX() + ", " + start.getBlockY() + ", " + start.getBlockZ());
         
-        int startX = start.getBlockX();
-        int startZ = start.getBlockZ();
-        int checkRadius = 24; // Check 24 block radius for flatness (reduced from 32)
-        int sampleInterval = 24; // Check every 24 blocks in spiral (increased from 16 for speed)
+        int[] radii = new int[]{
+                maxRadius,
+                Math.max(maxRadius * 2, 1024),
+                Math.max(maxRadius * 4, 2048)
+        };
         
-        // Spiral search pattern - increased max radius for more opportunities
-        for (int radius = 16; radius <= Math.min(maxRadius, 768); radius += sampleInterval) {
-            // Check 8 points around the circle at this radius
-            for (int i = 0; i < 8; i++) {
-                double angle = (i / 8.0) * 2 * Math.PI;
-                int x = startX + (int)(radius * Math.cos(angle));
-                int z = startZ + (int)(radius * Math.sin(angle));
-                
-                // Check if this location is suitable
-                if (isTerrainSuitable(world, x, z, checkRadius)) {
-                    int y = world.getHighestBlockYAt(x, z);
-                    logger.info("Found suitable terrain at distance " + radius + " blocks: (" + x + ", " + y + ", " + z + ")");
-                    return new Location(world, x, y, z);
-                }
+        AsyncTerrainSearch searcher = new AsyncTerrainSearch(plugin);
+        Location result = null;
+        for (int radius : radii) {
+            logger.info("  Terrain search pass: radius=" + radius + " blocks");
+            try {
+                result = searcher.searchAsync(world, start, radius, null).join();
+            } catch (Exception e) {
+                logger.warning("  Terrain search pass failed: " + e.getMessage());
+            }
+            if (result != null) {
+                return result;
             }
         }
         
+        logger.warning("X No suitable terrain found after expanded search passes");
         return null;
     }
     
     /**
      * Check if terrain at location is suitable for village placement.
+     * T052a: Uses time-budgeted chunk loading to prevent blocking.
      * 
      * @param world Target world
      * @param centerX Center X coordinate
      * @param centerZ Center Z coordinate
      * @param checkRadius Radius to check around center
+     * @param searchStartTime When the search started (for budget tracking)
+     * @param chunkLoadBudgetMs Maximum ms to spend on chunk loading
      * @return true if terrain is suitable
      */
-    private boolean isTerrainSuitable(World world, int centerX, int centerZ, int checkRadius) {
+    private boolean isTerrainSuitableTimeBudgeted(World world, int centerX, int centerZ, int checkRadius,
+                                                   long searchStartTime, long chunkLoadBudgetMs,
+                                                   SurfaceSolver surfaceSolver) {
+        // T052a: Check time budget before forcing chunk loads
+        long elapsed = System.currentTimeMillis() - searchStartTime;
+        boolean budgetExceeded = elapsed > chunkLoadBudgetMs;
+        
+        // Load chunks for terrain check - with time budget
+        int chunkX = centerX >> 4;
+        int chunkZ = centerZ >> 4;
+        
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                int cx = chunkX + dx;
+                int cz = chunkZ + dz;
+                
+                if (!world.isChunkLoaded(cx, cz)) {
+                    if (budgetExceeded) {
+                        // Budget exceeded - return false to skip this location
+                        return false;
+                    }
+                    
+                    // Try async chunk load (Paper API) with timeout
+                    try {
+                        world.getChunkAtAsync(cx, cz).get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (Exception e) {
+                        // Async failed or timed out - try sync load if we still have budget
+                        long currentElapsed = System.currentTimeMillis() - searchStartTime;
+                        if (currentElapsed < chunkLoadBudgetMs) {
+                            try {
+                                world.getChunkAt(cx, cz);
+                            } catch (Exception ex) {
+                                return false; // Chunk load failed
+                            }
+                        } else {
+                            return false; // Budget exceeded
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Now do the actual terrain check (chunks are loaded)
+        return evaluateTerrainFast(world, centerX, centerZ, checkRadius, surfaceSolver);
+    }
+    
+    /**
+     * Fast terrain evaluation (assumes chunks are loaded).
+     * T057d: Added dense water proximity check to prevent selecting water-adjacent sites.
+     */
+    private boolean evaluateTerrainFast(World world, int centerX, int centerZ, int checkRadius,
+                                        SurfaceSolver surfaceSolver) {
         int minY = Integer.MAX_VALUE;
         int maxY = Integer.MIN_VALUE;
         int waterBlocks = 0;
@@ -224,15 +434,14 @@ public class VillageWorldgenAdapter implements Listener {
             for (int z = -checkRadius; z <= checkRadius; z += 12) {
                 int checkX = centerX + x;
                 int checkZ = centerZ + z;
-                int y = world.getHighestBlockYAt(checkX, checkZ);
+                int y = surfaceSolver.getSurfaceHeight(checkX, checkZ);
                 
                 minY = Math.min(minY, y);
                 maxY = Math.max(maxY, y);
                 totalChecks++;
                 
-                // Check if surface is water
-                Material surface = world.getBlockAt(checkX, y, checkZ).getType();
-                if (surface == Material.WATER) {
+                // Check if surface above ground is water or frozen water (ice on top of water)
+                if (isWaterOrFrozenWaterSurface(world, checkX, y, checkZ)) {
                     waterBlocks++;
                 }
             }
@@ -250,67 +459,187 @@ public class VillageWorldgenAdapter implements Listener {
         boolean notTooWatery = waterPercent < 0.3;
         boolean goodHeight = minY >= 50 && maxY <= 120;
         
-        // Skip ice check for speed - water check is sufficient
+        // T057d: Dense water proximity check in the core placement area
+        // TerraformingPlan vetoes any water within margin of structure footprint
+        // Structures are typically 13-18 blocks, so check 25-block radius densely
+        if (flatEnough && notTooWatery && goodHeight) {
+            if (hasWaterInProximity(world, centerX, centerZ, 25, surfaceSolver)) {
+                return false;
+            }
+        }
+        
         return flatEnough && notTooWatery && goodHeight;
     }
     
     /**
-     * Spawn initial custom villagers for a new village
-     * Spawns 2-3 villagers based on culture professions
+     * T057d: Check for water blocks within proximity of center.
+     * Uses a denser sampling pattern to catch water that sparse checks miss.
+     * This prevents selecting sites where TerraformingPlan will veto due to nearby water.
+     * 
+     * @param world Target world
+     * @param centerX Center X coordinate
+     * @param centerZ Center Z coordinate
+     * @param radius Radius to check (should cover largest structure footprint + margin)
+     * @return true if water is found within proximity
      */
-    private void spawnInitialVillagers(com.davisodom.villageoverhaul.villages.Village village, 
-                                       World world, int centerX, int centerY, int centerZ) {
-        var npcService = plugin.getCustomVillagerService();
-        var appearanceAdapter = plugin.getVillagerAppearanceAdapter();
-        
-        if (npcService == null || appearanceAdapter == null) {
-            logger.warning("NPC services not initialized, skipping villager spawns");
-            return;
-        }
-        
-        String cultureId = village.getCultureId();
-        
-        // Spawn villagers at offset positions around village center
-        int[][] spawnOffsets = {
-            {3, 0, 2},   // East side
-            {-2, 0, 3},  // West side
-            {0, 0, -3}   // North side
-        };
-        
-        String[] professions = {"merchant", "blacksmith", "elder"};
-        
-        for (int i = 0; i < Math.min(spawnOffsets.length, professions.length); i++) {
-            int[] offset = spawnOffsets[i];
-            String profession = professions[i];
-            String definitionId = cultureId + "_" + profession;
-            
-            Location spawnLoc = new Location(
-                world,
-                centerX + offset[0] + 0.5,
-                centerY + offset[1],
-                centerZ + offset[2] + 0.5
-            );
-            
-            var customVillager = npcService.spawnVillager(
-                definitionId,
-                cultureId,
-                profession,
-                village.getId(),
-                spawnLoc
-            );
-            
-            if (customVillager != null) {
-                // Apply appearance
-                org.bukkit.entity.Entity entity = plugin.getServer().getEntity(customVillager.getEntityId());
-                if (entity != null) {
-                    appearanceAdapter.applyAppearance(entity, definitionId);
-                }
-                
-                logger.info("  OK Spawned " + definitionId + " at village " + village.getName());
+    private boolean hasWaterInProximity(World world, int centerX, int centerZ, int radius,
+                                        SurfaceSolver surfaceSolver) {
+        // Check in a cross pattern first (fast rejection)
+        for (int d = -radius; d <= radius; d += 4) {
+            // Check along X axis
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ)) {
+                return true;
+            }
+            // Check along Z axis
+            int y2 = surfaceSolver.getSurfaceHeight(centerX, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX, y2, centerZ + d)) {
+                return true;
             }
         }
+        
+        // Check diagonals
+        for (int d = -radius; d <= radius; d += 6) {
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ + d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y1, centerZ + d)) {
+                return true;
+            }
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + d, centerZ - d);
+            if (isWaterOrFrozenWaterSurface(world, centerX + d, y2, centerZ - d)) {
+                return true;
+            }
+        }
+        
+        // Check perimeter of structure area (where TerraformingPlan margin check happens)
+        int structureRadius = 20; // Covers 18-block structure + 2-block margin
+        for (int x = -structureRadius; x <= structureRadius; x += 3) {
+            // Top edge
+            int y1 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ - structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y1, centerZ - structureRadius)) {
+                return true;
+            }
+            // Bottom edge
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + x, centerZ + structureRadius);
+            if (isWaterOrFrozenWaterSurface(world, centerX + x, y2, centerZ + structureRadius)) {
+                return true;
+            }
+        }
+        for (int z = -structureRadius; z <= structureRadius; z += 3) {
+            // Left edge
+            int y1 = surfaceSolver.getSurfaceHeight(centerX - structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX - structureRadius, y1, centerZ + z)) {
+                return true;
+            }
+            // Right edge
+            int y2 = surfaceSolver.getSurfaceHeight(centerX + structureRadius, centerZ + z);
+            if (isWaterOrFrozenWaterSurface(world, centerX + structureRadius, y2, centerZ + z)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if a material is water or a frozen water surface (ice variants).
+     * Frozen water appears as ice on top of water - buildings placed here would
+     * end up underwater because SurfaceSolver skips ice to find the actual ground.
+     * 
+     * @param type Material to check
+     * @return true if water or any ice variant
+     */
+    private boolean isWaterOrFrozenWater(Material type) {
+        return type == Material.WATER ||
+               type == Material.ICE ||
+               type == Material.PACKED_ICE ||
+               type == Material.BLUE_ICE ||
+               type == Material.FROSTED_ICE;
     }
 
+    private boolean isWaterOrFrozenWaterSurface(World world, int x, int groundY, int z) {
+        Material surface = world.getBlockAt(x, groundY + 1, z).getType();
+        return isWaterOrFrozenWater(surface);
+    }
+
+    private boolean hasExistingVillages(World world, VillageMetadataStore metadataStore) {
+        for (VillageMetadataStore.VillageMetadata village : metadataStore.getAllVillages()) {
+            if (village.getOrigin().getWorld().equals(world)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean violatesInterVillageSpacing(World world, int x, int y, int z, int minVillageSpacing,
+                                                VillageMetadataStore metadataStore) {
+        VillageMetadataStore.VillageBorder proposedBorder = new VillageMetadataStore.VillageBorder(
+                x, x, z, z);
+        for (VillageMetadataStore.VillageMetadata existingVillage : metadataStore.getAllVillages()) {
+            if (!existingVillage.getOrigin().getWorld().equals(world)) {
+                continue;
+            }
+            int distance = proposedBorder.getDistanceTo(existingVillage.getBorder());
+            if (distance < minVillageSpacing) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * T052a: Pre-load chunks in the village placement area.
+     * This runs in the async context BEFORE switching to main thread for placement,
+     * ensuring the placement search has loaded chunks to work with.
+     * Uses async chunk loading with CompletableFuture.allOf() to batch load efficiently.
+     * 
+     * @param world Target world
+     * @param centerX Village center X
+     * @param centerZ Village center Z  
+     * @param radius Radius in blocks to pre-load (will be converted to chunks)
+     */
+    private void preloadVillageAreaChunks(World world, int centerX, int centerZ, int radius) {
+        // Convert block radius to chunk radius (16 blocks per chunk)
+        int chunkRadius = (radius / 16) + 1;
+        int centerChunkX = centerX >> 4;
+        int centerChunkZ = centerZ >> 4;
+        
+        List<java.util.concurrent.CompletableFuture<org.bukkit.Chunk>> futures = new ArrayList<>();
+        int totalChunks = 0;
+        int alreadyLoaded = 0;
+        
+        for (int cx = centerChunkX - chunkRadius; cx <= centerChunkX + chunkRadius; cx++) {
+            for (int cz = centerChunkZ - chunkRadius; cz <= centerChunkZ + chunkRadius; cz++) {
+                totalChunks++;
+                if (world.isChunkLoaded(cx, cz)) {
+                    alreadyLoaded++;
+                    continue;
+                }
+                
+                // Use Paper's async chunk loading API
+                try {
+                    futures.add(world.getChunkAtAsync(cx, cz));
+                } catch (Exception e) {
+                    // Async not available, will be loaded on-demand
+                }
+            }
+        }
+        
+        // Wait for all async chunk loads to complete (we're in async context, so this is fine)
+        if (!futures.isEmpty()) {
+            try {
+                java.util.concurrent.CompletableFuture.allOf(
+                    futures.toArray(new java.util.concurrent.CompletableFuture[0])
+                ).join();
+                logger.info(String.format("Pre-loaded %d chunks for village area (%d were already loaded, %d total)",
+                        futures.size(), alreadyLoaded, totalChunks));
+            } catch (Exception e) {
+                logger.warning("Some chunks failed to pre-load: " + e.getMessage());
+            }
+        } else {
+            logger.info(String.format("All %d village area chunks already loaded", totalChunks));
+        }
+    }
+    
     private void safeSet(World world, int x, int y, int z, Material material) {
         try {
             world.getBlockAt(x, y, z).setType(material, false);

@@ -20,7 +20,7 @@ commands:
     aliases: [villageoverhaul]
   votest:
     description: Village Overhaul test commands (CI/testing only)
-    usage: /votest <spawn-villager|trigger-interaction|metrics|performance>
+    usage: /votest <spawn-villager|trigger-interaction|place-obstacle|metrics|performance>
     permission: villageoverhaul.test
   villages:
     description: List all villages with distances

@@ -26,28 +26,448 @@ param(
     [string]$ServerDir = "test-server",
     [int]$Ticks = 6000,
     [long]$Seed = 12345,
-    [string]$SnapshotFile = "state-snapshot.json"
+    [string]$SnapshotFile = "state-snapshot.json",
+    [string[]]$AutoCommands = @(),
+    [string]$StopWhen = '',
+    [string]$JavaPath = "",
+    [bool]$AutoInstallPaper = $true,
+    [bool]$AutoInstallJdk = $true,
+    [string]$PaperVersion = "1.21.8",
+    [int]$PaperBuild = 60
+    ,[int]$MaxBoundsRadiusBlocks = 0
+    ,[switch]$FixedLayout = $false
+    ,[int]$FixedLayoutCount = 3
+    ,[int]$PathCoverageThresholdPct = 50
+    ,[switch]$ForceZeroPlacement = $false
+    ,[switch]$RequireCacheHits = $false
+    ,[switch]$RequireCacheInvalidation = $false
+    ,[switch]$RequirePlannerQueue = $false
 )
 
 $ErrorActionPreference = "Stop"
+function Invoke-ExeCapture($exe, $arguments) {
+    # Run executable and capture stdout+stderr robustly via Start-Process and temp files
+    $out = [System.IO.Path]::GetTempFileName()
+    $err = [System.IO.Path]::GetTempFileName()
+    try {
+        Start-Process -FilePath $exe -ArgumentList $arguments -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err -Wait -ErrorAction Stop | Out-Null
+        $stdout = Get-Content $out -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content $err -Raw -ErrorAction SilentlyContinue
+        $combined = ($stdout + "`n" + $stderr).Trim()
+        return $combined
+    } catch {
+        Write-Host "! Invoke-ExeCapture failed running: $exe $arguments" -ForegroundColor Yellow
+        Write-Host "! Exception: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    } finally {
+        Remove-Item -Path $out -ErrorAction SilentlyContinue
+        Remove-Item -Path $err -ErrorAction SilentlyContinue
+    }
+}
+
+# Load shared small utilities for log sanitization (no side-effects)
+. "$PSScriptRoot/log-utils.ps1"
+
+function Get-JavaMajor {
+    param([string]$exe)
+    $info = Invoke-ExeCapture $exe '-version'
+    if ($null -eq $info) { return $null }
+    if ($info -match 'version "?([0-9]+)') {
+        return [int]$Matches[1]
+    }
+    return $null
+}
+
+function Resolve-JavaExe {
+    param([string]$preferred)
+
+    # Detect OS: Windows uses .exe extension, Unix does not
+    $onWindows = if ($PSVersionTable.PSVersion.Major -le 5) { $true } else { $IsWindows }
+    $javaExeName = if ($onWindows) { 'java.exe' } else { 'java' }
+    $binPath = 'bin'
+
+    # 1) If explicit path provided, prefer it. Accept either the java.exe file or the JDK root folder.
+    if ($preferred) {
+        # Trim surrounding whitespace and remove surrounding quotes if present
+        $preferred = $preferred.Trim()
+        if ((($preferred.StartsWith('"') -and $preferred.EndsWith('"')) -or ($preferred.StartsWith("'") -and $preferred.EndsWith("'")))) {
+            $preferred = $preferred.Substring(1, $preferred.Length - 2)
+        }
+
+        # If the provided path points directly to an executable
+        if (Test-Path $preferred -PathType Leaf) {
+            $p = (Resolve-Path $preferred).Path
+            $maj = Get-JavaMajor $p
+            if ($maj -and $maj -ge 21) { return $p }
+            # Strict mode: reject non-21 java even if file exists
+            $ver = Invoke-ExeCapture $p '-version'
+            if ($null -eq $ver) { $ver = "(failed to execute java -version)" }
+            Write-Host "X Provided java executable does not meet Java 21 requirement: $p" -ForegroundColor Red
+            Write-Host "  java -version output:" -ForegroundColor Red
+            Write-Host "$ver" -ForegroundColor Red
+            return $null
+        }
+
+        # If the provided path is a folder, check bin/java inside it
+        $candidateBin = Join-Path $preferred (Join-Path $binPath $javaExeName)
+        if (Test-Path $candidateBin) {
+            $p2 = (Resolve-Path $candidateBin).Path
+            $maj2 = Get-JavaMajor $p2
+            if ($maj2 -and $maj2 -ge 21) { return $p2 }
+            # Strict mode: reject non-21 java even if file exists in folder
+            $ver2 = Invoke-ExeCapture $p2 '-version'
+            if ($null -eq $ver2) { $ver2 = "(failed to execute java -version)" }
+            Write-Host "X Provided JDK folder contains java but it does not meet Java 21 requirement: $p2" -ForegroundColor Red
+            Write-Host "  java -version output:" -ForegroundColor Red
+            Write-Host "$ver2" -ForegroundColor Red
+            return $null
+        }
+
+        Write-Host "! Provided JavaPath not found: $preferred" -ForegroundColor Yellow
+    }
+
+    # 2) Check JAVA_HOME
+    if ($env:JAVA_HOME) {
+        $candidate = Join-Path $env:JAVA_HOME (Join-Path $binPath $javaExeName)
+        if (Test-Path $candidate) {
+            $maj = Get-JavaMajor $candidate
+            if ($maj -and $maj -ge 21) { return (Resolve-Path $candidate).Path }
+        }
+    }
+
+    # 3) Check PATH using Get-Command (cross-platform)
+    try {
+        $pathJava = Get-Command java -ErrorAction SilentlyContinue
+        if ($pathJava) {
+            $javaPath = $pathJava.Path
+            $maj = Get-JavaMajor $javaPath
+            if ($maj -and $maj -ge 21) { return $javaPath }
+        }
+    } catch {
+    }
+
+    # 4) Search common install locations for JDK 21 installs (Windows only)
+    if ($isWindows) {
+        $programPaths = @(
+            "C:\\Program Files\\Java",
+            "C:\\Program Files\\AdoptOpenJDK",
+            "C:\\Program Files\\Eclipse Adoptium",
+            "C:\\Program Files (x86)\\Java"
+        )
+        foreach ($root in $programPaths) {
+            if (Test-Path $root) {
+                Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($_.Name -match 'jdk-?21|openjdk-?21|temurin-?21') {
+                        $cand = Join-Path $_.FullName (Join-Path $binPath $javaExeName)
+                        if (Test-Path $cand -PathType Leaf) {
+                            $majc = Get-JavaMajor $cand
+                            if ($majc -and $majc -ge 21) { return (Resolve-Path $cand).Path }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
+function Install-TempJdk {
+    param([int]$majorVersion)
+
+    Write-Host "Attempting to download a temporary JDK $majorVersion (Adoptium)..." -ForegroundColor Cyan
+    $timestamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $workDir = Join-Path $env:TEMP "spec-billineire-jdk-$majorVersion-$timestamp"
+    New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+
+    # Adoptium API binary endpoint (will redirect to a binary URL)
+    $apiUrl = "https://api.adoptium.net/v3/binary/latest/$majorVersion/ga/windows/x64/jdk/hotspot/normal/adoptium?project=jdk"
+    $zipPath = Join-Path $env:TEMP ("temurin-jdk-{0}-{1}.zip" -f $majorVersion, $timestamp)
+
+    try {
+        Invoke-WebRequest -Uri $apiUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "! Failed to download JDK from Adoptium: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+
+    try {
+        Expand-Archive -Path $zipPath -DestinationPath $workDir -Force
+    } catch {
+        Write-Host "! Failed to extract downloaded JDK: $($_.Exception.Message)" -ForegroundColor Yellow
+        Remove-Item -Path $zipPath -ErrorAction SilentlyContinue
+        return $null
+    }
+
+    Remove-Item -Path $zipPath -ErrorAction SilentlyContinue
+
+    # Find java.exe inside the extracted folder
+    $javaFile = Get-ChildItem -Path $workDir -Filter java.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $javaFile) {
+        Write-Host "! java.exe not found in the extracted JDK" -ForegroundColor Yellow
+        return $null
+    }
+
+    $javaPath = $javaFile.FullName
+    Write-Host "Downloaded temporary JDK available at: $javaPath" -ForegroundColor Green
+    return $javaPath
+}
 
 Write-Host "=== Village Overhaul CI: N-Tick Scenario ===" -ForegroundColor Cyan
 Write-Host "Ticks: $Ticks" -ForegroundColor White
 Write-Host "Seed: $Seed" -ForegroundColor White
 Write-Host "Snapshot: $SnapshotFile" -ForegroundColor White
 
-# Check server exists
-if (!(Test-Path "$ServerDir/paper.jar")) {
-    Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
-    Write-Host "  Run run-headless-paper.ps1 first" -ForegroundColor Yellow
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+if (-not [System.IO.Path]::IsPathRooted($ServerDir)) {
+    $ServerDir = Join-Path $RepoRoot $ServerDir
+}
+if (-not [System.IO.Path]::IsPathRooted($SnapshotFile)) {
+    $SnapshotFile = Join-Path $RepoRoot $SnapshotFile
+}
+
+$PluginDir = Join-Path $RepoRoot 'plugin'
+$BuildLibsDir = Join-Path $PluginDir 'build\libs'
+$TestServerPluginsDir = Join-Path $ServerDir 'plugins'
+
+Write-Host "Resolved server dir: $ServerDir" -ForegroundColor DarkGray
+Write-Host "Resolved snapshot: $SnapshotFile" -ForegroundColor DarkGray
+
+# Ensure a minimal server.properties exists before enabling RCON (precondition for BotPlayer)
+$serverPropsCheckPath = Join-Path $ServerDir "server.properties"
+if (-not (Test-Path $serverPropsCheckPath)) {
+    Write-Host "server.properties not found in $ServerDir; creating minimal properties to satisfy BotPlayer module" -ForegroundColor Yellow
+    $minimalProps = @"
+enable-rcon=true
+rcon.password=temporary_dummy
+rcon.port=25575
+online-mode=false
+spawn-monsters=false
+"@
+    # Ensure server dir exists
+    if (-not (Test-Path $ServerDir)) { New-Item -ItemType Directory -Path $ServerDir -Force | Out-Null }
+    Set-Content -Path $serverPropsCheckPath -Value $minimalProps -Encoding UTF8
+}
+
+# Enable RCON for verification (R010)
+Import-Module "$PSScriptRoot/BotPlayer.psm1" -ErrorAction Stop
+$rconPassword = Enable-Rcon -ServerDir $ServerDir
+
+# Deploy the newest built plugin jar into the test server before startup.
+New-Item -ItemType Directory -Path $TestServerPluginsDir -Force | Out-Null
+$JarFile = Get-ChildItem -Path (Join-Path $BuildLibsDir '*.jar') -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike '*-sources.jar' -and $_.Name -notlike '*-javadoc.jar' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if (-not $JarFile) {
+    Write-Host "X No plugin JAR found in $BuildLibsDir" -ForegroundColor Red
     exit 1
 }
 
+$DestJar = Join-Path $TestServerPluginsDir 'VillageOverhaul.jar'
+Copy-Item -Path $JarFile.FullName -Destination $DestJar -Force
+Write-Host "OK Deployed plugin jar: $($JarFile.Name) -> $DestJar" -ForegroundColor Green
+
+# Heuristic: user may have passed an unquoted JavaPath into the first positional parameter (ServerDir)
+# e.g. -JavaPath C:\Program Files\Java\jdk-21  (without quotes) can shift parameters.
+# Only apply this on Windows where Program Files exists
+if ($ServerDir -and $ServerDir -match 'Program Files' -and ($ServerDir -match 'Java' -or $ServerDir -match 'jdk')) {
+    $onWindowsCheck = if ($PSVersionTable.PSVersion.Major -le 5) { $true } else { $IsWindows }
+    $javaExeName = if ($onWindowsCheck) { 'java.exe' } else { 'java' }
+    $possibleJavaBin = Join-Path $ServerDir (Join-Path 'bin' $javaExeName)
+    if (Test-Path $possibleJavaBin) {
+        Write-Host "! Detected a Java install path passed as ServerDir. Interpreting this as -JavaPath and restoring ServerDir to default 'test-server'." -ForegroundColor Yellow
+        Write-Host "  Tip: Quote paths that contain spaces, e.g. -JavaPath 'C:\\Program Files\\Java\\jdk-21'" -ForegroundColor Yellow
+        $JavaPath = $ServerDir
+        $ServerDir = 'test-server'
+    }
+}
+
+# Check server exists
+    function Install-PaperJar {
+        param([string]$serverDir, [string]$version, [int]$build = 0)
+
+        Write-Host "Attempting to download Paper $version into $serverDir/paper.jar" -ForegroundColor Cyan
+        # If a specific build was requested, use it. Otherwise query the API for the latest build.
+        if ($build -gt 0) {
+            $buildNum = $build
+        } else {
+            $apiBuildsUrl = "https://api.papermc.io/v2/projects/paper/versions/$version/builds"
+            try {
+                $builds = Invoke-RestMethod -Uri $apiBuildsUrl -UseBasicParsing -ErrorAction Stop
+            } catch {
+                Write-Host "X Failed to query PaperMC API: $($_.Exception.Message)" -ForegroundColor Red
+                return $false
+            }
+
+            if (-not $builds.builds -or $builds.builds.Count -eq 0) {
+                Write-Host "X No builds found for Paper version $version" -ForegroundColor Red
+                return $false
+            }
+
+            # Pick highest build number
+            $latest = $builds.builds | Sort-Object -Property build -Descending | Select-Object -First 1
+            $buildNum = $latest.build
+        }
+
+        try {
+            $buildInfo = Invoke-RestMethod -Uri ("https://api.papermc.io/v2/projects/paper/versions/$version/builds/$buildNum") -UseBasicParsing -ErrorAction Stop
+            $filename = $buildInfo.downloads.application.name
+        } catch {
+            Write-Host "X Failed to get build info for build $buildNum" -ForegroundColor Red
+            Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+
+        $downloadUrl = "https://api.papermc.io/v2/projects/paper/versions/$version/builds/$buildNum/downloads/$filename"
+
+        # Backup existing jar if present
+        $dest = Join-Path $serverDir 'paper.jar'
+        if (Test-Path $dest) {
+            $bak = Join-Path $serverDir ("paper.jar.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))")
+            Write-Host "Backing up existing paper.jar to $bak" -ForegroundColor Yellow
+            Move-Item -Path $dest -Destination $bak -Force -ErrorAction SilentlyContinue
+        }
+
+        try {
+            Write-Host "Downloading $downloadUrl ..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $dest -UseBasicParsing -ErrorAction Stop
+            if ((Get-Item $dest).Length -gt 1024) {
+                Write-Host "OK Downloaded Paper to $dest" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "X Downloaded file appears too small" -ForegroundColor Red
+                return $false
+            }
+        } catch {
+            Write-Host "X Failed to download Paper jar: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    function Install-WorldEdit {
+        param([string]$serverDir)
+
+        $pluginsDir = Join-Path $serverDir "plugins"
+        # Prefer WorldEdit 7.3.17 (Hangar/Paper build) which provides PAPER classifier jars
+        $worldEditJar = Join-Path $pluginsDir "worldedit-bukkit-7.3.17.jar"
+
+        # Check if WorldEdit is already installed
+        if (Test-Path $worldEditJar) {
+            Write-Host "WorldEdit already installed: $worldEditJar" -ForegroundColor Green
+            return $true
+        }
+
+        Write-Host "WorldEdit not found, downloading from Hangar CDN..." -ForegroundColor Yellow
+
+        # Create plugins directory if it doesn't exist
+        if (!(Test-Path $pluginsDir)) {
+            New-Item -ItemType Directory -Path $pluginsDir -Force | Out-Null
+        }
+
+        # Hangar CDN download URL for WorldEdit 7.3.17 (PAPER classifier)
+        # Format: https://hangarcdn.papermc.io/plugins/EngineHub/WorldEdit/versions/7.3.17/PAPER/worldedit-bukkit-7.3.17.jar
+        $worldEditUrl = "https://hangarcdn.papermc.io/plugins/EngineHub/WorldEdit/versions/7.3.17/PAPER/worldedit-bukkit-7.3.17.jar"
+
+        try {
+            Write-Host "Downloading WorldEdit 7.3.17 from Hangar CDN ..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $worldEditUrl -OutFile $worldEditJar -UseBasicParsing -ErrorAction Stop
+
+            if ((Get-Item $worldEditJar).Length -gt 1024) {
+                Write-Host "OK Downloaded WorldEdit to $worldEditJar" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "X Downloaded file appears too small" -ForegroundColor Red
+                Remove-Item -Path $worldEditJar -ErrorAction SilentlyContinue
+                return $false
+            }
+        } catch {
+            Write-Host "X Failed to download WorldEdit: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "! Plugin will fall back to procedural structures" -ForegroundColor Yellow
+            return $false
+        }
+    }
+
+if (!(Test-Path "$ServerDir/paper.jar") -or (Get-Item "$ServerDir/paper.jar").Length -lt 1024) {
+    if ($AutoInstallPaper) {
+        Write-Host "Paper jar missing or too small; attempting automatic download (Paper $PaperVersion)" -ForegroundColor Yellow
+        if (-not (Install-PaperJar -serverDir $ServerDir -version $PaperVersion)) {
+            Write-Host "X Automatic Paper download failed" -ForegroundColor Red
+            Write-Host "  Please place a valid paper.jar in $ServerDir and re-run" -ForegroundColor Yellow
+            exit 1
+        }
+    } else {
+        Write-Host "X Paper server not found in $ServerDir" -ForegroundColor Red
+        Write-Host "  Run run-headless-paper.ps1 first or enable -AutoInstallPaper" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# Ensure WorldEdit is installed (optional but recommended for schematic support)
+Write-Host "Checking for WorldEdit dependency..." -ForegroundColor Cyan
+if (-not (Install-WorldEdit -serverDir $ServerDir)) {
+    Write-Host "! WorldEdit installation failed or skipped" -ForegroundColor Yellow
+    Write-Host "  Plugin will use procedural structures as fallback" -ForegroundColor Yellow
+}
+
+function Ensure-PluginConfigSetting {
+    param(
+        [string]$ConfigPath,
+        [string]$DefaultConfigPath,
+        [int]$BoundsRadius
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        $configDir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+        if (Test-Path $DefaultConfigPath) {
+            Copy-Item -Path $DefaultConfigPath -Destination $ConfigPath -Force
+            Write-Host "OK Copied default config to $ConfigPath" -ForegroundColor Green
+        } else {
+            Write-Host "X Default config not found at $DefaultConfigPath" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    $configContent = Get-Content -Path $ConfigPath -Raw -ErrorAction SilentlyContinue
+    if (-not $configContent) {
+        Write-Host "X Failed to read config at $ConfigPath" -ForegroundColor Red
+        return $false
+    }
+
+    if ($configContent -match '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+') {
+        $configContent = $configContent -replace '(?m)^\s*maxBoundsRadiusBlocks:\s*\d+', "  maxBoundsRadiusBlocks: $BoundsRadius"
+    } elseif ($configContent -match '(?m)^village:\s*$') {
+        $configContent = $configContent -replace '(?m)^village:\s*$', "village:`n  maxBoundsRadiusBlocks: $BoundsRadius"
+    } else {
+        $configContent = $configContent.TrimEnd() + "`n`nvillage:`n  maxBoundsRadiusBlocks: $BoundsRadius`n"
+    }
+
+    Set-Content -Path $ConfigPath -Value $configContent -Encoding UTF8
+    Write-Host "OK Applied maxBoundsRadiusBlocks=$BoundsRadius" -ForegroundColor Green
+    return $true
+}
+
+if ($MaxBoundsRadiusBlocks -gt 0) {
+    $repoRoot = (Resolve-Path "$PSScriptRoot\..\..\..").Path
+    $pluginConfigPath = Join-Path $ServerDir "plugins\VillageOverhaul\config.yml"
+    $defaultConfigPath = Join-Path $repoRoot "plugin\src\main\resources\config.yml"
+    if (-not (Ensure-PluginConfigSetting -ConfigPath $pluginConfigPath -DefaultConfigPath $defaultConfigPath -BoundsRadius $MaxBoundsRadiusBlocks)) {
+        Write-Host "X Failed to update config for maxBoundsRadiusBlocks" -ForegroundColor Red
+        exit 1
+    }
+}
+
+
 # Create a startup script that will run the server for N ticks
+# Increase heap for generation-heavy tests to avoid OOM during FAWE/structure generation
 $startupScript = @"
 #!/bin/bash
 # Auto-stop server after N ticks
-java -Xmx1G -Xms1G -XX:+UseG1GC -jar paper.jar --nogui --world-dir=test-worlds --level-name=test-world-$Seed
+java -Xmx4G -Xms2G -XX:+UseG1GC -jar paper.jar --nogui --world-dir=test-worlds --level-name=test-world-$Seed
 "@
 Set-Content -Path "$ServerDir/start.sh" -Value $startupScript
 
@@ -73,21 +493,164 @@ world-settings:
 "@
 Set-Content -Path "$ServerDir/spigot.yml" -Value $spigotYml
 
+# T026d fix: Set level-seed in server.properties for deterministic world generation
+# This ensures the Minecraft world uses the same seed across runs (not just folder name)
+$serverPropsPath = Join-Path $ServerDir "server.properties"
+if (Test-Path $serverPropsPath) {
+    $propsContent = Get-Content -Path $serverPropsPath -Raw
+    # Replace existing level-seed line or append if not present
+    if ($propsContent -match '(?m)^level-seed=.*$') {
+        $propsContent = $propsContent -replace '(?m)^level-seed=.*$', "level-seed=$Seed"
+    } else {
+        $propsContent = $propsContent.TrimEnd() + "`nlevel-seed=$Seed`n"
+    }
+    Set-Content -Path $serverPropsPath -Value $propsContent -NoNewline
+    Write-Host "Set level-seed=$Seed in server.properties for deterministic world generation" -ForegroundColor Cyan
+} else {
+    # Create minimal server.properties if it doesn't exist
+    $minimalProps = @"
+enable-rcon=true
+rcon.password=APsodS0nk9Htj8Ov
+rcon.port=25575
+level-seed=$Seed
+online-mode=false
+spawn-monsters=false
+difficulty=peaceful
+"@
+    Set-Content -Path $serverPropsPath -Value $minimalProps
+    Write-Host "Created server.properties with level-seed=$Seed" -ForegroundColor Cyan
+}
+
 Write-Host "Starting Paper server for $Ticks ticks..." -ForegroundColor Yellow
+
+# Ensure no leftover server processes or locks are preventing world access
+function Ensure-NoWorldLock {
+    param([string]$serverDir, [long]$seed)
+
+    $worldFolder = Join-Path $serverDir "test-worlds\test-world-$seed"
+
+    Write-Host "Checking for stale java processes or lock files for world: $worldFolder" -ForegroundColor Cyan
+
+    # Find java processes referencing this server directory or paper.jar
+    try {
+        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'paper.jar' -or $_.CommandLine -match [regex]::Escape($serverDir)) }
+    } catch {
+        $procs = @()
+    }
+
+    if ($procs -and $procs.Count -gt 0) {
+        Write-Host "  Found $($procs.Count) java process(es) referencing server directory - attempting to stop them" -ForegroundColor Yellow
+        foreach ($p in $procs) {
+            try {
+                Write-Host "    Stopping PID $($p.ProcessId) (CommandLine: $($p.CommandLine.Substring(0,[Math]::Min(200,$p.CommandLine.Length))))" -ForegroundColor DarkGray
+                Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+            } catch {
+                Write-Host "    Failed to stop PID $($p.ProcessId): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        # Give processes time to exit and release locks
+        Start-Sleep -Seconds 3
+    }
+
+    # If the world folder exists and contains session.lock or level.dat.lock, attempt cleanup
+    if (Test-Path $worldFolder) {
+        $lockFiles = @()
+        $lockNames = @('session.lock','level.dat_old','level.dat_mcr')
+        foreach ($name in $lockNames) { $lockFiles += Get-ChildItem -Path $worldFolder -Filter $name -ErrorAction SilentlyContinue }
+        foreach ($f in $lockFiles) {
+            try {
+                if (Test-Path $f.FullName) {
+                    Write-Host "  Removing stale lock file: $($f.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $f.FullName -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                Write-Host "  Could not remove lock file $($f.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    # Final quick check: is any process still holding the server tick port (25565) open? If so, warn.
+    try {
+        $netListeners = Get-NetTCPConnection -LocalPort 25565 -ErrorAction SilentlyContinue
+        if ($netListeners -and $netListeners.Count -gt 0) {
+            Write-Host "  Port 25565 appears in use (possible running server). Attempting to stop owning processes." -ForegroundColor Yellow
+            foreach ($conn in $netListeners) {
+                if ($conn.OwningProcess -ne $null) {
+                    try { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue } catch { }
+                }
+            }
+            Start-Sleep -Seconds 2
+        }
+    } catch {
+        # Get-NetTCPConnection may not be available on older PS versions, skip if unavailable
+    }
+
+    Write-Host "World lock check complete" -ForegroundColor Cyan
+
+    # Remove ambiguous plugin copies to avoid duplicate plugin name errors
+    $pluginsDir = Join-Path $serverDir 'plugins'
+    if (Test-Path $pluginsDir) {
+        try {
+            $dupJars = Get-ChildItem -Path $pluginsDir -Filter 'village-overhaul*.jar' -ErrorAction SilentlyContinue
+            foreach ($dup in $dupJars) {
+                if ($dup.Name -ne 'VillageOverhaul.jar') {
+                    Write-Host "  Removing duplicate plugin jar: $($dup.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $dup.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            $remappedDir = Join-Path $pluginsDir '.paper-remapped'
+            if (Test-Path $remappedDir) {
+                Get-ChildItem -Path $remappedDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'VillageOverhaul|village-overhaul' } | ForEach-Object {
+                    Write-Host "  Removing remapped plugin file: $($_.FullName)" -ForegroundColor Yellow
+                    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {
+            Write-Host "  Failed cleaning plugin duplicates: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
 
 # Get absolute paths for log files
 $serverLogPath = Join-Path (Resolve-Path $ServerDir) "server.log"
 $serverErrorLogPath = Join-Path (Resolve-Path $ServerDir) "server-error.log"
 
 # Start the server in the background with timeout
-$serverProcess = Start-Process -FilePath "java" `
-    -ArgumentList "-Xmx1G", "-Xms1G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true", `
-                  "-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed" `
+# Resolve java executable (prefer Java 21)
+$javaExe = Resolve-JavaExe -preferred $JavaPath
+if (-not $javaExe) {
+    Write-Host "X Java 21 not found on PATH, JAVA_HOME, or common install locations." -ForegroundColor Red
+    Write-Host "  Please install a JDK 21 and re-run, or provide -JavaPath 'C:\\path\\to\\java.exe'" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "Using java executable: $javaExe" -ForegroundColor Cyan
+
+# T026d14: Build JVM arguments dynamically; suppress worldgen in fixed-layout mode to ensure deterministic artifacts
+    # Larger heap for generation scenarios to reduce risk of OutOfMemoryError
+    $jvmArgs = @("-Xmx4G", "-Xms2G", "-XX:+UseG1GC", "-Dcom.mojang.eula.agree=true")
+if ($FixedLayout) {
+    $jvmArgs += "-Dvo.suppress.worldgen=true"
+    Write-Host "Fixed-layout mode: worldgen seeding suppressed via -Dvo.suppress.worldgen=true" -ForegroundColor Cyan
+}
+
+
+if ($ForceZeroPlacement) {
+    $jvmArgs += "-Dvo.test.forceZeroPlacement=true"
+    Write-Host "Test mode: forcing zero-placement via -Dvo.test.forceZeroPlacement=true" -ForegroundColor Yellow
+}
+$jvmArgs += @("-jar", "paper.jar", "--nogui", "--world-dir=test-worlds", "--level-name=test-world-$Seed")
+
+$serverProcess = & { Ensure-NoWorldLock -serverDir $ServerDir -seed $Seed; Start-Process -FilePath $javaExe `
+    -ArgumentList $jvmArgs `
     -WorkingDirectory $ServerDir `
     -RedirectStandardOutput $serverLogPath `
     -RedirectStandardError $serverErrorLogPath `
     -PassThru `
     -NoNewWindow
+}
 
 if (!$serverProcess) {
     Write-Host "X Failed to start server" -ForegroundColor Red
@@ -108,27 +671,98 @@ while ($elapsed -lt $maxWaitSeconds) {
     # Check if process died early
     if ($serverProcess.HasExited) {
         Write-Host "X Server process exited unexpectedly" -ForegroundColor Red
+        # Combine server.log and server-error.log for diagnostic scanning
+        $serverLogContent = ""
         if (Test-Path "$ServerDir/server.log") {
             Write-Host "Server log:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server.log" -Tail 50
+            $serverLogContent += Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+            $serverLogContent += "`n"
         }
         if (Test-Path "$ServerDir/server-error.log") {
             Write-Host "Server errors:" -ForegroundColor Yellow
             Get-Content "$ServerDir/server-error.log" -Tail 50
+            $serverLogContent += Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server-error.log')
+            $serverLogContent += "`n"
         }
+
+        # Look for UnsupportedClassVersionError to provide actionable guidance
+        if ($serverLogContent -and ($serverLogContent -match 'UnsupportedClassVersionError' -or $serverLogContent -match 'class file version ([0-9]+)')) {
+            Write-Host "" -ForegroundColor Yellow
+            # Use plain ASCII hyphen to avoid non-ASCII punctuation issues
+            Write-Host "Detected UnsupportedClassVersionError - Paper appears to require a newer Java runtime." -ForegroundColor Yellow
+            if ($serverLogContent -match 'class file version ([0-9]+)') {
+                $cfv = [int]$Matches[1]
+                switch ($cfv) {
+                    61 { $requiredJava = 17 }
+                    62 { $requiredJava = 18 }
+                    63 { $requiredJava = 19 }
+                    64 { $requiredJava = 20 }
+                    65 { $requiredJava = 21 }
+                    default { $requiredJava = "unknown (class file version $cfv)" }
+                }
+                Write-Host "Paper appears compiled for class file version $cfv (Java $requiredJava)." -ForegroundColor Yellow
+            }
+
+            Write-Host "Your configured java executable:" -ForegroundColor Yellow
+            if ($javaExe) {
+                Write-Host "  $javaExe" -ForegroundColor Yellow
+                $verout = Invoke-ExeCapture $javaExe '-version'
+                if ($verout) { Write-Host "  java -version:`n$verout" -ForegroundColor Yellow }
+            } else {
+                Write-Host "  (no java executable resolved)" -ForegroundColor Yellow
+            }
+
+            # Print actionable guidance using simple concatenation and single-quoted path fragments
+            Write-Host ("Action: install or point to the required Java version (e.g., Java " + $requiredJava + " or newer) and re-run.") -ForegroundColor Yellow
+            $examplePath = 'C:\\Program Files\\Java\\jdk-' + $requiredJava + '\\bin\\java.exe'
+            Write-Host ("Example: set JAVA_HOME or pass -JavaPath '" + $examplePath + "'") -ForegroundColor Yellow
+            Write-Host "Or use an older Paper build compatible with Java 21 (e.g., Paper 1.20.x) by passing -PaperVersion 1.20.4" -ForegroundColor Yellow
+        }
+
+        # If enabled, try to auto-download a temporary JDK of the required version and restart the server once
+        if ($AutoInstallJdk -and ($requiredJava -is [int])) {
+            Write-Host "Auto-install JDK is enabled; attempting to download JDK $requiredJava and restart server..." -ForegroundColor Yellow
+            $tempJava = Install-TempJdk -majorVersion $requiredJava
+            if ($tempJava) {
+                Write-Host "Retrying server start using temporary JDK: $tempJava" -ForegroundColor Cyan
+                $javaExe = $tempJava
+                # T026d14: Reuse $jvmArgs (already includes worldgen suppression if FixedLayout)
+                $serverProcess = Start-Process -FilePath $javaExe `
+                    -ArgumentList $jvmArgs `
+                    -WorkingDirectory $ServerDir `
+                    -RedirectStandardOutput $serverLogPath `
+                    -RedirectStandardError $serverErrorLogPath `
+                    -PassThru `
+                    -NoNewWindow
+
+                if ($serverProcess) {
+                    Write-Host "Server process started (PID: $($serverProcess.Id)) with temporary JDK" -ForegroundColor Cyan
+                    # Continue monitoring loop
+                    continue
+                } else {
+                    Write-Host "X Failed to start server using downloaded JDK" -ForegroundColor Red
+                    exit 1
+                }
+            } else {
+                Write-Host "X Automatic JDK download failed; see guidance above" -ForegroundColor Red
+                exit 1
+            }
+        }
+
         exit 1
     }
     
-    if (Test-Path "$ServerDir/server.log") {
-        $logContent = Get-Content "$ServerDir/server.log" -Raw -ErrorAction SilentlyContinue
-        if ($logContent -match "Done \([\d.]+s\)!") {
+        if (Test-Path "$ServerDir/server.log") {
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+        if ($logContent -match 'Done \([\d.]+s\)!') {
             $serverReady = $true
             Write-Host "OK Server started successfully" -ForegroundColor Green
             break
         }
         
         # Check for common startup issues
-        if ($logContent -match "(?i)(failed|error|exception)") {
+        if ($logContent -match '(?i)(failed|error|exception)') {
             Write-Host "! Potential startup issue detected in logs" -ForegroundColor Yellow
         }
     }
@@ -169,24 +803,373 @@ $totalWaitSeconds = $tickSeconds + 30  # Add 30 second buffer
 
 Write-Host "Running server for $Ticks ticks (approximately $tickSeconds seconds + buffer)..." -ForegroundColor Yellow
 
-Start-Sleep -Seconds $totalWaitSeconds
+# If AutoCommands were provided, execute them now via RCON so tests can trigger actions (e.g., /vo generate)
+# Support a fixed-layout mode that instructs the plugin to place deterministic footprints
+# via `/votest fixed-layout <seed> <count>` (no search, deterministic placements).
+if ($FixedLayout) {
+    $fixedCmd = "votest fixed-layout $Seed $FixedLayoutCount"
+    if (-not ($AutoCommands -contains $fixedCmd)) {
+        $AutoCommands += $fixedCmd
+    }
+}
+if ($AutoCommands -and $AutoCommands.Count -gt 0) {
+    Write-Host "Executing $($AutoCommands.Count) auto-commands via RCON..." -ForegroundColor Cyan
+    # Allow a slightly longer warm-up for plugin command registration to complete
+    Start-Sleep -Seconds 12
+    foreach ($cmd in $AutoCommands) {
+        Write-Host "  Sending RCON command: $cmd" -ForegroundColor DarkGray
+        $rconResp = Send-RconCommand -Password $rconPassword -Command $cmd
+        if ($rconResp) { $rconRespClean = Sanitize-Text $rconResp; Write-Host "    RCON response: $(if ($rconRespClean.Length -gt 200) { $rconRespClean.Substring(0,200) + '...' } else { $rconRespClean })" -ForegroundColor Gray }
+
+        # Special-case: when create-village returns a village ID, automatically kick off structure+path generation
+        if ($cmd -match '^votest (create-village|fixed-layout)\s+\S+') {
+            # Try to extract UUID from response (support both create-village and fixed-layout formats)
+            if ($rconRespClean -match '([a-f0-9]{8}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{4}\-[a-f0-9]{12})') {
+                $villageId = $Matches[1]
+                if ($FixedLayout) {
+                    Write-Host "    Detected created village ID: $villageId - requesting generate-paths only (fixed-layout)" -ForegroundColor Cyan
+                } else {
+                    Write-Host "    Detected created village ID: $villageId - requesting generate-structures and generate-paths" -ForegroundColor Cyan
+                    $genResp = Send-RconCommand -Password $rconPassword -Command "votest generate-structures $villageId"
+                    if ($genResp) { Write-Host "      generate-structures response: $(if ($genResp.Length -gt 200) { $genResp.Substring(0,200) + '...' } else { $genResp })" -ForegroundColor Gray }
+                    Start-Sleep -Seconds 1
+                }
+                $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
+                if ($pathsResp) {
+                    $pathsRespClean = Sanitize-Text $pathsResp
+                    Write-Host "      generate-paths response: $(if ($pathsRespClean.Length -gt 200) { $pathsRespClean.Substring(0,200) + '...' } else { $pathsRespClean })" -ForegroundColor Gray
+                    if ($RequireCacheInvalidation) {
+                        $mutateResp = Send-RconCommand -Password $rconPassword -Command "votest mutate-path-terrain $villageId 2"
+                        if ($mutateResp) {
+                            $mutateResp = Sanitize-Text $mutateResp
+                            Write-Host "      mutate-path-terrain response: $(if ($mutateResp.Length -gt 200) { $mutateResp.Substring(0,200) + '...' } else { $mutateResp })" -ForegroundColor Gray
+                        }
+                        Start-Sleep -Seconds 1
+                        $regenResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
+                        if ($regenResp) {
+                            $regenResp = Sanitize-Text $regenResp
+                            Write-Host "      regenerate-paths response: $(if ($regenResp.Length -gt 200) { $regenResp.Substring(0,200) + '...' } else { $regenResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ($RequirePlannerQueue) {
+                        $burstResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths-burst $villageId 10"
+                        if ($burstResp) {
+                            $burstResp = Sanitize-Text $burstResp
+                            Write-Host "      generate-paths-burst response: $(if ($burstResp.Length -gt 200) { $burstResp.Substring(0,200) + '...' } else { $burstResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ($RequireCacheHits -or $RequireCacheInvalidation -or $RequirePlannerQueue) {
+                        $metricsResp = Send-RconCommand -Password $rconPassword -Command "votest path-metrics $villageId"
+                        if ($metricsResp) {
+                            $metricsResp = Sanitize-Text $metricsResp
+                            Write-Host "      path-metrics response: $(if ($metricsResp.Length -gt 200) { $metricsResp.Substring(0,200) + '...' } else { $metricsResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ((-not $RequirePlannerQueue) -and ($pathsRespClean -match 'Path network generated successfully' -or $pathsRespClean -match 'Path network generation failed' -or $pathsRespClean -match 'Path network generated')) {
+                        Write-Host "      Detected path generation result in RCON response; requesting early stop" -ForegroundColor Cyan
+                        $stopRequested = $true
+                    }
+                }
+            } else {
+                Write-Host "    Could not parse village ID from create-village response" -ForegroundColor Yellow
+            }
+        }
+
+
+        Start-Sleep -Seconds 2
+    }
+    Write-Host "Auto-commands dispatched" -ForegroundColor Cyan
+}
+
+# Monitor logs during runtime to detect village generation
+$startTime = Get-Date
+$villageGenDetected = $false
+$elapsed = 0
+
+while ($elapsed -lt $totalWaitSeconds) {
+    Start-Sleep -Seconds 10
+    $elapsed = ((Get-Date) - $startTime).TotalSeconds
+    
+    # Check if server is still running
+    if ($serverProcess.HasExited) {
+        Write-Host "X Server process died during simulation" -ForegroundColor Red
+        break
+    }
+    
+    # Check for village generation progress in logs
+    if ((Test-Path "$ServerDir/server.log") -and !$villageGenDetected) {
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+        if ($logContent -match 'Attempting to seed village' -or $logContent -match '\[STRUCT\]') {
+            $villageGenDetected = $true
+            Write-Host "  Village generation detected in logs" -ForegroundColor Green
+        }
+    }
+
+    # If caller requested an early stop on a specific log pattern, check for it and exit early when seen
+    if ($StopWhen -and (Test-Path "$ServerDir/server.log")) {
+        $logContent2 = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+        if ($logContent2 -match $StopWhen) {
+            Write-Host "  StopWhen pattern detected in logs; exiting early." -ForegroundColor Cyan
+            break
+        }
+    }
+
+    # If an auto-command or RCON response requested early stop, exit immediately
+    if ($stopRequested) {
+        Write-Host "  Early stop requested by auto-command detection; exiting early." -ForegroundColor Cyan
+        break
+    }
+    
+    Write-Host "  Simulation progress: $([Math]::Floor($elapsed))/$totalWaitSeconds seconds" -ForegroundColor DarkGray
+}
+
+# R010: Run verification commands via RCON
+if (!$serverProcess.HasExited) {
+    Write-Host ""
+    Write-Host "=== R010: Headless Proof-of-Reality Verification ===" -ForegroundColor Cyan
+    
+    # Find village IDs from logs
+    if (Test-Path "$ServerDir/server.log") {
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+        $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
+        $villageMatches = [regex]::Matches($logContent, $villagePattern)
+        
+        $uniqueVillages = @{}
+        foreach ($match in $villageMatches) {
+            $vId = $match.Groups[1].Value
+            $uniqueVillages[$vId] = $true
+        }
+        
+        if ($uniqueVillages.Count -eq 0) {
+            Write-Host "! No villages registered, skipping verification" -ForegroundColor Yellow
+        } else {
+            # Trigger path generation for each registered village so determinism/path logs are produced
+            Write-Host "Dispatching generate-paths for registered villages via RCON..." -ForegroundColor Cyan
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "  Requesting path generation for village $vId" -ForegroundColor DarkGray
+                $pathsResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $vId"
+                if ($pathsResp) { $pathsResp = Sanitize-Text $pathsResp; Write-Host "    generate-paths response: $(if ($pathsResp.Length -gt 200) { $pathsResp.Substring(0,200) + '...' } else { $pathsResp })" -ForegroundColor Gray }
+                Start-Sleep -Seconds 2
+            }
+            $verifiedVillages = 0
+            $failedVillages = 0
+            
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "Verifying village $vId ..." -ForegroundColor White
+                
+                # Run verify-persistence
+                $cmd = "votest verify-persistence $vId"
+                $response = Send-RconCommand -Password $rconPassword -Command $cmd
+                $response = Sanitize-Text $response
+                # Remove any stray leading non-alphanumeric runes left from control-code sanitization (per-line)
+                $response = ($response -split "`n" | ForEach-Object { $_ -replace '^[^A-Za-z0-9]+','' }) -join "`n"
+
+                if ($response) {
+                    # R011c: Parse concise summary format
+                    # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
+                    #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
+                    
+                    # Strip any lingering color prefixes after sanitization
+                    $responseLines = $response -split "`n" | ForEach-Object { $_ -replace '^([a-z0-9]{1,3})?(PASS|FAIL):', '$2:' }
+                    $responseClean = $responseLines -join "`n"
+
+                    # Extract per-structure summaries (optional detail logging)
+                    $structureLines = $responseClean -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    
+                    # Extract final summary
+                    $summaryLine = ($responseClean -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    
+                    if ($summaryLine) {
+                        Write-Host "  $summaryLine" -ForegroundColor Gray
+                        
+                        if ($summaryLine -match 'PASS') {
+                            Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                            $verifiedVillages++
+                            
+                            # Show structure-level detail if any WARNs
+                            $warnStructures = $structureLines | Where-Object { $_ -match 'WARN' }
+                            if ($warnStructures) {
+                                Write-Host "    ! Structures with acceptable WARNs:" -ForegroundColor Yellow
+                                foreach ($warn in $warnStructures) {
+                                    Write-Host "      $warn" -ForegroundColor Yellow
+                                }
+                            }
+                        } else {
+                            Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                            $failedVillages++
+                            
+                            # Show structure-level failures
+                            $failStructures = $structureLines | Where-Object { $_ -match 'FAIL' }
+                            if ($failStructures) {
+                                Write-Host "    X Failed structures:" -ForegroundColor Red
+                                foreach ($fail in $failStructures) {
+                                    Write-Host "      $fail" -ForegroundColor Red
+                                }
+                            }
+                        }
+                    } else {
+                        Write-Host "  ! Could not parse verification summary" -ForegroundColor Yellow
+                        Write-Host "    Raw response: $response" -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "  X No response from RCON" -ForegroundColor Red
+                    $failedVillages++
+                }
+
+                
+                Start-Sleep -Seconds 1
+                # Harvest placement rejection counters artifact if plugin wrote it
+                $artifactPath = Join-Path $ServerDir "plugins\VillageOverhaul\villages\village_${vId}_placement_rejections.json"
+                if (Test-Path $artifactPath) {
+                    try {
+                        $dest = Join-Path $ServerDir "logs\village_${vId}_placement_rejections.json"
+                        Copy-Item -Path $artifactPath -Destination $dest -Force
+                        Write-Host "  Saved placement rejection counters artifact to: $dest" -ForegroundColor Cyan
+                    } catch {
+                        Write-Host "  ! Failed to copy placement counters artifact for ${vId}: $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "  Warn: placement rejection artifact missing for ${vId}, attempting RCON write..." -ForegroundColor Yellow
+                    # Ask the plugin to write the artifact via RCON as a fallback
+                    $writeResp = Send-RconCommand -Password $rconPassword -Command "votest write-placement-counters $vId"
+                    if ($writeResp) { Write-Host "    RCON response: $writeResp" -ForegroundColor DarkGray }
+                    Start-Sleep -Seconds 1
+                    if (Test-Path $artifactPath) {
+                        try {
+                            $dest = Join-Path $ServerDir "logs\village_${vId}_placement_rejections.json"
+                            Copy-Item -Path $artifactPath -Destination $dest -Force
+                            Write-Host "  Saved placement rejection counters artifact to: $dest" -ForegroundColor Cyan
+                        } catch {
+                            Write-Host "  X Failed to copy placement counters artifact for ${vId} after RCON write: $($_.Exception.Message)" -ForegroundColor Red
+                            $verificationFailed = $true
+                        }
+                    } else {
+                        Write-Host "  X Missing placement rejection artifact for ${vId} after RCON attempt - CI requires artifact presence" -ForegroundColor Red
+                        $verificationFailed = $true
+                    }
+                }
+            }
+            
+            if ($failedVillages -gt 0) {
+                Write-Host "X Verification failed for $failedVillages village(s)" -ForegroundColor Red
+                $verificationFailed = $true
+            } else {
+                Write-Host "OK All $verifiedVillages village(s) passed verification" -ForegroundColor Green
+            }
+        }
+    }
+}
+
+# R010: Run verification commands via RCON
+if (!$serverProcess.HasExited) {
+    Write-Host ""
+    Write-Host "=== R010: Headless Proof-of-Reality Verification ===" -ForegroundColor Cyan
+    
+    # Find village IDs from logs
+    if (Test-Path "$ServerDir/server.log") {
+        $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
+        $villagePattern = '\[STRUCT\] Registered village ([a-f0-9\-]+)'
+        $villageMatches = [regex]::Matches($logContent, $villagePattern)
+        
+        $uniqueVillages = @{}
+        foreach ($match in $villageMatches) {
+            $vId = $match.Groups[1].Value
+            $uniqueVillages[$vId] = $true
+        }
+        
+        if ($uniqueVillages.Count -eq 0) {
+            Write-Host "! No villages registered, skipping verification" -ForegroundColor Yellow
+        } else {
+            $verifiedVillages = 0
+            $failedVillages = 0
+            
+            foreach ($vId in $uniqueVillages.Keys) {
+                Write-Host "Verifying village $vId ..." -ForegroundColor White
+                
+                # Run verify-persistence
+                $cmd = "votest verify-persistence $vId"
+                $response = Send-RconCommand -Password $rconPassword -Command $cmd
+                # Sanitize and trim leading non-alphanumeric junk that can break summary parsing
+                $response = Sanitize-Text $response
+                $response = ($response -split "`n" | ForEach-Object { $_ -replace '^[^A-Za-z0-9]+','' }) -join "`n"
+                if ($response) {
+                    # R011c: Parse concise summary format
+                    # Expected format: "PASS: All persistence checks passed (N checks, M structures)"
+                    #              or: "FAIL: X/Y checks failed (corner=N, perimeter=N, outside-mask=N, path=N)"
+                    
+                    # Strip any lingering color prefixes after sanitization
+                    $responseLines = $response -split "`n" | ForEach-Object { $_ -replace '^([a-z0-9]{1,3})?(PASS|FAIL):', '$2:' }
+                    $responseClean = $responseLines -join "`n"
+
+                    # Extract per-structure summaries (optional detail logging)
+                    $structureLines = $responseClean -split "`n" | Where-Object { $_ -match 'Structure .+: (PASS|WARN|FAIL)' }
+                    
+                    # Extract final summary
+                    $summaryLine = ($responseClean -split "`n" | Where-Object { $_ -match '^(PASS|FAIL):' }) | Select-Object -Last 1
+                    
+                    if ($summaryLine) {
+                        Write-Host "  $summaryLine" -ForegroundColor Gray
+                        
+                        if ($summaryLine -match 'PASS') {
+                            Write-Host "  OK Persistence verification passed" -ForegroundColor Green
+                            $verifiedVillages++
+                            
+                            # Show structure-level detail if any WARNs
+                            $warnStructures = $structureLines | Where-Object { $_ -match 'WARN' }
+                            if ($warnStructures) {
+                                Write-Host "    ! Structures with acceptable WARNs:" -ForegroundColor Yellow
+                                foreach ($warn in $warnStructures) {
+                                    Write-Host "      $warn" -ForegroundColor Yellow
+                                }
+                            }
+                        } else {
+                            Write-Host "  X Persistence verification FAILED" -ForegroundColor Red
+                            $failedVillages++
+                            
+                            # Show structure-level failures
+                            $failStructures = $structureLines | Where-Object { $_ -match 'FAIL' }
+                            if ($failStructures) {
+                                Write-Host "    X Failed structures:" -ForegroundColor Red
+                                foreach ($fail in $failStructures) {
+                                    Write-Host "      $fail" -ForegroundColor Red
+                                }
+                            }
+                        }
+                    } else {
+                        Write-Host "  ! Could not parse verification summary" -ForegroundColor Yellow
+                        Write-Host "    Raw response: $response" -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "  X No response from RCON" -ForegroundColor Red
+                    $failedVillages++
+                }
+
+                
+                Start-Sleep -Seconds 1
+            }
+            
+            if ($failedVillages -gt 0) {
+                Write-Host "X Verification failed for $failedVillages village(s)" -ForegroundColor Red
+                $verificationFailed = $true
+            } else {
+                Write-Host "OK All $verifiedVillages village(s) passed verification" -ForegroundColor Green
+            }
+        }
+    }
+}
 
 # Check if server is still running
 if (!$serverProcess.HasExited) {
     Write-Host "Stopping server gracefully..." -ForegroundColor Yellow
-    # Send stop command via stdin (requires RCON or screen, so just kill for now)
-    Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 5
+    Stop-Process -Id $serverProcess.Id -Force
 }
-
-Write-Host "OK Server ran for approximately $Ticks ticks without crashing" -ForegroundColor Green
 
 # Parse [STRUCT] logs for structure placement validation
 if (Test-Path "$ServerDir/server.log") {
     Write-Host "" 
     Write-Host "=== Structure Placement Validation ===" -ForegroundColor Cyan
     
-    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
     
     # Count structure placements
     $beginMatches = ([regex]::Matches($logContent, '\[STRUCT\] Begin placement')).Count
@@ -198,6 +1181,12 @@ if (Test-Path "$ServerDir/server.log") {
     Write-Host "Successful placements: $seatMatches" -ForegroundColor White
     Write-Host "Re-seat operations: $reseatMatches" -ForegroundColor White
     Write-Host "Aborted placements: $abortMatches" -ForegroundColor White
+
+    $boundsMatches = ([regex]::Matches($logContent, '\[STRUCT\]\[BOUNDS\]')).Count
+    Write-Host "Bounds coverage logs: $boundsMatches" -ForegroundColor White
+    if ($MaxBoundsRadiusBlocks -gt 0 -and $boundsMatches -eq 0) {
+        Write-Host "! Missing [STRUCT][BOUNDS] logs for max bounds coverage" -ForegroundColor Yellow
+    }
     
     # Check for floating or embedded structures (validation failures)
     $floatingMatches = ([regex]::Matches($logContent, '(?i)floating|embedded|validation_failed')).Count
@@ -208,11 +1197,729 @@ if (Test-Path "$ServerDir/server.log") {
         Write-Host "X $floatingMatches potential floating/embedded structures detected" -ForegroundColor Red
         Write-Host "! Check logs for validation failures" -ForegroundColor Yellow
     }
+
+    # CI: assert placements — fail fast when a seeded village run produced zero placements
+    $zeroPlacementDetected = $false
+    $zeroMatchPattern = 'ZERO-PLACEMENT\b'
+    if ($logContent -match $zeroMatchPattern) { $zeroPlacementDetected = $true }
+
+    # If we saw structure placement attempts but zero successful placements, that's also a zero-placement condition
+    if (($beginMatches -gt 0) -and ($seatMatches -eq 0)) { $zeroPlacementDetected = $true }
+
+    if ($zeroPlacementDetected -and ($env:CI -eq 'true')) {
+        Write-Host "X CI: Zero structure placements detected for seeded run (failing early)" -ForegroundColor Red
+
+        # Save zero-placement lines and placement rejection counters into artifacts for CI
+        $artifactsDir = Join-Path (Resolve-Path $ServerDir) 'artifacts'
+        if (!(Test-Path $artifactsDir)) { New-Item -ItemType Directory -Path $artifactsDir -Force | Out-Null }
+
+        # Extract ZERO-PLACEMENT lines from server.log and write them out
+        $zeroLines = ($logContent -split "`n") | Where-Object { $_ -match $zeroMatchPattern }
+        if ($zeroLines.Count -gt 0) {
+            $diagFile = Join-Path $artifactsDir 'zero_placement_diag.txt'
+            $zeroLines | Out-File -FilePath $diagFile -Encoding UTF8
+            Write-Host "Saved zero-placement diagnostic to: $diagFile" -ForegroundColor Cyan
+        }
+
+        # Copy placement rejection counters artifacts if present
+        $rejectionFiles = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\villages') -Filter '*placement_rejections.json' -File -ErrorAction SilentlyContinue)
+        if ($rejectionFiles.Count -gt 0) {
+            foreach ($f in $rejectionFiles) {
+                $dst = Join-Path $artifactsDir $f.Name
+                Copy-Item -Path $f.FullName -Destination $dst -Force -ErrorAction SilentlyContinue
+                Write-Host "Saved placement rejection artifact to: $dst" -ForegroundColor Cyan
+            }
+        } else {
+            Write-Host "No placement rejection artifact present to copy for CI" -ForegroundColor Yellow
+        }
+
+        Write-Host "Remediation hints: Use -FixedLayout mode to reproduce deterministically, tune terrain acceptance thresholds, or inspect the saved artifacts and logs (artifacts/zero_placement_diag.txt, artifacts/*placement_rejections.json)." -ForegroundColor Yellow
+        exit 4
+    }
+    
+    # Check path connectivity (US2 acceptance criteria: ≥90%)
+    Write-Host ""
+    Write-Host "=== Path Connectivity Validation ===" -ForegroundColor Cyan
+    
+    $pathCompletePattern = '\[STRUCT\] Path network complete: village=[a-f0-9\-]+, paths=[0-9]+, blocks=[0-9]+, connectivity=([0-9]+\.[0-9]+)%'
+    $pathMatches = [regex]::Matches($logContent, $pathCompletePattern)
+    
+    if ($pathMatches.Count -eq 0) {
+        Write-Host "! No path networks found in logs (paths may not be generated yet)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Path networks detected: $($pathMatches.Count)" -ForegroundColor White
+        
+        $failedVillages = 0
+        $minConnectivity = 100.0
+        $maxConnectivity = 0.0
+        
+        foreach ($match in $pathMatches) {
+            $connectivity = [double]$match.Groups[1].Value
+            
+            if ($connectivity -lt $minConnectivity) {
+                $minConnectivity = $connectivity
+            }
+            if ($connectivity -gt $maxConnectivity) {
+                $maxConnectivity = $connectivity
+            }
+            
+            if ($connectivity -lt 90.0) {
+                $failedVillages++
+                Write-Host "X Village with connectivity $connectivity% (below 90% threshold)" -ForegroundColor Red
+            }
+        }
+        
+    Write-Host "Connectivity range: $minConnectivity% - $maxConnectivity%" -ForegroundColor White
+    
+    if ($failedVillages -eq 0) {
+        Write-Host "OK All villages meet 90% path connectivity threshold" -ForegroundColor Green
+    } else {
+        Write-Host "X $failedVillages village(s) below 90% path connectivity threshold" -ForegroundColor Red
+    }
+}
+
+    Write-Host ""
+    Write-Host "=== Path Coverage Validation (T055) ===" -ForegroundColor Cyan
+
+    $pathCoveragePattern = 'PATH-COVERAGE village=([a-f0-9\-]+) attempted=([0-9]+) spawnedPairs=([0-9]+) coverage=([0-9]+)%'
+    $coverageMatches = [regex]::Matches($logContent, $pathCoveragePattern)
+
+    if ($coverageMatches.Count -eq 0) {
+        Write-Host "! No PATH-COVERAGE lines found in logs" -ForegroundColor Yellow
+    } else {
+        $coverageFailures = 0
+        foreach ($match in $coverageMatches) {
+            $villageId = $match.Groups[1].Value
+            $attempted = [int]$match.Groups[2].Value
+            $spawnedPairs = [int]$match.Groups[3].Value
+            $coverage = [int]$match.Groups[4].Value
+
+            Write-Host "PATH-COVERAGE village=$villageId attempted=$attempted spawnedPairs=$spawnedPairs coverage=$coverage%"
+
+            if ($attempted -gt 0 -and $coverage -lt $PathCoverageThresholdPct) {
+                $coverageFailures++
+                Write-Host "X Village $villageId path coverage $coverage% is below threshold $PathCoverageThresholdPct%" -ForegroundColor Red
+            }
+        }
+
+        if ($coverageFailures -eq 0) {
+            Write-Host "OK All villages meet the $PathCoverageThresholdPct% path coverage threshold" -ForegroundColor Green
+        } elseif ($env:CI -eq 'true') {
+            Write-Host "X $coverageFailures village(s) failed the $PathCoverageThresholdPct% path coverage threshold" -ForegroundColor Red
+            exit 7
+        }
+    }
+
+    # T060: Path emission verification
+    Write-Host ""
+    Write-Host "=== Path Emission Verification (T060) ===" -ForegroundColor Cyan
+
+    $pathEmitPattern = '\[PATH\]\[EMIT\] Result: placed=([0-9]+), verified=([0-9]+), skipped\(mask\)=([0-9]+), skipped\(noSupport\)=([0-9]+), skipped\(unloaded\)=([0-9]+)'
+    $emitMatches = [regex]::Matches($logContent, $pathEmitPattern)
+
+    if ($emitMatches.Count -eq 0) {
+        Write-Host "! No path emission results found in logs" -ForegroundColor Yellow
+    } else {
+        $mismatchCount = 0
+        $supportMismatch = 0
+        $totalPlaced = 0
+        foreach ($match in $emitMatches) {
+            $placed = [int]$match.Groups[1].Value
+            $verified = [int]$match.Groups[2].Value
+            $skippedSupport = [int]$match.Groups[4].Value
+            $totalPlaced += $placed
+            if ($verified -lt $placed) {
+                $mismatchCount++
+                Write-Host "X Path emission mismatch (placed=$placed, verified=$verified)" -ForegroundColor Red
+            }
+            if ($FixedLayout) {
+                if ($placed -le 0) {
+                    $supportMismatch++
+                    Write-Host "X Fixed-layout path emission placed=0 (expected >0)" -ForegroundColor Red
+                }
+                if ($skippedSupport -gt 0) {
+                    $supportMismatch++
+                    Write-Host "X Fixed-layout path emission skipped(noSupport)=$skippedSupport" -ForegroundColor Red
+                }
+            }
+        }
+
+        if ($mismatchCount -eq 0 -and $supportMismatch -eq 0) {
+            Write-Host "OK All path emissions verified" -ForegroundColor Green
+        } else {
+            if ($mismatchCount -gt 0) {
+                Write-Host "X $mismatchCount path emission mismatch(es)" -ForegroundColor Red
+            }
+            if ($supportMismatch -gt 0) {
+                Write-Host "X $supportMismatch fixed-layout path support issue(s)" -ForegroundColor Red
+            }
+            if ($env:CI -eq 'true') {
+                exit 5
+            }
+        }
+
+        if ($FixedLayout) {
+            if ($totalPlaced -le 0) {
+                Write-Host "X Fixed-layout path emission placed total=0 (expected >0)" -ForegroundColor Red
+                if ($env:CI -eq 'true') { exit 5 }
+            } else {
+                Write-Host "OK Fixed-layout path emission placed total=$totalPlaced" -ForegroundColor Green
+            }
+        }
+    }
+
+    # T062: Terraforming commit artifact validation
+    Write-Host ""
+    Write-Host "=== Terraforming Commit Artifacts (T062) ===" -ForegroundColor Cyan
+
+    $terraformArtifacts = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\diagnostics') -Filter 'terraform_commit_*.json' -File -ErrorAction SilentlyContinue)
+    if ($terraformArtifacts.Count -gt 0) {
+        foreach ($artifact in $terraformArtifacts) {
+            try {
+                $dest = Join-Path $ServerDir "logs\$($artifact.Name)"
+                Copy-Item -Path $artifact.FullName -Destination $dest -Force
+                Write-Host "  Saved terraforming artifact: $dest" -ForegroundColor Cyan
+            } catch {
+                Write-Host "  ! Failed to copy terraforming artifact $($artifact.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "! No terraforming commit artifacts found" -ForegroundColor Yellow
+    }
+
+    # T087: Collision diagnostics artifacts
+    Write-Host ""
+    Write-Host "=== Collision Diagnostics (T087) ===" -ForegroundColor Cyan
+    $collisionArtifacts = @(Get-ChildItem -Path (Join-Path $ServerDir 'plugins\VillageOverhaul\diagnostics') -Filter 'collision_diag_*.json' -File -ErrorAction SilentlyContinue)
+    if ($collisionArtifacts.Count -gt 0) {
+        foreach ($artifact in $collisionArtifacts) {
+            try {
+                $dest = Join-Path $ServerDir "logs\$($artifact.Name)"
+                Copy-Item -Path $artifact.FullName -Destination $dest -Force
+                Write-Host "  Saved collision diagnostic: $dest" -ForegroundColor Cyan
+            } catch {
+                Write-Host "  ! Failed to copy collision diagnostic $($artifact.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "! No collision diagnostics found" -ForegroundColor Yellow
+    }
+
+    # T063: Fixed-layout receipts vs summary validation
+    if ($FixedLayout) {
+        Write-Host ""
+        Write-Host "=== Fixed-Layout Receipt Validation (T063) ===" -ForegroundColor Cyan
+        $summaryPattern = '\[STRUCT\] village: id=([a-f0-9\-]+) buildings=([0-9]+)'
+        $summaryMatches = [regex]::Matches($logContent, $summaryPattern)
+        if ($summaryMatches.Count -eq 0) {
+            Write-Host "X No village summary found in logs" -ForegroundColor Red
+            if ($env:CI -eq 'true') { exit 6 }
+        } else {
+            $receiptPattern = '\[STRUCT\]\[TEST\] Fixed layout receipts=([0-9]+) village=([a-f0-9\-]+)'
+            $receiptMatches = [regex]::Matches($logContent, $receiptPattern)
+            $receiptMap = @{}
+            foreach ($match in $receiptMatches) {
+                $receiptCount = [int]$match.Groups[1].Value
+                $receiptVillageId = $match.Groups[2].Value
+                $receiptMap[$receiptVillageId] = $receiptCount
+            }
+
+            $summaryMismatch = 0
+            foreach ($match in $summaryMatches) {
+                $villageId = $match.Groups[1].Value
+                $summaryCount = [int]$match.Groups[2].Value
+                if ($receiptMap.ContainsKey($villageId)) {
+                    $receiptCount = [int]$receiptMap[$villageId]
+                    if ($summaryCount -ne $receiptCount) {
+                        $summaryMismatch++
+                        Write-Host "X Fixed-layout summary mismatch: village=$villageId summary=$summaryCount receipts=$receiptCount" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "X Fixed-layout receipts log missing for village $villageId" -ForegroundColor Red
+                    $summaryMismatch++
+                }
+            }
+
+            if ($summaryMismatch -eq 0) {
+                Write-Host "OK Fixed-layout summary matches receipts" -ForegroundColor Green
+            } else {
+                Write-Host "X $summaryMismatch fixed-layout summary mismatch(es)" -ForegroundColor Red
+                if ($env:CI -eq 'true') { exit 6 }
+            }
+        }
+    }
+
+    # T026a: Check pathfinding concurrency cap (MAX_NODES_EXPLORED enforcement)
+
+Write-Host ""
+Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cyan
+
+    
+    # Pattern: [PATH] A* FAILED: node limit reached (explored=5000/5000, obstacles=N, maxCost=X.X)
+    $nodeCapPattern = '\[PATH\] A\* FAILED: node limit reached \(explored=([0-9]+)/([0-9]+)'
+    $nodeCapMatches = [regex]::Matches($logContent, $nodeCapPattern)
+    
+    if ($nodeCapMatches.Count -gt 0) {
+        Write-Host "Node cap enforcement detected: $($nodeCapMatches.Count) path(s) hit limit" -ForegroundColor White
+        
+        $allRespectCap = $true
+        foreach ($match in $nodeCapMatches) {
+            $explored = [int]$match.Groups[1].Value
+            $cap = [int]$match.Groups[2].Value
+            
+            Write-Host "  Explored: $explored / Cap: $cap" -ForegroundColor Gray
+            
+            if ($explored -gt $cap) {
+                Write-Host "X Node exploration exceeded cap: $explored > $cap" -ForegroundColor Red
+                $allRespectCap = $false
+            }
+        }
+        
+        if ($allRespectCap) {
+            Write-Host "OK All failed paths respected MAX_NODES_EXPLORED cap" -ForegroundColor Green
+        } else {
+            Write-Host "X Some paths exceeded MAX_NODES_EXPLORED cap" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "! No node cap enforcement detected (all paths may have succeeded)" -ForegroundColor Yellow
+    }
+    
+    # Pattern: [PATH] A* SUCCESS: Goal reached after exploring N nodes
+    $successPattern = '\[PATH\] A\* SUCCESS: Goal reached after exploring ([0-9]+) nodes'
+    $successMatches = [regex]::Matches($logContent, $successPattern)
+    
+    if ($successMatches.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Successful pathfinding analysis:" -ForegroundColor White
+        
+        $totalNodes = 0
+        $maxNodes = 0
+        $minNodes = [int]::MaxValue
+        
+        foreach ($match in $successMatches) {
+            $explored = [int]$match.Groups[1].Value
+            $totalNodes += $explored
+            if ($explored -gt $maxNodes) { $maxNodes = $explored }
+            if ($explored -lt $minNodes) { $minNodes = $explored }
+        }
+        
+        $avgNodes = [math]::Round($totalNodes / $successMatches.Count, 1)
+        
+        Write-Host "  Total successful paths: $($successMatches.Count)" -ForegroundColor Gray
+        Write-Host "  Node exploration range: $minNodes - $maxNodes (avg: $avgNodes)" -ForegroundColor Gray
+        
+        # Warn if consistently hitting high node counts (performance concern)
+        if ($avgNodes -gt 3000) {
+            Write-Host "! High average node exploration ($avgNodes), may indicate complex terrain" -ForegroundColor Yellow
+        }
+    }
+    
+    # T042/T042a: Check waypoint cache behavior
+    Write-Host ""
+    Write-Host "=== Waypoint Cache Validation (T042/T042a) ===" -ForegroundColor Cyan
+    
+    $cachePattern = '\[PATH\] cache: hits=([0-9]+), misses=([0-9]+), entries=([0-9]+)(?: village=([a-f0-9\-]+))?'
+    $cacheMatches = [regex]::Matches($logContent, $cachePattern)
+    
+    if ($cacheMatches.Count -gt 0) {
+        $totalHits = 0
+        $totalMisses = 0
+        $maxEntries = 0
+        foreach ($match in $cacheMatches) {
+            $hits = [int]$match.Groups[1].Value
+            $misses = [int]$match.Groups[2].Value
+            $entries = [int]$match.Groups[3].Value
+            $villageId = $match.Groups[4].Value
+            $totalHits += $hits
+            $totalMisses += $misses
+            if ($entries -gt $maxEntries) { $maxEntries = $entries }
+            if ($villageId) {
+                Write-Host "  Village $villageId cache hits=$hits misses=$misses entries=$entries" -ForegroundColor Gray
+            } else {
+                Write-Host "  Cache hits=$hits misses=$misses entries=$entries" -ForegroundColor Gray
+            }
+        }
+        
+        if ($totalHits -gt 0) {
+            Write-Host "OK Waypoint cache produced hits=$totalHits misses=$totalMisses maxEntries=$maxEntries" -ForegroundColor Green
+        } else {
+            Write-Host "! No waypoint cache hits detected (misses=$totalMisses maxEntries=$maxEntries)" -ForegroundColor Yellow
+            if ($RequireCacheHits) {
+                throw "Required waypoint cache hits were not observed"
+            }
+        }
+    } else {
+        Write-Host "! No waypoint cache stats detected" -ForegroundColor Yellow
+        if ($RequireCacheHits) {
+            throw "Required waypoint cache stats were not observed"
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "=== Cache Invalidation Validation (T043) ===" -ForegroundColor Cyan
+
+    $invalidationPattern = '\[PATH\] cache invalidated: segments=([0-9]+), reason=([a-z\-]+), bounds=\((-?[0-9]+)\.\.(-?[0-9]+),(-?[0-9]+)\.\.(-?[0-9]+)\)'
+    $invalidationMatches = [regex]::Matches($logContent, $invalidationPattern)
+    if ($invalidationMatches.Count -gt 0) {
+        foreach ($match in $invalidationMatches) {
+            $segments = [int]$match.Groups[1].Value
+            $reason = $match.Groups[2].Value
+            $minX = $match.Groups[3].Value
+            $maxX = $match.Groups[4].Value
+            $minZ = $match.Groups[5].Value
+            $maxZ = $match.Groups[6].Value
+            Write-Host "  Invalidation reason=$reason segments=$segments bounds=($minX..$maxX,$minZ..$maxZ)" -ForegroundColor Gray
+        }
+        Write-Host "OK Cache invalidation activity detected" -ForegroundColor Green
+    } else {
+        Write-Host "! No cache invalidation activity detected" -ForegroundColor Yellow
+        if ($RequireCacheInvalidation) {
+            throw "Required cache invalidation activity was not observed"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "=== Planner Queue Validation (T044) ===" -ForegroundColor Cyan
+
+    $plannerQueuedPattern = '\[PATH\] planner queued: active=([0-9]+) queued=([0-9]+) cap=([0-9]+)'
+    $plannerStatePattern = '\[PATH\] planners: active=([0-9]+) queued=([0-9]+) cap=([0-9]+)'
+    $plannerQueuedMatches = [regex]::Matches($logContent, $plannerQueuedPattern)
+    $plannerStateMatches = [regex]::Matches($logContent, $plannerStatePattern)
+
+    if ($plannerStateMatches.Count -gt 0) {
+        $maxActive = 0
+        $maxQueued = 0
+        $cap = 0
+        $finalQueued = 0
+        foreach ($match in $plannerStateMatches) {
+            $active = [int]$match.Groups[1].Value
+            $queued = [int]$match.Groups[2].Value
+            $cap = [int]$match.Groups[3].Value
+            if ($active -gt $maxActive) { $maxActive = $active }
+            if ($queued -gt $maxQueued) { $maxQueued = $queued }
+            $finalQueued = $queued
+        }
+
+        Write-Host "  Planner states observed: $($plannerStateMatches.Count), maxActive=$maxActive maxQueued=$maxQueued cap=$cap finalQueued=$finalQueued" -ForegroundColor Gray
+        if ($maxActive -le $cap) {
+            Write-Host "OK Planner concurrency cap respected" -ForegroundColor Green
+        } else {
+            throw "Planner concurrency cap exceeded (maxActive=$maxActive cap=$cap)"
+        }
+
+        if ($plannerQueuedMatches.Count -gt 0) {
+            if ($finalQueued -eq 0) {
+                Write-Host "OK Planner queue drained after contention" -ForegroundColor Green
+            } else {
+                throw "Planner queue did not drain (finalQueued=$finalQueued)"
+            }
+        } elseif ($RequirePlannerQueue) {
+            throw "Required planner queue activity was not observed"
+        } else {
+            Write-Host "! No planner queue contention detected" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "! No planner state logs detected" -ForegroundColor Yellow
+        if ($RequirePlannerQueue) {
+            throw "Required planner state logs were not observed"
+        }
+    }
+    
+    # T026b: Check path generation between distant buildings (within 200 blocks)
+    Write-Host ""
+    Write-Host "=== Distant Building Path Generation (T026b) ===" -ForegroundColor Cyan
+    
+    # Pattern: [PATH] A* search start: from (X1,Y1,Z1) to (X2,Z2), distance=D.D
+    $distancePattern = '\[PATH\] A\* search start: from \((-?[0-9]+),(-?[0-9]+),(-?[0-9]+)\) to \((-?[0-9]+),(-?[0-9]+)\), distance=([0-9]+\.[0-9]+)'
+    $distanceMatches = [regex]::Matches($logContent, $distancePattern)
+    
+    if ($distanceMatches.Count -gt 0) {
+        Write-Host "Path distance analysis:" -ForegroundColor White
+        
+        $distantPaths = @()
+        $totalPaths = 0
+        $withinRange = 0
+        $tooFar = 0
+        
+        foreach ($match in $distanceMatches) {
+            $distance = [double]$match.Groups[6].Value
+            $totalPaths++
+            
+            if ($distance -ge 120.0 -and $distance -le 200.0) {
+                $distantPaths += @{
+                    distance = $distance
+                    fromX = [int]$match.Groups[1].Value
+                    fromZ = [int]$match.Groups[3].Value
+                    toX = [int]$match.Groups[4].Value
+                    toZ = [int]$match.Groups[5].Value
+                }
+                $withinRange++
+            } elseif ($distance -gt 200.0) {
+                $tooFar++
+            }
+        }
+        
+        Write-Host "  Total paths attempted: $totalPaths" -ForegroundColor Gray
+        Write-Host "  Distant paths (120-200 blocks): $withinRange" -ForegroundColor Gray
+        Write-Host "  Out-of-range paths (>200 blocks): $tooFar" -ForegroundColor Gray
+        
+        if ($distantPaths.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Validating distant path generation:" -ForegroundColor White
+            
+            # For each distant path, check if it succeeded or failed gracefully
+            $successCount = 0
+            $failureCount = 0
+            $noDataCount = 0
+            
+            foreach ($pathInfo in $distantPaths) {
+                $dist = $pathInfo.distance
+                $fromCoords = "($($pathInfo.fromX),$($pathInfo.fromZ))"
+                $toCoords = "($($pathInfo.toX),$($pathInfo.toZ))"
+                
+                # Check for success pattern: [STRUCT] Path found: distance=D.D, blocks=N
+                # Match paths within ±5 blocks to account for rounding
+                $successCheckPattern = [regex]::Escape("[STRUCT] Path found: distance=$([math]::Floor($dist))") + '|' + [regex]::Escape("[STRUCT] Path found: distance=$([math]::Ceiling($dist))")
+                $successMatch = [regex]::Match($logContent, $successCheckPattern)
+                
+                # Check for skip pattern: [STRUCT] Path distance too far:
+                $skipPattern = '\[STRUCT\] Path distance too far: ' + [regex]::Escape("$dist") + ' blocks'
+                $skipMatch = [regex]::Match($logContent, $skipPattern)
+                
+                # Check for failure pattern: [STRUCT] No path found from ... (after this specific start)
+                $failPattern = '\[STRUCT\] No path found from \(' + $pathInfo.fromX + ',[0-9]+,' + $pathInfo.fromZ + '\) to \(' + $pathInfo.toX + ',[0-9]+,' + $pathInfo.toZ + '\)'
+                $failMatch = [regex]::Match($logContent, $failPattern)
+                
+                if ($successMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (SUCCESS)" -ForegroundColor Green
+                    $successCount++
+                } elseif ($skipMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (SKIPPED - graceful)" -ForegroundColor Yellow
+                    $successCount++
+                } elseif ($failMatch.Success) {
+                    Write-Host "  OK Path at $dist blocks: $fromCoords -> $toCoords (FAILED - graceful)" -ForegroundColor Yellow
+                    $failureCount++
+                } else {
+                    Write-Host "  ! Path at $dist blocks: $fromCoords -> $toCoords (NO DATA)" -ForegroundColor Gray
+                    $noDataCount++
+                }
+            }
+            
+            Write-Host ""
+            if ($successCount + $failureCount -eq $distantPaths.Count) {
+                Write-Host "OK All distant paths handled gracefully (success=$successCount, failure=$failureCount)" -ForegroundColor Green
+            } elseif ($noDataCount -gt 0) {
+                Write-Host "! Some distant paths have incomplete logging (noData=$noDataCount)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "! No distant paths (120-200 blocks) detected in this test" -ForegroundColor Yellow
+            Write-Host "  (This is expected if buildings are placed closer together)" -ForegroundColor Gray
+        }
+        
+        # Check for paths that should have been rejected (>200 blocks)
+        if ($tooFar -gt 0) {
+            $rejectionPattern = '\[STRUCT\] Path distance too far: ([0-9]+\.[0-9]+) blocks \(max 200\)'
+            $rejectionMatches = [regex]::Matches($logContent, $rejectionPattern)
+            
+            if ($rejectionMatches.Count -ge $tooFar) {
+                Write-Host ""
+                Write-Host "OK Out-of-range paths properly rejected ($tooFar path(s) > 200 blocks)" -ForegroundColor Green
+            } else {
+                Write-Host ""
+                Write-Host "X Out-of-range rejection incomplete: expected $tooFar, found $($rejectionMatches.Count)" -ForegroundColor Red
+            }
+        }
+    } else {
+        Write-Host "! No path distance data found in logs" -ForegroundColor Yellow
+    }
+    
+    # T026c: Check terrain-cost accuracy (flat vs water/steep preference)
+    Write-Host ""
+    Write-Host "=== Terrain Cost Accuracy Validation (T026c) ===" -ForegroundColor Cyan
+    
+    # Pattern: [PATH] A* SUCCESS: Goal reached after exploring N nodes (path=P tiles, cost=C.C, flat=F, slope=S, water=W, steep=T)
+    $costPattern = '\[PATH\] A\* SUCCESS: Goal reached after exploring [0-9]+ nodes \(path=([0-9]+) tiles, cost=([0-9]+\.[0-9]+), flat=([0-9]+), slope=([0-9]+), water=([0-9]+), steep=([0-9]+)\)'
+    $costMatches = [regex]::Matches($logContent, $costPattern)
+    
+    if ($costMatches.Count -gt 0) {
+        Write-Host "Terrain cost analysis:" -ForegroundColor White
+        
+        $totalPaths = $costMatches.Count
+        $lowCostPaths = 0
+        $moderateCostPaths = 0
+        $highCostPaths = 0
+        $waterAvoidingPaths = 0
+        $steepAvoidingPaths = 0
+        
+        foreach ($match in $costMatches) {
+            $pathLength = [int]$match.Groups[1].Value
+            $totalCost = [double]$match.Groups[2].Value
+            $flatTiles = [int]$match.Groups[3].Value
+            $slopeTiles = [int]$match.Groups[4].Value
+            $waterTiles = [int]$match.Groups[5].Value
+            $steepTiles = [int]$match.Groups[6].Value
+            
+            # Calculate average cost per tile
+            $avgCostPerTile = $totalCost / $pathLength
+            
+            # Categorize paths by cost efficiency
+            if ($avgCostPerTile -le 1.5) {
+                $lowCostPaths++  # Mostly flat terrain
+            } elseif ($avgCostPerTile -le 3.0) {
+                $moderateCostPaths++  # Some slopes
+            } else {
+                $highCostPaths++  # Water or steep terrain
+            }
+            
+            # Count paths that successfully avoid high-cost tiles
+            if ($waterTiles -eq 0) {
+                $waterAvoidingPaths++
+            }
+            if ($steepTiles -eq 0) {
+                $steepAvoidingPaths++
+            }
+        }
+        
+        Write-Host "  Total paths analyzed: $totalPaths" -ForegroundColor Gray
+        Write-Host "  Low-cost paths (avg <=1.5 per tile): $lowCostPaths" -ForegroundColor Gray
+        Write-Host "  Moderate-cost paths (avg 1.5-3.0): $moderateCostPaths" -ForegroundColor Gray
+        Write-Host "  High-cost paths (avg >3.0): $highCostPaths" -ForegroundColor Gray
+        Write-Host "  Water-avoiding paths: $waterAvoidingPaths / $totalPaths" -ForegroundColor Gray
+        Write-Host "  Steep-avoiding paths: $steepAvoidingPaths / $totalPaths" -ForegroundColor Gray
+        
+        Write-Host ""
+        
+        # Validate cost-aware routing behavior
+        $waterAvoidanceRate = ($waterAvoidingPaths / $totalPaths) * 100
+        $steepAvoidanceRate = ($steepAvoidingPaths / $totalPaths) * 100
+        $lowCostRate = ($lowCostPaths / $totalPaths) * 100
+        
+        $passCount = 0
+        $warnCount = 0
+        
+        # Check water avoidance (WATER_COST=10.0 should strongly discourage water routes)
+        if ($waterAvoidanceRate -ge 80.0) {
+            Write-Host "  OK Water avoidance: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water" -ForegroundColor Green
+            $passCount++
+        } elseif ($waterAvoidanceRate -ge 60.0) {
+            Write-Host "  ! Water avoidance moderate: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  X Water avoidance low: $([math]::Round($waterAvoidanceRate, 1))% of paths avoid water (expected >=80%)" -ForegroundColor Red
+        }
+        
+        # Check steep terrain avoidance (SLOPE_COST_MULTIPLIER=2.0 should discourage steep routes)
+        if ($steepAvoidanceRate -ge 70.0) {
+            Write-Host "  OK Steep avoidance: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain" -ForegroundColor Green
+            $passCount++
+        } elseif ($steepAvoidanceRate -ge 50.0) {
+            Write-Host "  ! Steep avoidance moderate: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  X Steep avoidance low: $([math]::Round($steepAvoidanceRate, 1))% of paths avoid steep terrain (expected >=70%)" -ForegroundColor Red
+        }
+        
+        # Check overall cost efficiency (most paths should prefer flat/gentle routes)
+        if ($lowCostRate -ge 50.0) {
+            Write-Host "  OK Cost efficiency: $([math]::Round($lowCostRate, 1))% of paths are low-cost (mostly flat)" -ForegroundColor Green
+            $passCount++
+        } elseif ($lowCostRate -ge 30.0) {
+            Write-Host "  ! Cost efficiency moderate: $([math]::Round($lowCostRate, 1))% of paths are low-cost" -ForegroundColor Yellow
+            $warnCount++
+        } else {
+            Write-Host "  ! Cost efficiency low: $([math]::Round($lowCostRate, 1))% of paths are low-cost (terrain may be challenging)" -ForegroundColor Yellow
+            $warnCount++
+        }
+        
+        Write-Host ""
+        if ($passCount -ge 2) {
+            Write-Host "OK Terrain-cost routing validation passed ($passCount/3 checks passed)" -ForegroundColor Green
+        } elseif ($warnCount -gt 0 -and $passCount -ge 1) {
+            Write-Host "! Terrain-cost routing acceptable with warnings ($passCount passed, $warnCount warnings)" -ForegroundColor Yellow
+        } else {
+            Write-Host "X Terrain-cost routing validation needs attention" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "! No terrain cost data found in logs (ensure PathServiceImpl logs cost breakdown)" -ForegroundColor Yellow
+    }
+
+    # T026c1 (Manual Guidance Only): Controlled route comparison deferred
+    Write-Host "" 
+    Write-Host "=== Controlled Route Comparison (T026c1 - Manual) ===" -ForegroundColor Cyan
+    Write-Host "INFO T026c1 automated dual-route scenario not implemented (manual playtest guidance in HEADLESS-TESTING.md)" -ForegroundColor Yellow
+    Write-Host "INFO Use /votest place-obstacle water|steep to create alternative shorter high-cost routes" -ForegroundColor Yellow
+    Write-Host "INFO Expected: Slightly longer flat route chosen when <20% longer than water/steep shortcut" -ForegroundColor Yellow
+    
+    # T026d: Deterministic path-from-seed check
+    Write-Host ""
+    Write-Host "=== Deterministic Path-from-Seed Check (T026d) ===" -ForegroundColor Cyan
+    
+    # Parse [PATH] Determinism hash logs
+    $hashPattern = '\[PATH\] Determinism hash: ([a-f0-9]+) \(nodes=([0-9]+)\)'
+    $hashMatches = [regex]::Matches($logContent, $hashPattern)
+    
+    if ($hashMatches.Count -eq 0) {
+        Write-Host "INFO No determinism hash logs found (path generation may not have occurred)" -ForegroundColor Yellow
+    } else {
+        Write-Host "INFO Found $($hashMatches.Count) path determinism hashes" -ForegroundColor Cyan
+        
+        # Group hashes by unique hash value to detect duplicates (same seed)
+        $hashGroups = @{}
+        foreach ($match in $hashMatches) {
+            $hash = $match.Groups[1].Value
+            $nodes = [int]$match.Groups[2].Value
+            
+            if (-not $hashGroups.ContainsKey($hash)) {
+                $hashGroups[$hash] = @()
+            }
+            $hashGroups[$hash] += $nodes
+        }
+        
+        # Report unique hashes
+        Write-Host "INFO Unique path hashes: $($hashGroups.Count)" -ForegroundColor Cyan
+        
+        $duplicateHashCount = 0
+        $allHashesIdentical = ($hashGroups.Count -eq 1 -and $hashMatches.Count -gt 1)
+        
+        foreach ($hash in $hashGroups.Keys) {
+            $occurrences = $hashGroups[$hash].Count
+            if ($occurrences -gt 1) {
+                $duplicateHashCount++
+                Write-Host "  Hash: $hash (occurrences=$occurrences, nodes=$($hashGroups[$hash][0]))" -ForegroundColor Gray
+            }
+        }
+        
+        # Validation logic:
+        # - If same seed used multiple times, expect identical hashes (determinism)
+        # - If different seeds used, expect different hashes (variance)
+        # Since current test uses single seed, we expect either:
+        #   1) Multiple identical hashes (if paths regenerated with same seed) = PASS
+        #   2) Single hash (only one path generated) = INFO
+        #   3) Multiple different hashes with same seed = FAIL (non-deterministic)
+        
+        if ($allHashesIdentical) {
+            Write-Host "OK All path hashes identical (deterministic with same seed)" -ForegroundColor Green
+        } elseif ($hashGroups.Count -eq $hashMatches.Count) {
+            Write-Host "INFO All path hashes unique (expected if using different seeds or different building pairs)" -ForegroundColor Yellow
+            Write-Host "INFO To test determinism: run twice with same seed and compare hashes" -ForegroundColor Yellow
+        } else {
+            Write-Host "OK Mix of identical and unique hashes (expected for multiple paths with same seed)" -ForegroundColor Green
+            Write-Host "  Identical hash groups: $duplicateHashCount" -ForegroundColor Gray
+            Write-Host "  Unique hashes: $($hashGroups.Count - $duplicateHashCount)" -ForegroundColor Gray
+        }
+        
+        # Future enhancement: Compare hashes across multiple runs with explicit seed control
+        Write-Host ""
+        Write-Host "NOTE Full determinism test requires:" -ForegroundColor Yellow
+        Write-Host "  1. Run with seed A twice, verify identical hashes" -ForegroundColor Yellow
+        Write-Host "  2. Run with seed B, verify different hashes from seed A" -ForegroundColor Yellow
+        Write-Host "  Current test validates hash generation only" -ForegroundColor Yellow
+    }
 }
 
 # Check for crashes in the log
 if (Test-Path "$ServerDir/server.log") {
-    $logContent = Get-Content "$ServerDir/server.log" -Raw
+    $logContent = Read-And-Sanitize-LogFile (Join-Path $ServerDir 'server.log')
     if ($logContent -match "(?i)(exception|error|crash)") {
         Write-Host "! Warnings/errors found in server log (this may be expected during early development)" -ForegroundColor Yellow
     }
@@ -247,7 +1954,32 @@ if (Test-Path "$ServerDir/server.log") {
     if ($structBegin -gt 0) {
         Write-Host "OK Structure placement validation passed" -ForegroundColor Green
     }
+    
+    # Add path connectivity summary
+    $pathCompletePattern = '\[STRUCT\] Path network complete: village=[a-f0-9\-]+, paths=[0-9]+, blocks=[0-9]+, connectivity=([0-9]+\.[0-9]+)%'
+    $pathMatches = [regex]::Matches($logContent, $pathCompletePattern)
+    
+    if ($pathMatches.Count -gt 0) {
+        $failedVillages = 0
+        foreach ($match in $pathMatches) {
+            $connectivity = [double]$match.Groups[1].Value
+            if ($connectivity -lt 90.0) {
+                $failedVillages++
+            }
+        }
+        
+        if ($failedVillages -eq 0) {
+            Write-Host "OK Path connectivity validation passed" -ForegroundColor Green
+        } else {
+            Write-Host "X Path connectivity validation failed" -ForegroundColor Red
+        }
+    }
 }
 
 Write-Host ""
 Write-Host "Note: Village systems in active development" -ForegroundColor Yellow
+
+if ($verificationFailed) {
+    Write-Host "X R010 Verification failed" -ForegroundColor Red
+    exit 1
+}

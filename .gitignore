@@ -20,9 +20,19 @@ bin/
 # Plugin specific
 plugin/gradle-8.5/
 plugin/gradle-8.5-bin.zip
+plugin/build/
+plugin/.gradle/
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/mcp.json
+!.vscode/settings.json
+.plugin/
+.settings/
+plugin/.classpath
+plugin/.project
+plugin/.settings/
 .DS_Store
 Thumbs.db
 *.swp
@@ -36,11 +46,22 @@ Thumbs.db
 .env.*.local
 *.secret
 
-# Test artifacts
-test-server/
-test-worlds/
-crash-reports/
-logs/
+# Test artifacts (runtime)
+# Ignore entire test server runtime directory and CI helper runtime copies
+/test-server/
+/scripts/ci/sim/test-server/
+
+# scripts local unpack and remap artifacts (CI helper)
+/scripts/ci/sim/test-server/plugins/.paper-remapped/
+/scripts/ci/sim/test-server/plugins/.paper-remapped/**
+/scripts/ci/sim/test-server/plugins/**/.archive-unpack/
+/scripts/ci/sim/test-server/plugins/**/.archive-unpack/**
+
+# Test harness snapshot/outputs
+state-snapshot.json
+snapshot_run
+snapshot_run*.json
+custom-villager-test-results.json
 
 # Build artifacts
 dist/
@@ -49,6 +70,9 @@ artifacts/
 # Dependency caches
 .m2/
 .ivy2/
+
+# Temp/scratch directories
+tmp/
 
 # OS
 .DS_Store

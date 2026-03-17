@@ -13,6 +13,7 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -158,7 +159,11 @@ public class PlacementQueueProcessor {
             return future;
         }
         
-        UUID queueId = UUID.randomUUID();
+        // T026d17: Derive deterministic queue ID from building ID and seed
+        // This ensures same inputs always produce same queue ID for reproducibility
+        UUID queueId = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":" + seed + ":" + origin.getBlockX() + ":" + origin.getBlockZ())
+                .getBytes(StandardCharsets.UTF_8));
         
         LOGGER.info(String.format("[STRUCT] Async prepare queue: building=%s, blocks=%d, seed=%d",
                 buildingId, clipboard.getDimensions().getX() * clipboard.getDimensions().getY() * clipboard.getDimensions().getZ(),
@@ -272,7 +277,9 @@ public class PlacementQueueProcessor {
             List<BlockPlacement> blocks,
             long seed) {
         
-        UUID queueId = UUID.randomUUID();
+        // T026d17: Derive deterministic queue ID from building ID and seed
+        UUID queueId = UUID.nameUUIDFromBytes(
+            (buildingId.toString() + ":simple:" + seed).getBytes(StandardCharsets.UTF_8));
         
         // Sort blocks by Y (layer), then Z (row), then X for deterministic ordering
         blocks.sort(Comparator.comparingInt(BlockPlacement::y)
@@ -419,12 +426,22 @@ public class PlacementQueueProcessor {
             return queue.withStatus(PlacementQueue.Status.COMPLETE, System.currentTimeMillis());
         }
         
+        // T026d4: Ensure all chunks needed for this batch are loaded before committing
+        // Get world (assume first entry determines world)
+        World world = Bukkit.getWorlds().get(0); // TODO: Store world reference in queue
+        
+        if (!ensureBatchChunksLoaded(world, batch)) {
+            // Defer this batch to next tick if chunks aren't ready
+            LOGGER.fine(String.format("[STRUCT] Deferring batch: queue=%s, reason=chunks_not_ready", 
+                    queue.getQueueId()));
+            // Return queue unchanged (will retry next tick)
+            return queue;
+        }
+        
         // Place blocks in batch
         int placed = 0;
         for (PlacementQueue.Entry entry : batch) {
             try {
-                // Get world (assume first entry determines world)
-                World world = Bukkit.getWorlds().get(0); // TODO: Store world reference in queue
                 Block block = world.getBlockAt(entry.getX(), entry.getY(), entry.getZ());
                 
                 // Set block type and data
@@ -469,6 +486,43 @@ public class PlacementQueueProcessor {
      */
     public Set<UUID> getActiveQueueIds() {
         return new HashSet<>(activeQueues.keySet());
+    }
+    
+    /**
+     * Ensure all chunks needed for a batch are loaded before committing blocks.
+     * T026d4: Prevents race conditions from unloaded chunks causing placement failures.
+     * 
+     * @param world Target world
+     * @param batch List of block entries to place
+     * @return true if all chunks are loaded/generated, false if any are missing
+     */
+    private boolean ensureBatchChunksLoaded(World world, List<PlacementQueue.Entry> batch) {
+        // Collect unique chunks needed for this batch
+        Set<Long> requiredChunks = new HashSet<>();
+        
+        for (PlacementQueue.Entry entry : batch) {
+            int chunkX = entry.getX() >> 4;
+            int chunkZ = entry.getZ() >> 4;
+            // Pack chunk coords into a single long for set storage
+            long chunkKey = ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
+            requiredChunks.add(chunkKey);
+        }
+        
+        // T052a: Only check if chunks are loaded - DO NOT force-load on main thread
+        // Force-loading causes main thread blocking and Paper thread-dump warnings
+        for (long chunkKey : requiredChunks) {
+            int chunkX = (int) (chunkKey >> 32);
+            int chunkZ = (int) chunkKey;
+            
+            // Check if chunk is generated AND loaded
+            if (!world.isChunkGenerated(chunkX, chunkZ) || !world.isChunkLoaded(chunkX, chunkZ)) {
+                LOGGER.warning(String.format("[STRUCT] Chunk not ready (%d, %d) - skipping placement batch", 
+                        chunkX, chunkZ));
+                return false;
+            }
+        }
+        
+        return true;
     }
     
     /**

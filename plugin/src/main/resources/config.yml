@@ -9,12 +9,11 @@ village:
   # Default: 2 blocks (Constitution v1.5.0, Principle XII)
   minBuildingSpacing: 2
   
-  # Minimum spacing between village borders (blocks)
-  # Enforces border-to-border distance; prevents village overlap
-  # First/early villages start near (not at) spawn; subsequent villages
-  # placed as close as possible to existing borders while respecting this distance
-  # Default: 200 blocks (Constitution v1.5.0, Principle XII)
-  minVillageSpacing: 200
+  maxBoundsRadiusBlocks: 220
+
+  spacingMultiplier: 1.25
+
+  minVillageSpacing: 0
   
   # Maximum radius for spawn-proximal first village placement (blocks)
   # First village will be placed within this distance from world spawn
@@ -22,13 +21,90 @@ village:
   # Default: 512 blocks (Constitution v1.5.0, Principle XII)
   spawnProximityRadius: 512
 
+# World Generation (Worldgen) Settings
+# T052a: Non-blocking seeding configuration
+worldgen:
+  spawn:
+    # Initial villager scaling ratio per placed structure
+    # Spawn count = max(1, round(structuresPlaced * villagersPerStructure))
+    # Default: 2
+    villagersPerStructure: 2
+  seed:
+    # Enable async terrain search and chunk loading
+    # When true: Uses time-budgeted chunk loading to prevent main thread blocking
+    # When false: Uses traditional synchronous chunk loading (may cause freeze)
+    # Default: true (recommended for production)
+    async: true
+    
+    # Maximum milliseconds to spend loading chunks during terrain search
+    # Chunks beyond this budget are skipped (searched later or ignored)
+    # Lower = less blocking, but may miss suitable sites
+    # Higher = more thorough search, but more potential blocking
+    # Range: 500-5000 (default: 2000)
+    timeBudgetMs: 2000
+    
+    # Maximum milliseconds for structure placement chunk loading per search
+    # Each placement candidate search will not exceed this budget
+    # Lower = less blocking per structure, but may skip candidates
+    # Higher = more thorough placement, but more blocking per structure
+    # Range: 50-500 (default: 100)
+    placementTimeBudgetMs: 500
+
+  # Pathfinding planner resilience (T053)
+  path:
+    # Maximum A* nodes explored before retrying or failing
+    # Default: 15000
+    maxNodesExplored: 15000
+
+    # Maximum concurrent path planners
+    # Default: 3
+    plannerConcurrencyCap: 3
+
+    # Number of retry attempts after node-cap hits
+    # Default: 2 (total attempts = 3)
+    nodeCapRetryMaxAttempts: 2
+
+    # Base backoff (ms) between retries when node-cap is hit
+    # Default: 50
+    nodeCapBackoffBaseMs: 50
+
+    # Maximum backoff (ms) between retries
+    # Default: 200
+    nodeCapBackoffMaxMs: 200
+        
+  # Allow fallback marker pillar placement when zero-placement occurs
+  # Default: false (zero-placement is treated as a failure and no pillar is placed)
+  # Set to true to allow marker fallback without needing --allow-marker
+  allowMarkerFallback: true
+
+# NPC / Custom Villager Settings
+npc:
+  # Villager capacity ratio derived from placed structures
+  # Capacity = round(structuresPlaced * villagerCapacityPerStructure)
+  # Set to 0 to disable capacity caps (no cap)
+  # Default: 2
+  villagerCapacityPerStructure: 2
+
 # Debug Flags
 debug:
+  # Enable verbose logging (FINE level) for detailed diagnostic output
+  # When enabled, shows [STRUCT][RECEIPT], [STRUCT][VOLUME], [PATH] logs
+  # and other fine-grained diagnostic messages
+  # WARNING: Generates significant log volume - use only for debugging
+  # Default: false
+  verbose: true
+  
   # Enable detailed tick engine logging
   tick: false
   
   # Enable structure placement debug logs
-  structure: false
+  structure: true
   
   # Enable path generation debug logs
   path: false
+  
+  # Enable async/blocking diagnostic logs (T052a)
+  # When enabled, shows [TERRAIN][DIAG], [STRUCT][CHUNK-DIAG] logs
+  # Useful for monitoring chunk loading behavior
+  # Default: false
+  asyncDiag: false

@@ -1,0 +1,3 @@
+- Before summarizing, run plugin\\gradlew.bat clean build from plugin/.
+- Run applicable focused tests and headless/playtest scripts when behavior changes need runtime evidence.
+- Update specs/plan/tasks when requirements or backlog structure change, and include QA guidance in summaries.

@@ -18,6 +18,10 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+
 /**
  * Listens for villager trades and routes proceeds to village projects.
  * 
@@ -130,8 +134,9 @@ public class TradeListener implements Listener {
             
                 if (cr.isCompleted()) {
                 // Project just completed!
-                player.sendMessage("§a§lOK Village project completed: " + project.getBuildingRef());
-                player.sendMessage("§7The village thanks you for your contributions!");
+                player.sendMessage(Component.text("OK ", NamedTextColor.GREEN, TextDecoration.BOLD)
+                        .append(Component.text("Village project completed: " + project.getBuildingRef(), NamedTextColor.GREEN)));
+                player.sendMessage(Component.text("The village thanks you for your contributions!", NamedTextColor.GRAY));
                 
                 // Trigger upgrade
                 logger.info("Project completed, triggering upgrade: " + project.getId());
@@ -139,8 +144,9 @@ public class TradeListener implements Listener {
             } else {
                 // Show progress
                 int percent = project.getCompletionPercent();
-                player.sendMessage(String.format("§6Village project: %s §7(%d%% complete)",
-                        project.getBuildingRef(), percent));
+                player.sendMessage(Component.text("Village project: ", NamedTextColor.GOLD)
+                        .append(Component.text(project.getBuildingRef() + " ", NamedTextColor.GOLD))
+                        .append(Component.text("(" + percent + "% complete)", NamedTextColor.GRAY)));
             }
             
             // Handle overflow (contributed more than needed)

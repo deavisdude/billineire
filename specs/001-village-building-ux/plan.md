@@ -18,7 +18,7 @@ deterministic from world/feature seeds and chunk-gated to respect tick budgets.
 
 ## Technical Context
 
-**Language/Version**: Java 17 (Paper 1.20+); optional Kotlin 1.9 (JVM 17)  
+**Language/Version**: Java 21 (Paper 1.20+); optional Kotlin 1.9 (JVM 21)  
 **Primary Dependencies**: Paper API; WorldEdit API (FAWE if present for performance) for
   structure load/rotate/paste; Adventure API (signage/messages); Jackson/Gson for JSON; WorldGuard
   (optional, placement guards); LuckPerms/Vault present in repo but not required for structure gen  
@@ -87,6 +87,24 @@ Must-pass gates and how we satisfy them for this phase:
   terrain change, and caps concurrent planners. Prefer structure registration via a popular
   registry (e.g., CustomStructures) and integrate with Paper’s structure generation pipeline where
   appropriate.
+
+## Determinism: Issue Resolved & Guarantees
+
+Resolved (2025-11-25): The earlier non-deterministic placement behavior blocking path determinism validation has been addressed. Key fixes and guarantees:
+
+- Seed-chain determinism: placementSeed and pathBaseSeed are derived transitively from village/world seed and logged as `[SEED] village=<vSeed> placement=<pSeed> path=<pathSeed>` for auditability.
+- Deterministic candidate ordering and re-seat logic: candidates are collected, sorted by deterministic keys (distance², X, Z) and filtered in a fixed sequence.
+- Chunk readiness gating: placement commits are deferred deterministically until required chunks are synchronously available.
+- Zero-placement diagnostics & persisted rejection counters: single-line parsable `ZERO-PLACEMENT` diagnostics emitted with rejection breakdown and persisted counters per village.
+- Fixed-layout test mode: harness `-FixedLayout` deterministic mode isolates path validation from placement variability.
+
+Guarantees:
+
+- Same-seed runs produce identical placement receipts and path determinism hashes (Run1 == Run2 PASS) when run under the harness.
+- Different seeds produce different seed-triplets and differing path hashes (variance PASS).
+- Harness artifacts (path hashes, seed-chain lines, rejection counters) are persisted and uploaded for CI triage.
+
+Re-run the full determinism harness (`scripts/ci/sim/test-path-determinism.ps1`) to validate the guarantees in CI. See tasks T026d1..T026d18 for the audit and follow-ups.
 
 ## Project Structure
 

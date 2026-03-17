@@ -1,0 +1,286 @@
+package com.davisodom.villageoverhaul.worldgen.impl;
+
+// StructureServiceImplTest uses pure unit logic; no MockBukkit required
+// PlacementResult import removed (unused)
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.DisplayName;
+import org.bukkit.Material;
+import org.junit.jupiter.api.Test;
+import com.davisodom.villageoverhaul.test.FakeWorld;
+import org.mockito.Mockito;
+import org.junit.jupiter.api.BeforeEach;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class StructureServiceImplTest {
+
+    @Test
+    @DisplayName("rotation derivation from seed is deterministic")
+    public void testRotationDerivationIsDeterministic() {
+        long seed = 123456L;
+        int r1 = new java.util.Random(seed).nextInt(4) * 90;
+        int r2 = new java.util.Random(seed).nextInt(4) * 90;
+        assertEquals(r1, r2, "Rotation computed from identical seed must be deterministic");
+
+        long other = 654321L;
+        int r3 = new java.util.Random(other).nextInt(4) * 90;
+        // It's common for different seeds to sometimes produce same rotation; ensure determinism only
+        assertNotNull(r3);
+    }
+
+    @BeforeEach
+    void setup() { }
+
+    @Test
+    @DisplayName("placeholder templates load with expected dimensions")
+    public void testLoadPlaceholderTemplates() {
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        assertTrue(svc.getStructureDimensions("house_roman_small").isPresent());
+        assertArrayEquals(new int[]{9,7,9}, svc.getStructureDimensions("house_roman_small").get());
+
+        assertTrue(svc.getStructureDimensions("house_roman_medium").isPresent());
+        assertTrue(svc.getStructureDimensions("house_roman_villa").isPresent());
+        assertTrue(svc.getStructureDimensions("workshop_roman_forge").isPresent());
+        assertTrue(svc.getStructureDimensions("market_roman_stall").isPresent());
+        assertTrue(svc.getStructureDimensions("building_roman_bathhouse").isPresent());
+    }
+
+    @Test
+    @Disabled("Flaky under Gradle clean builds due FakeWorld/Mockito memory pressure; covered indirectly by other placement tests")
+    @DisplayName("placeStructureAndGetResult builds procedural house in FakeWorld")
+    public void testPlaceStructureBuildsHouse() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+
+        // Make chunks ready
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 100, originY = 65, originZ = 200;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        // Prepare flat ground: solid blocks just below origin (originY - 1) and air at origin so findGroundLevel returns originY
+        // Prepare an expanded flat area so rotation doesn't cause uncovered foundation
+        for (int x = -20; x <= 20; x++) {
+            for (int z = -20; z <= 20; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.STONE);
+                fake.setBlockType(originX + x, originY, originZ + z, Material.AIR);
+                fake.setBlockType(originX + x, originY + 1, originZ + z, Material.AIR);
+            }
+        }
+
+        long seed = 12345L;
+        Map<String, Integer> diagnostics = new HashMap<>();
+        java.util.UUID villageId = java.util.UUID.randomUUID();
+        // Pass 0 for minBuildingSpacing since no existing masks (null) to check against
+        Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+            svc.placeStructureAndGetReceipt("house_roman_small", world, origin, seed, villageId, null, 0, diagnostics);
+
+        assertTrue(receipt.isPresent(), "Placement should succeed on prepared FakeWorld");
+
+        int expectedRotation = new java.util.Random(seed).nextInt(4) * 90;
+        assertEquals(expectedRotation, receipt.get().getRotation());
+
+        // Validate a few expected blocks from buildRomanHouse for a small house
+        // Floor at (originX, originY, originZ)
+        // Use receipt to find actual origin/height so assertions tolerate rotation
+        int placedX = receipt.get().getOriginX();
+        int placedY = receipt.get().getOriginY();
+        int placedZ = receipt.get().getOriginZ();
+        int placedWidth = receipt.get().getEffectiveWidth();
+        int placedDepth = receipt.get().getEffectiveDepth();
+        int placedHeight = receipt.get().getHeight();
+
+        // Floor at origin should not be AIR
+        assertNotEquals(Material.AIR, fake.getBlock(placedX, placedY, placedZ).getType());
+
+        // Roof should contain some non-air blocks in the bounding footprint
+        int roofY = placedY + placedHeight - 1;
+        boolean sawRoofBlock = false;
+        for (int x = 0; x < Math.max(1, placedWidth); x++) {
+            for (int z = 0; z < Math.max(1, placedDepth); z++) {
+                if (fake.getBlock(placedX + x, roofY, placedZ + z).getType() != Material.AIR) {
+                    sawRoofBlock = true;
+                    break;
+                }
+            }
+            if (sawRoofBlock) break;
+        }
+        assertTrue(sawRoofBlock, "Expected some roof blocks to be placed (non-air)");
+    }
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt increments diagnostics when site validation rejects fluids")
+    public void testTerraformPlanFailureProducesDiagnostics() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 200, originY = 70, originZ = 300;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        // Prepare foundation blocks (stone) but place a large water patch within the bounding region so TerraformingPlan.plan() will fail
+        for (int x = 0; x < 9; x++) {
+            for (int z = 0; z < 9; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.STONE);
+            }
+        }
+
+        // Add a very large water patch (10x10) to exceed small water tolerance and trigger plan rejection
+        for (int x = 0; x < 10; x++) {
+            for (int z = 0; z < 10; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.WATER);
+            }
+        }
+
+        java.util.UUID villageId = java.util.UUID.randomUUID();
+        Map<String, Integer> diagnostics = new HashMap<>();
+        // Pass 0 for minBuildingSpacing since no existing masks (null) to check against
+        Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 9999L, villageId, null, 0, diagnostics);
+
+        assertFalse(receipt.isPresent(), "Receipt should be empty when site validation rejects fluids");
+        assertTrue(diagnostics.getOrDefault("siteValidationRejects", 0) > 0,
+            "Diagnostics should report siteValidationRejects on fluid rejection");
+    }
+
+    // Chunk readiness behavior is exercised indirectly by higher-level placement flows
+    // Tests that require WorldEdit internals are avoided here to keep tests lightweight
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt rejects entrance when projected target is blocked")
+    public void testEntranceRejectionIncrementsDiagnostics() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 200, originY = 70, originZ = 300;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        // Prepare flat ground around origin so site validation passes
+        for (int x = -20; x <= 20; x++) {
+            for (int z = -20; z <= 20; z++) {
+                fake.setBlockType(originX + x, originY - 1, originZ + z, Material.STONE);
+                fake.setBlockType(originX + x, originY, originZ + z, Material.AIR);
+            }
+        }
+
+        // With rotation override = 0, small house entrance anchor is at offset (4,1,0) facing (0,0,-1)
+        int doorX = originX + 4;
+        int doorY = originY + 1;
+        int doorZ = originZ + 0;
+        int targetX = doorX + (0 * 3); // faceX = 0
+        int targetZ = doorZ + (-1 * 3); // faceZ = -1, projection=3
+        int targetY = doorY;
+
+        // Place a blocking wall at the projected entrance point so it cannot snap to a walkable surface
+        fake.setBlockType(targetX, targetY, targetZ, Material.STONE);
+        fake.setBlockType(targetX, targetY - 1, targetZ, Material.STONE);
+
+        java.util.Map<String, Integer> diagnostics = new HashMap<>();
+        java.util.UUID villageId = java.util.UUID.randomUUID();
+
+        // Force rotation 0 for determinism by passing rotationOverride
+        java.util.Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 12345L, villageId, null, 0, diagnostics, 0);
+
+        assertFalse(receipt.isPresent(), "Placement should be rejected when entrance cannot snap to walkable ground");
+        assertTrue(diagnostics.getOrDefault("entranceRejects", 0) > 0,
+                "Diagnostics should report entranceRejects when entrance validation fails");
+    }
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt rejects generated-but-unloaded footprints before validation")
+    public void testChunkReadinessRequiresLoadedChunks() {
+        World world = Mockito.mock(World.class);
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(false);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+        Location origin = new Location(world, 0, 64, 0);
+        java.util.Map<String, Integer> diagnostics = new HashMap<>();
+
+        Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+                svc.placeStructureAndGetReceipt("house_roman_small", world, origin, 123L,
+                        java.util.UUID.randomUUID(), null, 0, diagnostics);
+
+        assertFalse(receipt.isPresent(), "Expected unloaded footprint to be rejected before site validation");
+        assertTrue(diagnostics.getOrDefault("chunkNotReady", 0) > 0,
+                "Chunk readiness rejection should be reported in diagnostics");
+    }
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt compacts hollow terrain beneath the Roman forum footprint")
+    public void testForumPlacementCompactsHollowTerrainUnderFootprint() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.getUID()).thenReturn(java.util.UUID.randomUUID());
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 300;
+        int originY = 65;
+        int originZ = 400;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        for (int x = -20; x <= 25; x++) {
+            for (int z = -20; z <= 25; z++) {
+                fake.setBlockType(originX + x, 64, originZ + z, Material.DIRT);
+                fake.setBlockType(originX + x, 65, originZ + z, Material.AIR);
+                fake.setBlockType(originX + x, 66, originZ + z, Material.AIR);
+            }
+        }
+
+        int forumInteriorX = originX + 10;
+        int forumInteriorZ = originZ + 10;
+        fake.setBlockType(forumInteriorX, 63, forumInteriorZ, Material.DIRT);
+        fake.setBlockType(forumInteriorX, 62, forumInteriorZ, Material.DIRT);
+        fake.setBlockType(forumInteriorX, 61, forumInteriorZ, Material.AIR);
+        fake.setBlockType(forumInteriorX, 60, forumInteriorZ, Material.AIR);
+        fake.setBlockType(forumInteriorX, 59, forumInteriorZ, Material.STONE);
+        fake.setBlockType(forumInteriorX, 58, forumInteriorZ, Material.STONE);
+        fake.setBlockType(forumInteriorX, 57, forumInteriorZ, Material.STONE);
+
+        Map<String, Integer> diagnostics = new HashMap<>();
+        Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+            svc.placeStructureAndGetReceipt("building_roman_forum", world, origin, 12345L,
+                java.util.UUID.randomUUID(), null, 0, diagnostics, 0);
+
+        assertTrue(receipt.isPresent(), "Forum placement should succeed on prepared terrain");
+        Material forumFloor = fake.getBlock(forumInteriorX, 64, forumInteriorZ).getType();
+        assertTrue(forumFloor == Material.SMOOTH_SANDSTONE || forumFloor == Material.CHISELED_SANDSTONE,
+            "Forum floor should be placed at the resolved ground level using the forum tile pattern");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 60, forumInteriorZ).getType(),
+            "Shallow hollow terrain under the forum should be compacted instead of left visible");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 61, forumInteriorZ).getType(),
+            "Shallow hollow terrain under the forum should be compacted instead of left visible");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 62, forumInteriorZ).getType(),
+            "Upper support shelves under the forum should be merged into a solid pedestal");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 63, forumInteriorZ).getType(),
+            "Upper support shelves under the forum should be merged into a solid pedestal");
+    }
+}

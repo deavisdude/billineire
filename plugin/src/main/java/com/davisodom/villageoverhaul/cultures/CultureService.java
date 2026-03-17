@@ -88,14 +88,20 @@ public class CultureService {
     public static class Culture {
         private final String id;
         private final String name;
+        private final List<String> structureSet;
+        private final String mainBuildingStructureId;
 
-        public Culture(String id, String name) {
+        public Culture(String id, String name, List<String> structureSet, String mainBuildingStructureId) {
             this.id = id;
             this.name = name;
+            this.structureSet = structureSet != null ? structureSet : Collections.emptyList();
+            this.mainBuildingStructureId = mainBuildingStructureId;
         }
 
         public String getId() { return id; }
         public String getName() { return name; }
+        public List<String> getStructureSet() { return Collections.unmodifiableList(structureSet); }
+        public String getMainBuildingStructureId() { return mainBuildingStructureId; }
 
         public static Culture fromJson(String json) {
             try {
@@ -103,9 +109,22 @@ public class CultureService {
                 JsonNode node = om.readTree(json);
                 String id = node.path("id").asText("");
                 String name = node.path("name").asText("");
-                return new Culture(id, name);
+                
+                // Parse structureSet array
+                List<String> structureSet = new ArrayList<>();
+                JsonNode structureSetNode = node.path("structureSet");
+                if (structureSetNode.isArray()) {
+                    for (JsonNode structureNode : structureSetNode) {
+                        structureSet.add(structureNode.asText());
+                    }
+                }
+                
+                // Parse mainBuildingStructureId (optional, defaults to first structure if not specified)
+                String mainBuildingStructureId = node.path("mainBuildingStructureId").asText(null);
+                
+                return new Culture(id, name, structureSet, mainBuildingStructureId);
             } catch (Exception e) {
-                return new Culture("", "");
+                return new Culture("", "", Collections.emptyList(), null);
             }
         }
     }

@@ -1,0 +1,66 @@
+name: Unit & Integration Tests
+
+on:
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - 'plugin/**'
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 3 * * *' # nightly 03:00 UTC
+
+jobs:
+  unit-tests:
+    name: Fast Unit Tests (PRs)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Run tests and generate coverage report
+        working-directory: plugin
+        run: |
+          chmod +x gradlew || true
+          ./gradlew :plugin:coverage --no-daemon --console=plain
+
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report-plugin-pr
+          path: plugin/build/reports/jacoco/test/html
+
+  integration-tests:
+    name: Integration Tests (main/nightly)
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Run integration tests and generate coverage report
+        working-directory: plugin
+        run: |
+          chmod +x gradlew || true
+          ./gradlew :plugin:testIntegration :plugin:jacocoTestReport :plugin:jacocoTestCoverageVerification --no-daemon --console=plain
+
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report-plugin-integration
+          path: plugin/build/reports/jacoco/test/html

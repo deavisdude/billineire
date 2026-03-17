@@ -3,6 +3,8 @@ package com.davisodom.villageoverhaul.commands;
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.villages.Village;
 import com.davisodom.villageoverhaul.villages.VillageService;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -36,7 +38,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cThis command can only be used by players");
+            sender.sendMessage(Component.text("This command can only be used by players", NamedTextColor.RED));
             return true;
         }
         
@@ -59,7 +61,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
                 return handleListVillages(player);
             case "locate":
                 if (args.length < 2) {
-                    player.sendMessage("§cUsage: /village locate <name>");
+                    player.sendMessage(Component.text("Usage: /village locate <name>", NamedTextColor.RED));
                     return false;
                 }
                 String villageName = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
@@ -67,7 +69,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
             case "nearest":
                 return handleNearestVillage(player);
             default:
-                player.sendMessage("§cUnknown subcommand. Try: list, locate, nearest");
+                player.sendMessage(Component.text("Unknown subcommand. Try: list, locate, nearest", NamedTextColor.RED));
                 return false;
         }
     }
@@ -76,19 +78,18 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
         List<Village> villages = new ArrayList<>(villageService.getAllVillages());
         
         if (villages.isEmpty()) {
-            player.sendMessage("§7No villages have been discovered yet.");
+            player.sendMessage(Component.text("No villages have been discovered yet.", NamedTextColor.GRAY));
             return true;
         }
         
-        player.sendMessage("§6═══════════ Villages ═══════════");
+        player.sendMessage(Component.text("═══════════ Villages ═══════════", NamedTextColor.GOLD));
         
-        String playerWorld = player.getWorld().getName();
         int playerX = player.getLocation().getBlockX();
         int playerZ = player.getLocation().getBlockZ();
         
         // Filter to same world and sort by distance
         villages.stream()
-                .filter(v -> v.getWorldName().equals(playerWorld))
+            .filter(v -> v.matchesWorld(player.getWorld()))
                 .sorted((v1, v2) -> {
                     int d1 = getDistance2D(playerX, playerZ, v1.getX(), v1.getZ());
                     int d2 = getDistance2D(playerX, playerZ, v2.getX(), v2.getZ());
@@ -98,23 +99,29 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
                     int distance = getDistance2D(playerX, playerZ, village.getX(), village.getZ());
                     String direction = getDirection(playerX, playerZ, village.getX(), village.getZ());
                     
-                    player.sendMessage(String.format("§e%s §7(%s culture)",
-                            village.getName(), village.getCultureId()));
-                    player.sendMessage(String.format("  §8→ §7%d blocks %s §8| §7(%d, %d, %d)",
-                            distance, direction, village.getX(), village.getY(), village.getZ()));
+                    player.sendMessage(Component.text(village.getName(), NamedTextColor.YELLOW)
+                            .append(Component.text(" (" + village.getCultureId() + " culture)", NamedTextColor.GRAY)));
+                    player.sendMessage(Component.text("  → ", NamedTextColor.DARK_GRAY)
+                            .append(Component.text(distance + " blocks " + direction, NamedTextColor.GRAY))
+                            .append(Component.text(" | ", NamedTextColor.DARK_GRAY))
+                            .append(Component.text("(" + village.getX() + ", " + village.getY() + ", " + village.getZ() + ")", NamedTextColor.GRAY)));
                 });
         
-        player.sendMessage("§8Tip: Use §7/village locate <name> §8for waypoint");
+        player.sendMessage(Component.text("Tip: Use ", NamedTextColor.DARK_GRAY)
+                .append(Component.text("/village locate <name>", NamedTextColor.GRAY))
+                .append(Component.text(" for waypoint", NamedTextColor.DARK_GRAY)));
         
         return true;
     }
     
     private boolean handleLocateVillage(Player player, String villageName) {
-        Village village = findVillageByName(villageName, player.getWorld().getName());
+        Village village = findVillageByName(villageName, player.getWorld());
         
         if (village == null) {
-            player.sendMessage("§cVillage not found: " + villageName);
-            player.sendMessage("§7Use §e/villages §7to see all villages");
+            player.sendMessage(Component.text("Village not found: " + villageName, NamedTextColor.RED));
+            player.sendMessage(Component.text("Use ", NamedTextColor.GRAY)
+                    .append(Component.text("/villages", NamedTextColor.YELLOW))
+                    .append(Component.text(" to see all villages", NamedTextColor.GRAY)));
             return false;
         }
         
@@ -123,19 +130,25 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
         int distance = getDistance2D(playerX, playerZ, village.getX(), village.getZ());
         String direction = getDirection(playerX, playerZ, village.getX(), village.getZ());
         
-        player.sendMessage("§6═══ " + village.getName() + " ═══");
-        player.sendMessage("§eCulture: §7" + village.getCultureId());
-        player.sendMessage("§eLocation: §7" + village.getX() + ", " + village.getY() + ", " + village.getZ());
-        player.sendMessage("§eDistance: §7" + distance + " blocks " + direction);
-        player.sendMessage("§eWealth: §7" + formatMillz(village.getWealthMillz()));
+        player.sendMessage(Component.text("═══ " + village.getName() + " ═══", NamedTextColor.GOLD));
+        player.sendMessage(Component.text("Culture: ", NamedTextColor.YELLOW)
+                .append(Component.text(village.getCultureId(), NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("Location: ", NamedTextColor.YELLOW)
+                .append(Component.text(village.getX() + ", " + village.getY() + ", " + village.getZ(), NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("Distance: ", NamedTextColor.YELLOW)
+                .append(Component.text(distance + " blocks " + direction, NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("Wealth: ", NamedTextColor.YELLOW)
+                .append(Component.text(formatMillz(village.getWealthMillz()), NamedTextColor.GRAY)));
         
         // Show active projects
         var activeProjects = plugin.getProjectService().getActiveVillageProjects(village.getId());
         if (!activeProjects.isEmpty()) {
-            player.sendMessage("§eActive Projects: §7" + activeProjects.size());
+            player.sendMessage(Component.text("Active Projects: ", NamedTextColor.YELLOW)
+                    .append(Component.text(String.valueOf(activeProjects.size()), NamedTextColor.GRAY)));
             activeProjects.forEach(project -> {
-                player.sendMessage(String.format("  §8→ §7%s §8(%d%% complete)",
-                        project.getBuildingRef(), project.getCompletionPercent()));
+                player.sendMessage(Component.text("  → ", NamedTextColor.DARK_GRAY)
+                        .append(Component.text(project.getBuildingRef(), NamedTextColor.GRAY))
+                        .append(Component.text(" (" + project.getCompletionPercent() + "% complete)", NamedTextColor.DARK_GRAY)));
             });
         }
         
@@ -143,12 +156,11 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
     }
     
     private boolean handleNearestVillage(Player player) {
-        String playerWorld = player.getWorld().getName();
         int playerX = player.getLocation().getBlockX();
         int playerZ = player.getLocation().getBlockZ();
         
         Village nearest = villageService.getAllVillages().stream()
-                .filter(v -> v.getWorldName().equals(playerWorld))
+            .filter(v -> v.matchesWorld(player.getWorld()))
                 .min((v1, v2) -> {
                     int d1 = getDistance2D(playerX, playerZ, v1.getX(), v1.getZ());
                     int d2 = getDistance2D(playerX, playerZ, v2.getX(), v2.getZ());
@@ -157,16 +169,16 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
                 .orElse(null);
         
         if (nearest == null) {
-            player.sendMessage("§7No villages found in this world.");
+            player.sendMessage(Component.text("No villages found in this world.", NamedTextColor.GRAY));
             return true;
         }
         
         return handleLocateVillage(player, nearest.getName());
     }
     
-    private Village findVillageByName(String name, String worldName) {
+    private Village findVillageByName(String name, org.bukkit.World world) {
         return villageService.getAllVillages().stream()
-                .filter(v -> v.getWorldName().equals(worldName))
+                .filter(v -> v.matchesWorld(world))
                 .filter(v -> v.getName().equalsIgnoreCase(name))
                 .findFirst()
                 .orElse(null);
@@ -224,7 +236,7 @@ public class VillageCommands implements CommandExecutor, TabCompleter {
                 if (sender instanceof Player) {
                     Player player = (Player) sender;
                     completions.addAll(villageService.getAllVillages().stream()
-                            .filter(v -> v.getWorldName().equals(player.getWorld().getName()))
+                            .filter(v -> v.matchesWorld(player.getWorld()))
                             .map(Village::getName)
                             .collect(Collectors.toList()));
                 }

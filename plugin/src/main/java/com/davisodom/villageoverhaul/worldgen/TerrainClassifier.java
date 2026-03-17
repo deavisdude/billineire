@@ -4,8 +4,9 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
-import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Terrain classification API for village placement.
@@ -43,69 +44,65 @@ public class TerrainClassifier {
     /**
      * Fluid materials that are never acceptable for building foundations.
      */
-    private static final Set<Material> FLUIDS = EnumSet.of(
-            Material.WATER,
-            Material.LAVA,
-            Material.BUBBLE_COLUMN
-    );
+    private static final Set<Material> FLUIDS = new java.util.HashSet<>();
+    static {
+        String[] fluidNames = new String[]{"WATER", "LAVA", "BUBBLE_COLUMN"};
+        for (String n : fluidNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) FLUIDS.add(m);
+        }
+    }
+    
+    /**
+     * Frozen water materials that sit on top of water bodies.
+     * These should be treated similar to fluids for foundation purposes
+     * because the water below makes foundations unstable.
+     */
+    private static final Set<Material> FROZEN_WATER = new java.util.HashSet<>();
+    static {
+        String[] frozenNames = new String[]{"ICE", "PACKED_ICE", "BLUE_ICE", "FROSTED_ICE"};
+        for (String n : frozenNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) FROZEN_WATER.add(m);
+        }
+    }
     
     /**
      * Vegetation materials that can be trimmed/removed during terraforming.
      * These should NOT prevent structure placement - they'll be cleared.
      */
-    private static final Set<Material> VEGETATION = EnumSet.of(
-            Material.OAK_LEAVES,
-            Material.SPRUCE_LEAVES,
-            Material.BIRCH_LEAVES,
-            Material.JUNGLE_LEAVES,
-            Material.ACACIA_LEAVES,
-            Material.DARK_OAK_LEAVES,
-            Material.MANGROVE_LEAVES,
-            Material.CHERRY_LEAVES,
-            Material.AZALEA_LEAVES,
-            Material.FLOWERING_AZALEA_LEAVES,
-            Material.OAK_LOG,
-            Material.SPRUCE_LOG,
-            Material.BIRCH_LOG,
-            Material.JUNGLE_LOG,
-            Material.ACACIA_LOG,
-            Material.DARK_OAK_LOG,
-            Material.MANGROVE_LOG,
-            Material.CHERRY_LOG,
-            Material.CRIMSON_STEM,
-            Material.WARPED_STEM,
-            Material.SHORT_GRASS,
-            Material.TALL_GRASS,
-            Material.FERN,
-            Material.LARGE_FERN,
-            Material.DEAD_BUSH,
-            Material.DANDELION,
-            Material.POPPY,
-            Material.BLUE_ORCHID,
-            Material.ALLIUM,
-            Material.AZURE_BLUET,
-            Material.RED_TULIP,
-            Material.ORANGE_TULIP,
-            Material.WHITE_TULIP,
-            Material.PINK_TULIP,
-            Material.OXEYE_DAISY,
-            Material.CORNFLOWER,
-            Material.LILY_OF_THE_VALLEY,
-            Material.SUNFLOWER,
-            Material.LILAC,
-            Material.ROSE_BUSH,
-            Material.PEONY
-    );
+    private static final Set<Material> VEGETATION = new java.util.HashSet<>();
+    static {
+        String[] vegetationNames = new String[]{
+            "OAK_LEAVES", "SPRUCE_LEAVES", "BIRCH_LEAVES", "JUNGLE_LEAVES",
+            "ACACIA_LEAVES", "DARK_OAK_LEAVES", "MANGROVE_LEAVES", "CHERRY_LEAVES",
+            "AZALEA_LEAVES", "FLOWERING_AZALEA_LEAVES", "OAK_LOG", "SPRUCE_LOG",
+            "BIRCH_LOG", "JUNGLE_LOG", "ACACIA_LOG", "DARK_OAK_LOG", "MANGROVE_LOG",
+            "CHERRY_LOG", "CRIMSON_STEM", "WARPED_STEM", "SHORT_GRASS", "TALL_GRASS",
+            "FERN", "LARGE_FERN", "DEAD_BUSH", "DANDELION", "POPPY", "BLUE_ORCHID",
+            "ALLIUM", "AZURE_BLUET", "RED_TULIP", "ORANGE_TULIP", "WHITE_TULIP",
+            "PINK_TULIP", "OXEYE_DAISY", "CORNFLOWER", "LILY_OF_THE_VALLEY",
+            "SUNFLOWER", "LILAC", "ROSE_BUSH", "PEONY"
+        };
+
+        for (String n : vegetationNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) VEGETATION.add(m);
+        }
+    }
     
     /**
      * Materials that cannot support structure foundations (unsupported).
      * AIR and VOID only - vegetation handled separately.
      */
-    private static final Set<Material> UNSUPPORTED = EnumSet.of(
-            Material.AIR,
-            Material.CAVE_AIR,
-            Material.VOID_AIR
-    );
+    private static final Set<Material> UNSUPPORTED = new java.util.HashSet<>();
+    static {
+        String[] unsupportedNames = new String[]{"AIR", "CAVE_AIR", "VOID_AIR"};
+        for (String n : unsupportedNames) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) UNSUPPORTED.add(m);
+        }
+    }
     
     /**
      * Maximum acceptable height delta within 3x3 area (blocks).
@@ -115,6 +112,65 @@ public class TerrainClassifier {
      * Terraforming can handle significant height differences.
      */
     private static final int MAX_SLOPE_DELTA = 10;
+
+    /**
+     * Reusable terrain sampling cache for repeated validation over nearby coordinates.
+     */
+    public static final class SamplingCache {
+        private final Map<GroundKey, Integer> groundLevelCache = new ConcurrentHashMap<>();
+        private final Map<ClassificationKey, Classification> classificationCache = new ConcurrentHashMap<>();
+        private int groundHits = 0;
+        private int groundMisses = 0;
+        private int classificationHits = 0;
+        private int classificationMisses = 0;
+
+        public CacheStats snapshotStats() {
+            return new CacheStats(groundHits, groundMisses, classificationHits, classificationMisses);
+        }
+
+        public void invalidateFootprint(World world, int minX, int maxX, int minZ, int maxZ, int padding) {
+            int clearMinX = minX - padding;
+            int clearMaxX = maxX + padding;
+            int clearMinZ = minZ - padding;
+            int clearMaxZ = maxZ + padding;
+
+            groundLevelCache.entrySet().removeIf(entry -> {
+                GroundKey key = entry.getKey();
+                return key.world() == world
+                        && key.x() >= clearMinX && key.x() <= clearMaxX
+                        && key.z() >= clearMinZ && key.z() <= clearMaxZ;
+            });
+
+            classificationCache.entrySet().removeIf(entry -> {
+                ClassificationKey key = entry.getKey();
+                return key.world() == world
+                        && key.x() >= clearMinX && key.x() <= clearMaxX
+                        && key.z() >= clearMinZ && key.z() <= clearMaxZ;
+            });
+        }
+    }
+
+    public static final class CacheStats {
+        private final int groundHits;
+        private final int groundMisses;
+        private final int classificationHits;
+        private final int classificationMisses;
+
+        private CacheStats(int groundHits, int groundMisses, int classificationHits, int classificationMisses) {
+            this.groundHits = groundHits;
+            this.groundMisses = groundMisses;
+            this.classificationHits = classificationHits;
+            this.classificationMisses = classificationMisses;
+        }
+
+        public int getGroundHits() { return groundHits; }
+        public int getGroundMisses() { return groundMisses; }
+        public int getClassificationHits() { return classificationHits; }
+        public int getClassificationMisses() { return classificationMisses; }
+    }
+
+    private record GroundKey(World world, int x, int z) {}
+    private record ClassificationKey(World world, int x, int y, int z) {}
     
     /**
      * Check if a block is acceptable for structure placement.
@@ -137,6 +193,12 @@ public class TerrainClassifier {
         
         // Check for fluids (highest priority rejection)
         if (FLUIDS.contains(material)) {
+            return Classification.FLUID;
+        }
+        
+        // Check for frozen water (ice on water - unstable foundation)
+        // Treat as FLUID since water is beneath
+        if (FROZEN_WATER.contains(material)) {
             return Classification.FLUID;
         }
         
@@ -170,11 +232,28 @@ public class TerrainClassifier {
      * @return Classification category
      */
     public static Classification classify(World world, int x, int y, int z) {
+        return classify(world, x, y, z, null);
+    }
+
+    public static Classification classify(World world, int x, int y, int z, SamplingCache cache) {
+        if (cache != null) {
+            ClassificationKey key = new ClassificationKey(world, x, y, z);
+            Classification cached = cache.classificationCache.get(key);
+            if (cached != null) {
+                cache.classificationHits++;
+                return cached;
+            }
+            cache.classificationMisses++;
+        }
+
         Block block = world.getBlockAt(x, y, z);
         
         // First check block material classification
         Classification materialClassification = classify(block);
         if (materialClassification != Classification.ACCEPTABLE) {
+            if (cache != null) {
+                cache.classificationCache.put(new ClassificationKey(world, x, y, z), materialClassification);
+            }
             return materialClassification;
         }
         
@@ -185,7 +264,7 @@ public class TerrainClassifier {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 // Find actual ground level (not tree tops)
-                int checkY = findGroundLevel(world, x + dx, z + dz);
+                int checkY = findGroundLevel(world, x + dx, z + dz, cache);
                 minY = Math.min(minY, checkY);
                 maxY = Math.max(maxY, checkY);
             }
@@ -193,7 +272,14 @@ public class TerrainClassifier {
         
         int heightDelta = maxY - minY;
         if (heightDelta > MAX_SLOPE_DELTA) {
+            if (cache != null) {
+                cache.classificationCache.put(new ClassificationKey(world, x, y, z), Classification.STEEP);
+            }
             return Classification.STEEP;
+        }
+
+        if (cache != null) {
+            cache.classificationCache.put(new ClassificationKey(world, x, y, z), Classification.ACCEPTABLE);
         }
         
         return Classification.ACCEPTABLE;
@@ -208,11 +294,42 @@ public class TerrainClassifier {
      * @param z Z coordinate
      * @return Y coordinate of ground level
      */
+    static int getGroundLevel(World world, int x, int z, SamplingCache cache) {
+        return findGroundLevel(world, x, z, cache);
+    }
+
     private static int findGroundLevel(World world, int x, int z) {
-        int startY = world.getHighestBlockYAt(x, z);
-        
-        // Search downward up to 20 blocks to find solid ground beneath vegetation
-        for (int y = startY; y > startY - 20 && y > world.getMinHeight(); y--) {
+        return findGroundLevel(world, x, z, null);
+    }
+
+    private static int findGroundLevel(World world, int x, int z, SamplingCache cache) {
+        if (cache != null) {
+            GroundKey key = new GroundKey(world, x, z);
+            Integer cached = cache.groundLevelCache.get(key);
+            if (cached != null) {
+                cache.groundHits++;
+                return cached;
+            }
+            cache.groundMisses++;
+        }
+
+        int highestY = world.getHighestBlockYAt(x, z);
+
+        Block highestBlock = world.getBlockAt(x, highestY, z);
+        Block aboveHighest = world.getBlockAt(x, highestY + 1, z);
+        Classification highestClass = classify(highestBlock);
+        Classification aboveClass = classify(aboveHighest);
+
+        if (highestClass == Classification.ACCEPTABLE
+                && (aboveClass == Classification.BLOCKED || aboveClass == Classification.VEGETATION)) {
+            if (cache != null) {
+                cache.groundLevelCache.put(new GroundKey(world, x, z), highestY);
+            }
+            return highestY;
+        }
+
+        int maxSearchDepth = 32;
+        for (int y = highestY; y > highestY - maxSearchDepth && y > world.getMinHeight(); y--) {
             Block block = world.getBlockAt(x, y, z);
             Block below = world.getBlockAt(x, y - 1, z);
             
@@ -225,15 +342,23 @@ public class TerrainClassifier {
             boolean belowIsSolid = (belowClass == Classification.ACCEPTABLE);
             
             if (currentIsEmpty && belowIsSolid) {
-                return y - 1; // Return Y of the solid ground block
+                int resolved = y - 1;
+                if (cache != null) {
+                    cache.groundLevelCache.put(new GroundKey(world, x, z), resolved);
+                }
+                return resolved; // Return Y of the solid ground block
             }
         }
-        
-        return startY; // Fallback to highest block
+
+        if (cache != null) {
+            cache.groundLevelCache.put(new GroundKey(world, x, z), highestY);
+        }
+        return highestY; // Fallback to highest block
     }
     
     /**
      * Classification result with detailed counts for logging.
+     * T057: Enhanced with rejection reasons for diagnostics.
      */
     public static class ClassificationResult {
         public int acceptable = 0;
@@ -241,6 +366,9 @@ public class TerrainClassifier {
         public int steep = 0;
         public int blocked = 0;
         public int vegetation = 0;
+        
+        // T057: Detailed rejection reasons for SiteValidator diagnostics
+        private java.util.List<String> rejectionReasons = new java.util.ArrayList<>();
         
         /**
          * Increment counter for given classification.
@@ -277,6 +405,26 @@ public class TerrainClassifier {
          */
         public int getTotal() {
             return acceptable + fluid + steep + blocked + vegetation;
+        }
+        
+        /**
+         * Set detailed rejection reasons (called by SiteValidator).
+         * T057: Provides human-readable reasons for harness parsing.
+         * 
+         * @param reasons List of rejection reason strings
+         */
+        public void setRejectionReasons(java.util.List<String> reasons) {
+            this.rejectionReasons = reasons != null ? reasons : new java.util.ArrayList<>();
+        }
+        
+        /**
+         * Get detailed rejection reasons.
+         * T057: Returns list of strings like "solidity=0.45<0.60", "slope=0.80>0.60"
+         * 
+         * @return List of rejection reason strings (empty if validation passed)
+         */
+        public java.util.List<String> getRejectionReasons() {
+            return rejectionReasons;
         }
         
         /**

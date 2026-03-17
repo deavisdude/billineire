@@ -4,7 +4,7 @@ This quickstart explains how to validate structure generation, paths, main-build
 and asynchronous construction behavior in a headless server harness.
 
 ## Prerequisites
-- Java 17 installed and on PATH
+- Java 21 installed and on PATH
 - Gradle wrapper available (plugin/)
 - Paper server harness scripts under scripts/ci/sim/
 

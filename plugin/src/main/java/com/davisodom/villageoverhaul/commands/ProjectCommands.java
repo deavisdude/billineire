@@ -5,6 +5,8 @@ import com.davisodom.villageoverhaul.projects.Project;
 import com.davisodom.villageoverhaul.projects.ProjectService;
 import com.davisodom.villageoverhaul.villages.Village;
 import com.davisodom.villageoverhaul.villages.VillageService;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -37,18 +39,19 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         this.plugin = plugin;
         this.projectService = plugin.getProjectService();
         this.villageService = plugin.getVillageService();
-        this.generateCommand = new GenerateCommand(plugin);
+        // T066: Pass generation queue to GenerateCommand
+        this.generateCommand = new GenerateCommand(plugin, plugin.getGenerationQueue());
     }
     
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
             // Show help when no subcommand provided
-            sender.sendMessage("§6Village Overhaul Commands:");
-            sender.sendMessage("  §7/vo generate <culture> <name> [seed] §f- Generate a village");
-            sender.sendMessage("  §7/vo project list [villageId] §f- List projects");
-            sender.sendMessage("  §7/vo project status <projectId> §f- Show project status");
-            sender.sendMessage("  §7/vo villager list [villageId] §f- List villagers");
+            CommandFeedback.header(sender, "Village Overhaul Commands:");
+            CommandFeedback.send(sender, CommandFeedback.command("/vo generate <culture> <name> [seed]", "Generate a village"));
+            CommandFeedback.send(sender, CommandFeedback.command("/vo project list [villageId]", "List projects"));
+            CommandFeedback.send(sender, CommandFeedback.command("/vo project status <projectId>", "Show project status"));
+            CommandFeedback.send(sender, CommandFeedback.command("/vo villager list [villageId]", "List villagers"));
             return true;
         }
         
@@ -62,19 +65,19 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             case "villager":
                 return handleVillagerCommand(sender, Arrays.copyOfRange(args, 1, args.length));
             default:
-                sender.sendMessage("§cUnknown subcommand: " + subcommand);
-                sender.sendMessage("§7Type /vo for help");
+                CommandFeedback.error(sender, "Unknown subcommand: " + subcommand);
+                CommandFeedback.detail(sender, "Type /vo for help");
                 return false;
         }
     }
     
     private boolean handleProjectCommand(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§eProject commands:");
-            sender.sendMessage("  §7/vo project list [villageId]");
-            sender.sendMessage("  §7/vo project status <projectId>");
-            sender.sendMessage("  §7/vo project create <villageId> <building> <cost>");
-            sender.sendMessage("  §7/vo project activate <projectId>");
+            CommandFeedback.warn(sender, "Project commands:");
+            CommandFeedback.detail(sender, "/vo project list [villageId]");
+            CommandFeedback.detail(sender, "/vo project status <projectId>");
+            CommandFeedback.detail(sender, "/vo project create <villageId> <building> <cost>");
+            CommandFeedback.detail(sender, "/vo project activate <projectId>");
             return true;
         }
         
@@ -90,7 +93,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             case "activate":
                 return handleActivateProject(sender, args);
             default:
-                sender.sendMessage("§cUnknown project action: " + action);
+                CommandFeedback.error(sender, "Unknown project action: " + action);
                 return false;
         }
     }
@@ -102,29 +105,31 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                 UUID villageId = UUID.fromString(args[1]);
                 List<Project> projects = projectService.getVillageProjects(villageId);
                 
-                sender.sendMessage("§6Projects for village " + villageId + ":");
+                CommandFeedback.header(sender, "Projects for village " + villageId + ":");
                 if (projects.isEmpty()) {
-                    sender.sendMessage("  §7No projects found");
+                    CommandFeedback.detail(sender, "No projects found");
                 } else {
                     for (Project p : projects) {
-                        sender.sendMessage(String.format("  §e%s §7- %s §7(%d%%) [%s]",
-                                p.getBuildingRef(), p.getId(), p.getCompletionPercent(), p.getStatus()));
+                        CommandFeedback.send(sender, Component.text(p.getBuildingRef(), NamedTextColor.YELLOW)
+                            .append(Component.text(" - " + p.getId() + " (" + p.getCompletionPercent() + "%) [" + p.getStatus() + "]",
+                                NamedTextColor.GRAY)));
                     }
                 }
             } catch (IllegalArgumentException e) {
-                sender.sendMessage("§cInvalid village ID");
+                CommandFeedback.error(sender, "Invalid village ID");
                 return false;
             }
         } else {
             // List all projects
-            sender.sendMessage("§6All projects:");
+            CommandFeedback.header(sender, "All projects:");
             List<Project> projects = new ArrayList<>(projectService.getAllProjects());
             if (projects.isEmpty()) {
-                sender.sendMessage("  §7No projects found");
+                CommandFeedback.detail(sender, "No projects found");
             } else {
                 for (Project p : projects) {
-                    sender.sendMessage(String.format("  §e%s §7- %s §7(%d%%) [%s]",
-                            p.getBuildingRef(), p.getId(), p.getCompletionPercent(), p.getStatus()));
+                    CommandFeedback.send(sender, Component.text(p.getBuildingRef(), NamedTextColor.YELLOW)
+                        .append(Component.text(" - " + p.getId() + " (" + p.getCompletionPercent() + "%) [" + p.getStatus() + "]",
+                            NamedTextColor.GRAY)));
                 }
             }
         }
@@ -133,7 +138,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     
     private boolean handleProjectStatus(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /vo project status <projectId>");
+            CommandFeedback.error(sender, "Usage: /vo project status <projectId>");
             return false;
         }
         
@@ -142,28 +147,30 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             var projectOpt = projectService.getProject(projectId);
             
             if (projectOpt.isEmpty()) {
-                sender.sendMessage("§cProject not found: " + projectId);
+                CommandFeedback.error(sender, "Project not found: " + projectId);
                 return false;
             }
             
             Project project = projectOpt.get();
-            sender.sendMessage("§6═══ Project Status ═══");
-            sender.sendMessage("§eBuilding: §7" + project.getBuildingRef());
-            sender.sendMessage("§eVillage: §7" + project.getVillageId());
-            sender.sendMessage("§eStatus: §7" + project.getStatus());
-            sender.sendMessage("§eProgress: §7" + project.getProgressMillz() + " / " + 
-                    project.getCostMillz() + " Millz (" + project.getCompletionPercent() + "%)");
-            sender.sendMessage("§eContributors: §7" + project.getContributors().size());
+            CommandFeedback.header(sender, "Project Status");
+            CommandFeedback.send(sender, CommandFeedback.line("Building: ", project.getBuildingRef()));
+            CommandFeedback.send(sender, CommandFeedback.line("Village: ", project.getVillageId()));
+            CommandFeedback.send(sender, CommandFeedback.line("Status: ", project.getStatus()));
+            CommandFeedback.send(sender, CommandFeedback.line(
+                "Progress: ",
+                project.getProgressMillz() + " / " + project.getCostMillz() + " Millz (" + project.getCompletionPercent() + "%)"
+            ));
+            CommandFeedback.send(sender, CommandFeedback.line("Contributors: ", project.getContributors().size()));
             
             if (!project.getUnlockEffects().isEmpty()) {
-                sender.sendMessage("§eUnlock Effects:");
+                CommandFeedback.warn(sender, "Unlock Effects:");
                 for (String effect : project.getUnlockEffects()) {
-                    sender.sendMessage("  §7- " + effect);
+                    CommandFeedback.send(sender, CommandFeedback.bullet(effect));
                 }
             }
             
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid project ID");
+            CommandFeedback.error(sender, "Invalid project ID");
             return false;
         }
         
@@ -172,7 +179,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     
     private boolean handleCreateProject(CommandSender sender, String[] args) {
         if (args.length < 4) {
-            sender.sendMessage("§cUsage: /vo project create <villageId|name> <building> <costMillz>");
+            CommandFeedback.error(sender, "Usage: /vo project create <villageId|name> <building> <costMillz>");
             return false;
         }
         
@@ -190,8 +197,8 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                         .orElse(null);
                 
                 if (village == null) {
-                    sender.sendMessage("§cVillage not found: " + villageName);
-                    sender.sendMessage("§7Use §e/villages §7to see all villages");
+                    CommandFeedback.error(sender, "Village not found: " + villageName);
+                    CommandFeedback.detail(sender, "Use /villages to see all villages");
                     return false;
                 }
                 villageId = village.getId();
@@ -203,7 +210,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             // Verify village exists
             var villageOpt = villageService.getVillage(villageId);
             if (villageOpt.isEmpty()) {
-                sender.sendMessage("§cVillage not found: " + villageId);
+                CommandFeedback.error(sender, "Village not found: " + villageId);
                 return false;
             }
             
@@ -213,11 +220,11 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             }
             
             Project project = projectService.createProject(villageId, buildingRef, costMillz, unlockEffects);
-            sender.sendMessage("§aOK Created project for " + villageOpt.get().getName() + ": " + project.getId());
-            sender.sendMessage("§7Use §e/vo project activate " + project.getId() + " §7to make it active");
+            CommandFeedback.info(sender, "OK Created project for " + villageOpt.get().getName() + ": " + project.getId());
+            CommandFeedback.detail(sender, "Use /vo project activate " + project.getId() + " to make it active");
             
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid arguments: " + e.getMessage());
+            CommandFeedback.error(sender, "Invalid arguments: " + e.getMessage());
             return false;
         }
         
@@ -226,7 +233,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     
     private boolean handleActivateProject(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /vo project activate <projectId>");
+            CommandFeedback.error(sender, "Usage: /vo project activate <projectId>");
             return false;
         }
         
@@ -235,13 +242,13 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             boolean activated = projectService.activateProject(projectId);
             
                 if (activated) {
-                sender.sendMessage("§aOK Project activated: " + projectId);
+                CommandFeedback.info(sender, "OK Project activated: " + projectId);
             } else {
-                sender.sendMessage("§cFailed to activate project (not found or already active)");
+                CommandFeedback.error(sender, "Failed to activate project (not found or already active)");
             }
             
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid project ID");
+            CommandFeedback.error(sender, "Invalid project ID");
             return false;
         }
         
@@ -253,10 +260,10 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
      */
     private boolean handleVillagerCommand(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§eVillager Commands:");
-            sender.sendMessage("§7/vo villager spawn <cultureId> <profession> [villageId] - Spawn a custom villager");
-            sender.sendMessage("§7/vo villager list [villageId] - List custom villagers");
-            sender.sendMessage("§7/vo villager despawn <entityId> - Despawn a custom villager");
+            CommandFeedback.warn(sender, "Villager Commands:");
+            CommandFeedback.send(sender, CommandFeedback.command("/vo villager spawn <cultureId> <profession> [villageId]", "Spawn a custom villager"));
+            CommandFeedback.send(sender, CommandFeedback.command("/vo villager list [villageId]", "List custom villagers"));
+            CommandFeedback.send(sender, CommandFeedback.command("/vo villager despawn <entityId>", "Despawn a custom villager"));
             return true;
         }
         
@@ -270,19 +277,19 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             case "despawn":
                 return handleVillagerDespawn(sender, Arrays.copyOfRange(args, 1, args.length));
             default:
-                sender.sendMessage("§cUnknown villager command: " + action);
+                CommandFeedback.error(sender, "Unknown villager command: " + action);
                 return false;
         }
     }
     
     private boolean handleVillagerSpawn(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cThis command must be run by a player");
+            CommandFeedback.error(sender, "This command must be run by a player");
             return true;
         }
         
         if (args.length < 2) {
-            sender.sendMessage("§cUsage: /vo villager spawn <cultureId> <profession> [villageId]");
+            CommandFeedback.error(sender, "Usage: /vo villager spawn <cultureId> <profession> [villageId]");
             return true;
         }
         
@@ -301,7 +308,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                 if (village != null) {
                     villageId = village.getId();
                 } else {
-                    sender.sendMessage("§cVillage not found: " + args[2]);
+                    CommandFeedback.error(sender, "Village not found: " + args[2]);
                     return true;
                 }
             }
@@ -311,7 +318,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             if (nearest != null) {
                 villageId = nearest.getId();
             } else {
-                sender.sendMessage("§cNo villages found. Specify a village ID or create one first.");
+                CommandFeedback.error(sender, "No villages found. Specify a village ID or create one first.");
                 return true;
             }
         }
@@ -335,10 +342,10 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
                 appearanceAdapter.applyAppearance(entity, definitionId);
             }
             
-            sender.sendMessage("§aOK Spawned " + definitionId + " at your location");
-            sender.sendMessage("§7Entity ID: " + customVillager.getEntityId());
+            CommandFeedback.info(sender, "OK Spawned " + definitionId + " at your location");
+            CommandFeedback.send(sender, CommandFeedback.detailLine("Entity ID: ", customVillager.getEntityId()));
         } else {
-            sender.sendMessage("§cFailed to spawn villager (village cap reached or error)");
+            CommandFeedback.error(sender, "Failed to spawn villager (capacity reached or error)");
         }
         
         return true;
@@ -355,25 +362,36 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
             } catch (IllegalArgumentException e) {
                 Village village = villageService.findVillageByName(args[0]);
                 if (village == null) {
-                    sender.sendMessage("§cVillage not found: " + args[0]);
+                    CommandFeedback.error(sender, "Village not found: " + args[0]);
                     return true;
                 }
                 villageId = village.getId();
             }
             
             List<com.davisodom.villageoverhaul.npc.CustomVillager> villagers = npcService.getVillagersByVillageId(villageId);
-            sender.sendMessage("§eCustom Villagers in village " + villageId + ": " + villagers.size());
+            CommandFeedback.warn(sender, "Custom Villagers in village " + villageId + ": " + villagers.size());
+            int capacity = npcService.getVillagerCapacity(villageId);
+            if (capacity == Integer.MAX_VALUE) {
+                CommandFeedback.detail(sender, "Capacity: no cap (derived from structures)");
+            } else {
+                CommandFeedback.detail(sender, "Capacity: " + capacity + " (derived from structures)");
+            }
             for (com.davisodom.villageoverhaul.npc.CustomVillager villager : villagers) {
-                sender.sendMessage("  §7" + villager.getDefinitionId() + " (entity: " + villager.getEntityId() + ")");
+                CommandFeedback.detail(sender, villager.getDefinitionId() + " (entity: " + villager.getEntityId() + ")");
             }
         } else {
             // List all
             java.util.Collection<com.davisodom.villageoverhaul.npc.CustomVillager> allVillagers = npcService.getAllVillagers();
-            sender.sendMessage("§eTotal custom villagers: " + allVillagers.size());
-            sender.sendMessage("§7Per-village cap: " + npcService.getMaxVillagersPerVillage());
+            CommandFeedback.warn(sender, "Total custom villagers: " + allVillagers.size());
+            double ratio = npcService.getVillagerCapacityPerStructure();
+            if (ratio <= 0) {
+                CommandFeedback.detail(sender, "Capacity: no cap (villagerCapacityPerStructure=" + ratio + ")");
+            } else {
+                CommandFeedback.detail(sender, "Capacity ratio: " + ratio + " villagers per structure");
+            }
             
             for (com.davisodom.villageoverhaul.npc.CustomVillager villager : allVillagers) {
-                sender.sendMessage("  §7" + villager.getDefinitionId() + " @ village " + villager.getVillageId());
+                CommandFeedback.detail(sender, villager.getDefinitionId() + " @ village " + villager.getVillageId());
             }
         }
         
@@ -382,7 +400,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
     
     private boolean handleVillagerDespawn(CommandSender sender, String[] args) {
         if (args.length < 1) {
-            sender.sendMessage("§cUsage: /vo villager despawn <entityId>");
+            CommandFeedback.error(sender, "Usage: /vo villager despawn <entityId>");
             return true;
         }
         
@@ -390,7 +408,7 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         try {
             entityId = UUID.fromString(args[0]);
         } catch (IllegalArgumentException e) {
-            sender.sendMessage("§cInvalid entity ID");
+            CommandFeedback.error(sender, "Invalid entity ID");
             return true;
         }
         
@@ -398,9 +416,9 @@ public class ProjectCommands implements CommandExecutor, TabCompleter {
         boolean success = npcService.despawnVillager(entityId);
         
         if (success) {
-            sender.sendMessage("§aOK Despawned custom villager");
+            CommandFeedback.info(sender, "OK Despawned custom villager");
         } else {
-            sender.sendMessage("§cVillager not found");
+            CommandFeedback.error(sender, "Villager not found");
         }
         
         return true;

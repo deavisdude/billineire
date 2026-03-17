@@ -98,5 +98,21 @@ public interface PathService {
      * @return Connectivity percentage (0.0-1.0)
      */
     double calculateConnectivity(UUID villageId);
+    
+    /**
+     * Register a building footprint as an obstacle for pathfinding.
+     * Paths will avoid routing through registered building bounds.
+     * 
+     * @param villageId Village UUID
+     * @param minX Minimum X coordinate (inclusive)
+     * @param maxX Maximum X coordinate (inclusive)
+     * @param minY Minimum Y coordinate (inclusive)
+     * @param maxY Maximum Y coordinate (inclusive)
+     * @param minZ Minimum Z coordinate (inclusive)
+     * @param maxZ Maximum Z coordinate (inclusive)
+     * @deprecated R009: Use WalkableGraph and VolumeMasks instead. This method is now a no-op.
+     */
+    @Deprecated
+    void registerBuildingFootprint(UUID villageId, int minX, int maxX, int minY, int maxY, int minZ, int maxZ);
 }
 

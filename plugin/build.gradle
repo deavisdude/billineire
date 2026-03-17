@@ -65,13 +65,15 @@ dependencies {
     // WorldGuard (optional, for regions)
     compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
     
-    // WorldEdit (for schematic loading)
+    // WorldEdit (for schematic loading) — keep compileOnly in production but include in tests
     compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.2.15') {
         transitive = false
     }
     compileOnly('com.sk89q.worldedit:worldedit-core:7.2.15') {
         transitive = false
     }
+    testImplementation 'com.sk89q.worldedit:worldedit-core:7.2.15'
+    testImplementation 'com.sk89q.worldedit:worldedit-bukkit:7.2.15'
     
     // FAWE (optional, for safe edits)
     compileOnly('com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.8.0') {
@@ -90,8 +92,10 @@ dependencies {
     
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
-    testImplementation 'com.github.seeseemelk:MockBukkit-v1.20:3.9.0'
+    // Bump MockBukkit to a newer patch version to avoid potion-registry init races in some runners
+    testImplementation 'com.github.seeseemelk:MockBukkit-v1.20:3.11.0'
     testImplementation 'org.mockito:mockito-core:5.7.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.7.0'
 }
 
 tasks.withType(JavaCompile) {
@@ -105,7 +109,35 @@ test {
         events "passed", "skipped", "failed"
         exceptionFormat "full"
     }
+    // Increase heap to avoid OOM in MockBukkit-heavy test suites
+    maxHeapSize = "2g"
     finalizedBy jacocoTestReport
+}
+
+// Fast unit test task: excludes integration-tagged tests (MockBukkit-heavy)
+tasks.register('testUnit', Test) {
+    group = 'verification'
+    description = 'Run fast unit tests (excludes tests tagged with "integration")'
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+    }
+}
+
+// Integration test task: runs only tests tagged as integration (MockBukkit / heavy)
+tasks.register('testIntegration', Test) {
+    group = 'verification'
+    description = 'Run integration tests (only tests tagged with "integration")'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+    }
 }
 
 jacoco {
@@ -119,6 +151,27 @@ jacocoTestReport {
         html.required = true
         csv.required = false
     }
+}
+
+jacocoTestCoverageVerification {
+    dependsOn test
+    violationRules {
+        rule {
+            enabled = true
+            element = 'BUNDLE'
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.6
+            }
+        }
+    }
+}
+
+task coverage {
+    group = 'verification'
+    description = 'Generate jacoco report and verify coverage thresholds.'
+    dependsOn jacocoTestReport, jacocoTestCoverageVerification
 }
 
 shadowJar {
