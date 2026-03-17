@@ -2,6 +2,7 @@ package com.davisodom.villageoverhaul.worldgen.impl;
 
 import com.davisodom.villageoverhaul.model.VolumeMask;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
+import com.davisodom.villageoverhaul.worldgen.TerraformingUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -37,7 +38,18 @@ public class PathEmitter {
     private static final Logger LOGGER = Logger.getLogger(PathEmitter.class.getName());
     private static final int CORRIDOR_HALF_WIDTH = 1;
     private static final int MAX_CORRIDOR_CLEAR_HEIGHT = 4;
-    private static final int MAX_CORRIDOR_CLEAR_BLOCKS = 512;
+    private static final int MAX_CORRIDOR_CLEAR_BLOCKS = 8192;
+    private static final int MAX_CORRIDOR_VEGETATION_RADIUS = 24;
+
+    private static final class EmissionResult {
+        private final int blocksPlaced;
+        private final List<Block> emittedBlocks;
+
+        private EmissionResult(int blocksPlaced, List<Block> emittedBlocks) {
+            this.blocksPlaced = blocksPlaced;
+            this.emittedBlocks = emittedBlocks;
+        }
+    }
 
     private static final Set<Material> PATH_SURFACE_WHITELIST = new HashSet<>();
     static {
@@ -73,14 +85,18 @@ public class PathEmitter {
      * @return Number of blocks placed
      */
     public int emitPath(World world, List<Block> pathBlocks, String cultureId, List<VolumeMask> masks) {
+        return emitPathInternal(world, pathBlocks, cultureId, masks).blocksPlaced;
+    }
+
+    private EmissionResult emitPathInternal(World world, List<Block> pathBlocks, String cultureId, List<VolumeMask> masks) {
         if (pathBlocks.isEmpty()) {
             LOGGER.info("[PATH][EMIT] No path blocks to emit");
-            return 0;
+            return new EmissionResult(0, List.of());
         }
 
         if (!isMainThread()) {
             LOGGER.warning("[PATH][EMIT] Emission called off main thread; skipping placement");
-            return 0;
+            return new EmissionResult(0, List.of());
         }
 
         // Determine path material based on culture
@@ -91,6 +107,7 @@ public class PathEmitter {
         int skippedSupport = 0;
         int skippedVegetationNodes = 0;
         int reroutedNodes = 0;
+        int embeddedNodes = 0;
         int unsupportedSurfaceNodes = 0;
         int skippedChunk = 0;
         List<Block> successfullyPlacedBlocks = new ArrayList<>();
@@ -161,17 +178,23 @@ public class PathEmitter {
                     continue;
                 }
 
+                int resolvedCandidateY = resolveEmbeddedSurfaceY(world, x, candidateY, z);
+                surface = world.getBlockAt(x, resolvedCandidateY, z);
+
                 if (!isWhitelistedSurface(surface.getType())) {
                     unsupportedFound = true;
                     continue;
                 }
 
-                if (!shouldBypassSupportChecks() && !isSupported(world, x, candidateY, z)) {
+                if (!shouldBypassSupportChecks() && !isSupported(world, x, resolvedCandidateY, z)) {
                     supportMissing = true;
                     continue;
                 }
 
-                selectedY = candidateY;
+                if (resolvedCandidateY != candidateY) {
+                    embeddedNodes++;
+                }
+                selectedY = resolvedCandidateY;
                 break;
             }
 
@@ -239,15 +262,15 @@ public class PathEmitter {
         LOGGER.info(String.format("[PATH][EMIT] Result: placed=%d, verified=%d, skipped(mask)=%d, skipped(noSupport)=%d, skipped(unloaded)=%d, culture=%s, material=%s",
             blocksPlaced, verifiedBlocks, skippedMask, skippedSupport, skippedChunk, cultureId, pathMaterial));
 
-        LOGGER.info(String.format("[PATH][DIAG] skippedVegetationNodes=%d reroutedNodes=%d unsupportedSurfaceNodes=%d",
-            skippedVegetationNodes, reroutedNodes, unsupportedSurfaceNodes));
+        LOGGER.info(String.format("[PATH][DIAG] skippedVegetationNodes=%d reroutedNodes=%d embeddedNodes=%d unsupportedSurfaceNodes=%d",
+            skippedVegetationNodes, reroutedNodes, embeddedNodes, unsupportedSurfaceNodes));
 
-        return blocksPlaced;
+        return new EmissionResult(blocksPlaced, successfullyPlacedBlocks);
     }
 
     private int clearVegetationCorridor(World world, List<Block> pathBlocks, List<VolumeMask> masks) {
-        int cleared = 0;
         Set<String> visited = new HashSet<>();
+        List<Block> vegetationSeeds = new ArrayList<>();
 
         for (Block pathBlock : pathBlocks) {
             for (int dx = -CORRIDOR_HALF_WIDTH; dx <= CORRIDOR_HALF_WIDTH; dx++) {
@@ -265,19 +288,21 @@ public class PathEmitter {
                         }
 
                         Block block = world.getBlockAt(x, y, z);
-                        if (isVegetation(block)) {
-                            block.setType(Material.AIR);
-                            cleared++;
-                            if (cleared >= MAX_CORRIDOR_CLEAR_BLOCKS) {
-                                return cleared;
-                            }
+                        if (TerraformingUtil.isVegetationMaterial(block.getType())) {
+                            vegetationSeeds.add(block);
                         }
                     }
                 }
             }
         }
 
-        return cleared;
+        return TerraformingUtil.clearConnectedVegetation(
+            world,
+            vegetationSeeds,
+            block -> isInsideAnyMask(masks, block.getX(), block.getY(), block.getZ()),
+            MAX_CORRIDOR_CLEAR_BLOCKS,
+            MAX_CORRIDOR_VEGETATION_RADIUS
+        );
     }
 
     
@@ -401,6 +426,36 @@ public class PathEmitter {
         }
 
         return Integer.MIN_VALUE;
+    }
+
+    private int resolveEmbeddedSurfaceY(World world, int x, int candidateY, int z) {
+        int resolvedY = candidateY;
+        int minY = world.getMinHeight();
+
+        while (resolvedY > minY) {
+            Material material = world.getBlockAt(x, resolvedY, z).getType();
+            if (!shouldEmbedBelowSurface(material)) {
+                break;
+            }
+
+            Block below = world.getBlockAt(x, resolvedY - 1, z);
+            if (isVegetation(below)) {
+                resolvedY--;
+                continue;
+            }
+            if (!isWhitelistedSurface(below.getType())) {
+                break;
+            }
+
+            resolvedY--;
+        }
+
+        return resolvedY;
+    }
+
+    private boolean shouldEmbedBelowSurface(Material material) {
+        return material == Material.SNOW
+            || (!material.isSolid() && material != Material.WATER && material != Material.LAVA);
     }
 
     private boolean isSupported(World world, int x, int y, int z) {
@@ -553,8 +608,9 @@ public class PathEmitter {
      * @return Total number of blocks placed and smoothed
      */
     public int emitPathWithSmoothing(World world, List<Block> pathBlocks, String cultureId, List<VolumeMask> masks) {
-        int placed = emitPath(world, pathBlocks, cultureId, masks);
-        int smoothed = smoothPath(world, pathBlocks, cultureId);
+        EmissionResult emissionResult = emitPathInternal(world, pathBlocks, cultureId, masks);
+        int placed = emissionResult.blocksPlaced;
+        int smoothed = smoothPath(world, emissionResult.emittedBlocks, cultureId);
         
         LOGGER.fine(String.format("[STRUCT] Path complete: culture=%s, placed=%d, smoothed=%d",
                 cultureId, placed, smoothed));

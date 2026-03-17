@@ -1,8 +1,11 @@
 package com.davisodom.villageoverhaul.commands;
 
+import com.davisodom.villageoverhaul.metrics.PerfCounters;
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
 import com.davisodom.villageoverhaul.npc.CustomVillagerService;
 import com.davisodom.villageoverhaul.npc.VillagerInteractionController;
+import com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -18,10 +21,13 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test commands for automated CI testing of Village Overhaul features
@@ -33,10 +39,14 @@ import java.util.UUID;
  *   /votest spawn-villager <type> [x] [y] [z] - Spawn a custom villager
  *   /votest trigger-interaction <player> <villager-uuid> - Trigger interaction event
  *   /votest place-obstacle <water|steep> <x> <z> <radius|width> - Place terrain obstacles for pathfinding tests
+ *   /votest mutate-path-terrain <village-id> [radius] - Mutate terrain under a cached path segment
+ *   /votest generate-paths-burst <village-id> <count> - Trigger concurrent path generation for queue validation
  *   /votest metrics - Dump current metrics to logs
  *   /votest performance - Report current performance stats
  */
 public class TestCommands implements CommandExecutor, TabCompleter {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     
     private final VillageOverhaulPlugin plugin;
     private final CustomVillagerService customVillagerService;
@@ -61,7 +71,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 0) {
-            CommandFeedback.error(sender, "Usage: /votest <create-village|generate-structures|generate-paths|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
+            CommandFeedback.error(sender, "Usage: /votest <create-village|generate-structures|generate-paths|generate-paths-burst|mutate-path-terrain|path-metrics|spawn-villager|trigger-interaction|simulate-interaction|place-obstacle|verify-persistence|metrics|performance>");
             return true;
         }
 
@@ -76,6 +86,15 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 
             case "generate-paths":
                 return handleGeneratePaths(sender, args);
+
+            case "generate-paths-burst":
+                return handleGeneratePathsBurst(sender, args);
+
+            case "mutate-path-terrain":
+                return handleMutatePathTerrain(sender, args);
+
+            case "path-metrics":
+                return handlePathMetrics(sender, args);
 
             case "fixed-layout":
                 return handleFixedLayout(sender, args);
@@ -177,6 +196,55 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         plugin.getLogger().info("[TEST] Created test village: " + villageName + 
                 " (ID: " + village.getId() + ") at " + x + "," + y + "," + z);
         
+        return true;
+    }
+
+    private boolean handlePathMetrics(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            CommandFeedback.error(sender, "Usage: /votest path-metrics <village-id|reset> [village-id]");
+            return true;
+        }
+
+        if ("reset".equalsIgnoreCase(args[1])) {
+            if (args.length >= 3) {
+                try {
+                    UUID villageId = UUID.fromString(args[2]);
+                    PathServiceImpl.resetPathMetrics(villageId);
+                    CommandFeedback.info(sender, "Path metrics reset for village: " + villageId);
+                } catch (IllegalArgumentException e) {
+                    CommandFeedback.error(sender, "Invalid village ID format");
+                }
+            } else {
+                PathServiceImpl.resetPathMetrics();
+                CommandFeedback.info(sender, "Path metrics reset for all villages");
+            }
+            return true;
+        }
+
+        UUID villageId;
+        try {
+            villageId = UUID.fromString(args[1]);
+        } catch (IllegalArgumentException e) {
+            CommandFeedback.error(sender, "Invalid village ID format");
+            return true;
+        }
+
+        PerfCounters.Snapshot snapshot = PathServiceImpl.getPathMetrics(villageId);
+        if (snapshot.getPathSearches() == 0L) {
+            snapshot = plugin.getMetadataStore().getPathNetwork(villageId)
+                .map(com.davisodom.villageoverhaul.model.PathNetwork::getMetricsSummary)
+                .orElse(snapshot);
+        }
+
+        try {
+            String json = OBJECT_MAPPER.writeValueAsString(snapshot.toMap());
+            CommandFeedback.info(sender, "Path metrics:");
+            CommandFeedback.detail(sender, json);
+            plugin.getLogger().info(String.format("[PATH][METRICS] village=%s %s", villageId, json));
+        } catch (Exception e) {
+            CommandFeedback.error(sender, "Failed to serialize path metrics: " + e.getMessage());
+        }
+
         return true;
     }
     
@@ -405,6 +473,278 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         }
         
         return true;
+    }
+
+    private boolean handleMutatePathTerrain(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            CommandFeedback.error(sender, "Usage: /votest mutate-path-terrain <village-id> [radius]");
+            return true;
+        }
+
+        UUID villageId;
+        try {
+            villageId = UUID.fromString(args[1]);
+        } catch (IllegalArgumentException e) {
+            CommandFeedback.error(sender, "Invalid village ID format");
+            return true;
+        }
+
+        int radius = 2;
+        if (args.length >= 3) {
+            try {
+                radius = Math.max(1, Integer.parseInt(args[2]));
+            } catch (NumberFormatException e) {
+                CommandFeedback.error(sender, "Invalid radius");
+                return true;
+            }
+        }
+
+        Optional<PathGenerationContext> contextOpt = resolvePathGenerationContext(sender, villageId, true);
+        if (contextOpt.isEmpty()) {
+            return true;
+        }
+        PathGenerationContext context = contextOpt.get();
+
+        Optional<com.davisodom.villageoverhaul.model.PathNetwork> networkOpt = context.metadataStore.getPathNetwork(villageId);
+        if (networkOpt.isEmpty() || networkOpt.get().getSegments().isEmpty()) {
+            CommandFeedback.error(sender, "No path network available for mutation");
+            CommandFeedback.detail(sender, "Run /votest generate-paths first");
+            return true;
+        }
+
+        com.davisodom.villageoverhaul.model.PathNetwork.PathSegment segment = networkOpt.get().getSegments().get(0);
+        List<org.bukkit.block.Block> segmentBlocks = segment.getBlocks();
+        if (segmentBlocks.isEmpty()) {
+            CommandFeedback.error(sender, "Selected path segment has no blocks");
+            return true;
+        }
+
+        org.bukkit.block.Block pivot = segmentBlocks.get(segmentBlocks.size() / 2);
+        int minX = pivot.getX() - radius;
+        int maxX = pivot.getX() + radius;
+        int minZ = pivot.getZ() - radius;
+        int maxZ = pivot.getZ() + radius;
+        int y = pivot.getY();
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                context.world.getBlockAt(x, y, z).setType(org.bukkit.Material.AIR);
+                context.world.getBlockAt(x, y - 1, z).setType(org.bukkit.Material.STONE);
+            }
+        }
+
+        PathServiceImpl.InvalidationResult invalidation =
+            PathServiceImpl.invalidateSegmentCache(context.world, minX, maxX, minZ, maxZ, "terraform");
+        plugin.getLogger().info(String.format(
+            "[PATH][TEST] mutatedTerrain village=%s bounds=(%d..%d,%d..%d) segmentsInvalidated=%d",
+            villageId, minX, maxX, minZ, maxZ, invalidation.getSegmentsRemoved()));
+        CommandFeedback.info(sender, String.format(
+            "Mutated path terrain for village %s and invalidated %d segment(s)", villageId,
+            invalidation.getSegmentsRemoved()));
+        return true;
+    }
+
+    private boolean handleGeneratePathsBurst(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            CommandFeedback.error(sender, "Usage: /votest generate-paths-burst <village-id> <count>");
+            return true;
+        }
+
+        UUID villageId;
+        try {
+            villageId = UUID.fromString(args[1]);
+        } catch (IllegalArgumentException e) {
+            CommandFeedback.error(sender, "Invalid village ID format");
+            return true;
+        }
+
+        int count;
+        try {
+            count = Math.max(1, Integer.parseInt(args[2]));
+        } catch (NumberFormatException e) {
+            CommandFeedback.error(sender, "Invalid burst count");
+            return true;
+        }
+
+        Optional<PathGenerationContext> contextOpt = resolvePathGenerationContext(sender, villageId, true);
+        if (contextOpt.isEmpty()) {
+            return true;
+        }
+        PathGenerationContext context = contextOpt.get();
+
+        PathServiceImpl.resetPathState();
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(count);
+        List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+
+        for (int index = 0; index < count; index++) {
+            final int requestId = index;
+            Thread worker = new Thread(() -> {
+                try {
+                    start.await();
+                    com.davisodom.villageoverhaul.worldgen.PathService burstService = buildPathService();
+                    boolean success = burstService.generatePathNetwork(
+                        context.world,
+                        villageId,
+                        context.buildingLocations,
+                        context.mainBuilding.getOrigin(),
+                        context.village.getSeed() + requestId
+                    );
+                    plugin.getLogger().info(String.format(
+                        "[PATH][BURST] request=%d village=%s success=%s",
+                        requestId, villageId, success));
+                } catch (Throwable throwable) {
+                    failures.add(throwable);
+                    plugin.getLogger().warning(String.format(
+                        "[PATH][BURST] request=%d village=%s failed=%s",
+                        requestId, villageId, throwable.getMessage()));
+                } finally {
+                    done.countDown();
+                }
+            }, "votest-path-burst-" + requestId);
+            worker.start();
+        }
+
+        Thread watcher = new Thread(() -> {
+            try {
+                if (!done.await(60, TimeUnit.SECONDS)) {
+                    plugin.getLogger().warning(String.format(
+                        "[PATH][BURST] timeout village=%s requests=%d remaining=%d",
+                        villageId, count, done.getCount()));
+                    return;
+                }
+                if (!failures.isEmpty()) {
+                    plugin.getLogger().warning(String.format(
+                        "[PATH][BURST] completed with failures village=%s requests=%d firstError=%s",
+                        villageId, count, failures.get(0).getMessage()));
+                    return;
+                }
+                PerfCounters.Snapshot snapshot = PathServiceImpl.getPathMetrics(villageId);
+                plugin.getLogger().info(String.format(
+                    "[PATH][BURST] completed village=%s requests=%d queueWaitMs=%d cacheHits=%d cacheMisses=%d",
+                    villageId, count, snapshot.getPlannerQueueWaitMs(), snapshot.getCacheHits(), snapshot.getCacheMisses()));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                plugin.getLogger().warning(String.format(
+                    "[PATH][BURST] watcher interrupted village=%s requests=%d",
+                    villageId, count));
+            }
+        }, "votest-path-burst-watch-" + villageId.toString().substring(0, 8));
+        watcher.start();
+
+        start.countDown();
+        CommandFeedback.info(sender, String.format(
+            "Started burst path generation for village %s (requests=%d)", villageId, count));
+        return true;
+    }
+
+    private com.davisodom.villageoverhaul.worldgen.PathService buildPathService() {
+        com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl.PlannerSettings plannerSettings =
+            new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl.PlannerSettings(
+                plugin.getPathMaxNodesExplored(),
+                plugin.getPathPlannerConcurrencyCap(),
+                plugin.getPathNodeCapRetryMaxAttempts(),
+                plugin.getPathNodeCapBackoffBaseMs(),
+                plugin.getPathNodeCapBackoffMaxMs()
+            );
+        return new com.davisodom.villageoverhaul.worldgen.impl.PathServiceImpl(plugin.getMetadataStore(), plannerSettings);
+    }
+
+    private Optional<PathGenerationContext> resolvePathGenerationContext(CommandSender sender, UUID villageId,
+                                                                        boolean emitErrors) {
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore = plugin.getMetadataStore();
+        Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt =
+            metadataStore.getVillage(villageId);
+        if (villageOpt.isEmpty()) {
+            if (emitErrors) {
+                CommandFeedback.error(sender, "Village not found: " + villageId);
+            }
+            return Optional.empty();
+        }
+
+        com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata village = villageOpt.get();
+        List<com.davisodom.villageoverhaul.model.Building> buildings = metadataStore.getVillageBuildings(villageId);
+        if (buildings.isEmpty()) {
+            if (emitErrors) {
+                CommandFeedback.error(sender, "No buildings found for village: " + villageId);
+                CommandFeedback.detail(sender, "Run /votest generate-structures first");
+            }
+            return Optional.empty();
+        }
+
+        Optional<UUID> mainBuildingIdOpt = metadataStore.getMainBuilding(villageId);
+        UUID mainBuildingId = null;
+        com.davisodom.villageoverhaul.model.Building mainBuilding = null;
+        if (mainBuildingIdOpt.isPresent()) {
+            mainBuildingId = mainBuildingIdOpt.get();
+            for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+                if (building.getBuildingId().equals(mainBuildingId)) {
+                    mainBuilding = building;
+                    break;
+                }
+            }
+        }
+
+        if (mainBuilding == null && !buildings.isEmpty()) {
+            mainBuilding = buildings.get(0);
+            mainBuildingId = mainBuilding.getBuildingId();
+            metadataStore.setMainBuilding(villageId, mainBuildingId);
+            plugin.getLogger().info(String.format(
+                "[STRUCT] Auto-designated main building %s for village %s (test fallback)",
+                mainBuildingId, villageId));
+            if (emitErrors) {
+                CommandFeedback.warn(sender, "No main building previously designated - using first building as main for path generation");
+            }
+        }
+
+        if (mainBuilding == null) {
+            if (emitErrors) {
+                CommandFeedback.error(sender, "No main building available for village: " + villageId);
+                CommandFeedback.detail(sender, "Ensure structures exist for this village before path generation");
+            }
+            return Optional.empty();
+        }
+
+        org.bukkit.World world = village.getOrigin().getWorld();
+        if (world == null) {
+            if (emitErrors) {
+                CommandFeedback.error(sender, "World not found for village");
+            }
+            return Optional.empty();
+        }
+
+        List<Location> buildingLocations = new ArrayList<>();
+        for (com.davisodom.villageoverhaul.model.Building building : buildings) {
+            buildingLocations.add(building.getOrigin());
+        }
+
+        return Optional.of(new PathGenerationContext(metadataStore, village, buildingLocations, mainBuildingId,
+            mainBuilding, world));
+    }
+
+    private static final class PathGenerationContext {
+        private final com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore;
+        private final com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata village;
+        private final List<Location> buildingLocations;
+        private final UUID mainBuildingId;
+        private final com.davisodom.villageoverhaul.model.Building mainBuilding;
+        private final org.bukkit.World world;
+
+        private PathGenerationContext(
+            com.davisodom.villageoverhaul.villages.VillageMetadataStore metadataStore,
+            com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata village,
+            List<Location> buildingLocations,
+            UUID mainBuildingId,
+            com.davisodom.villageoverhaul.model.Building mainBuilding,
+            org.bukkit.World world
+        ) {
+            this.metadataStore = metadataStore;
+            this.village = village;
+            this.buildingLocations = buildingLocations;
+            this.mainBuildingId = mainBuildingId;
+            this.mainBuilding = mainBuilding;
+            this.world = world;
+        }
     }
     
     /**
@@ -840,6 +1180,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         int undersideFailures = 0;
         int outsideMaskFailures = 0;
         int pathMaskFailures = 0;
+        int pathHeightFailures = 0;
         int structuresChecked = 0;
         
         // Visuals: Particles at corners and entrances
@@ -937,16 +1278,7 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             }
 
             if (mask.getMaxX() - mask.getMinX() >= 2 && mask.getMaxZ() - mask.getMinZ() >= 2) {
-                java.util.LinkedHashSet<String> undersidePoints = new java.util.LinkedHashSet<>();
-                int centerX = (mask.getMinX() + mask.getMaxX()) / 2;
-                int centerZ = (mask.getMinZ() + mask.getMaxZ()) / 2;
-                undersidePoints.add(centerX + ":" + centerZ);
-                undersidePoints.add((mask.getMinX() + 1) + ":" + (mask.getMinZ() + 1));
-                undersidePoints.add((mask.getMaxX() - 1) + ":" + (mask.getMinZ() + 1));
-                undersidePoints.add((mask.getMinX() + 1) + ":" + (mask.getMaxZ() - 1));
-                undersidePoints.add((mask.getMaxX() - 1) + ":" + (mask.getMaxZ() - 1));
-
-                for (String point : undersidePoints) {
+                for (String point : buildUndersideAuditPoints(mask)) {
                     String[] coords = point.split(":");
                     int x = Integer.parseInt(coords[0]);
                     int z = Integer.parseInt(coords[1]);
@@ -1011,6 +1343,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
         Optional<com.davisodom.villageoverhaul.model.PathNetwork> networkOpt = metadataStore.getPathNetwork(villageId);
         if (networkOpt.isPresent()) {
             com.davisodom.villageoverhaul.model.PathNetwork network = networkOpt.get();
+            Optional<com.davisodom.villageoverhaul.villages.VillageMetadataStore.VillageMetadata> villageOpt = 
+                metadataStore.getVillage(villageId);
+            org.bukkit.World world = villageOpt.map(metadata -> metadata.getOrigin().getWorld()).orElse(null);
             for (com.davisodom.villageoverhaul.model.PathNetwork.PathSegment segment : network.getSegments()) {
                 for (org.bukkit.block.Block block : segment.getBlocks()) {
                     totalChecks++;
@@ -1023,6 +1358,15 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                             break; 
                         }
                     }
+
+                    if (world != null && isPathHeightAuditMaterial(block.getType())) {
+                        int surroundingNaturalY = resolveSurroundingNaturalSurfaceY(world, block.getX(), block.getY(), block.getZ());
+                        if (surroundingNaturalY != Integer.MIN_VALUE && block.getY() > surroundingNaturalY) {
+                            failedChecks++;
+                            pathHeightFailures++;
+                            allPass = false;
+                        }
+                    }
                 }
             }
         }
@@ -1032,14 +1376,76 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             CommandFeedback.info(sender, String.format("PASS: All persistence checks passed (%d checks, %d structures)",
                 totalChecks, structuresChecked));
         } else {
-            CommandFeedback.error(sender, String.format("FAIL: %d/%d checks failed (corner=%d, perimeter=%d, underside=%d, outside-mask=%d, path=%d)",
-                failedChecks, totalChecks, cornerFailures, perimeterFailures, undersideFailures, outsideMaskFailures, pathMaskFailures));
+            CommandFeedback.error(sender, String.format("FAIL: %d/%d checks failed (corner=%d, perimeter=%d, underside=%d, outside-mask=%d, path=%d, path-height=%d)",
+                failedChecks, totalChecks, cornerFailures, perimeterFailures, undersideFailures, outsideMaskFailures, pathMaskFailures, pathHeightFailures));
             if (cornerFailures > 0) {
                 CommandFeedback.detail(sender, "Benign edge case: Single AIR corners (1/4) show as WARN, not FAIL");
             }
         }
         
         return true;
+    }
+
+    private java.util.LinkedHashSet<String> buildUndersideAuditPoints(com.davisodom.villageoverhaul.model.VolumeMask mask) {
+        java.util.LinkedHashSet<String> undersidePoints = new java.util.LinkedHashSet<>();
+        int interiorMinX = mask.getMinX() + 1;
+        int interiorMaxX = mask.getMaxX() - 1;
+        int interiorMinZ = mask.getMinZ() + 1;
+        int interiorMaxZ = mask.getMaxZ() - 1;
+
+        if (interiorMinX > interiorMaxX || interiorMinZ > interiorMaxZ) {
+            return undersidePoints;
+        }
+
+        int stepX = Math.max(1, (interiorMaxX - interiorMinX) >= 8 ? 2 : 1);
+        int stepZ = Math.max(1, (interiorMaxZ - interiorMinZ) >= 8 ? 2 : 1);
+
+        for (int x = interiorMinX; x <= interiorMaxX; x += stepX) {
+            for (int z = interiorMinZ; z <= interiorMaxZ; z += stepZ) {
+                undersidePoints.add(x + ":" + z);
+            }
+        }
+
+        undersidePoints.add(interiorMaxX + ":" + interiorMaxZ);
+        undersidePoints.add(((mask.getMinX() + mask.getMaxX()) / 2) + ":" + ((mask.getMinZ() + mask.getMaxZ()) / 2));
+        return undersidePoints;
+    }
+
+    private boolean isPathHeightAuditMaterial(org.bukkit.Material material) {
+        return material == org.bukkit.Material.COBBLESTONE || material == org.bukkit.Material.DIRT_PATH;
+    }
+
+    private int resolveSurroundingNaturalSurfaceY(org.bukkit.World world, int x, int currentY, int z) {
+        int[][] offsets = new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        int bestY = Integer.MIN_VALUE;
+        for (int[] offset : offsets) {
+            int candidateY = findNaturalSurfaceY(world, x + offset[0], z + offset[1], currentY + 1);
+            if (candidateY > bestY) {
+                bestY = candidateY;
+            }
+        }
+        return bestY;
+    }
+
+    private int findNaturalSurfaceY(org.bukkit.World world, int x, int z, int startY) {
+        int y = Math.max(startY, 0);
+        for (; y >= world.getMinHeight(); y--) {
+            org.bukkit.Material material = world.getBlockAt(x, y, z).getType();
+            if (material.isAir()) {
+                continue;
+            }
+            if (isPathHeightAuditMaterial(material)) {
+                continue;
+            }
+            if (material == org.bukkit.Material.SNOW || material == org.bukkit.Material.SNOW_BLOCK) {
+                continue;
+            }
+            if (!material.isSolid()) {
+                continue;
+            }
+            return y;
+        }
+        return Integer.MIN_VALUE;
     }
 
     /**
@@ -1231,6 +1637,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
                 // Now place the structure blocks unconditionally
                 for (int bx = receipt.getMinX(); bx <= receipt.getMaxX(); bx++) {
                     for (int bz = receipt.getMinZ(); bz <= receipt.getMaxZ(); bz++) {
+                        if (receipt.getMinY() - 1 >= minClearY) {
+                            world.getBlockAt(bx, receipt.getMinY() - 1, bz).setType(org.bukkit.Material.STONE);
+                        }
                         for (int by = receipt.getMinY(); by <= receipt.getMaxY(); by++) {
                             world.getBlockAt(bx, by, bz).setType(org.bukkit.Material.STONE);
                         }
@@ -1326,6 +1735,9 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             completions.add("create-village");
             completions.add("generate-structures");
             completions.add("generate-paths");
+            completions.add("generate-paths-burst");
+            completions.add("mutate-path-terrain");
+            completions.add("path-metrics");
             completions.add("fixed-layout");
             completions.add("spawn-villager");
             completions.add("trigger-interaction");
@@ -1334,6 +1746,8 @@ public class TestCommands implements CommandExecutor, TabCompleter {
             completions.add("verify-persistence");
             completions.add("metrics");
             completions.add("performance");
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("path-metrics")) {
+            completions.add("reset");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("place-obstacle")) {
             // Obstacle types
             completions.add("water");

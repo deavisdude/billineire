@@ -737,6 +737,13 @@ public class VillageMetadataStore {
         dto.villageId = network.getVillageId().toString();
         dto.generatedTimestamp = network.getGeneratedTimestamp();
         dto.totalBlocksPlaced = network.getTotalBlocksPlaced();
+        dto.nodesExploredTotal = network.getMetricsSummary().getNodesExploredTotal();
+        dto.avgNodesPerPath = network.getMetricsSummary().getAvgNodesPerPath();
+        dto.cacheHits = network.getMetricsSummary().getCacheHits();
+        dto.cacheMisses = network.getMetricsSummary().getCacheMisses();
+        dto.cacheEntries = network.getMetricsSummary().getCacheEntries();
+        dto.invalidationEvents = network.getMetricsSummary().getInvalidationEvents();
+        dto.plannerQueueWaitMs = network.getMetricsSummary().getPlannerQueueWaitMs();
         dto.segments = new ArrayList<>();
         
         for (PathNetwork.PathSegment segment : network.getSegments()) {
@@ -872,7 +879,17 @@ public class VillageMetadataStore {
     private PathNetwork convertPathNetworkFromDTO(PathNetworkDTO dto, UUID villageId, World world) {
         PathNetwork.Builder builder = new PathNetwork.Builder()
             .villageId(villageId)
-            .generatedTimestamp(dto.generatedTimestamp);
+            .generatedTimestamp(dto.generatedTimestamp)
+            .metricsSummary(new com.davisodom.villageoverhaul.metrics.PerfCounters.Snapshot(
+                dto.nodesExploredTotal,
+                dto.avgNodesPerPath,
+                dto.cacheHits,
+                dto.cacheMisses,
+                dto.cacheEntries,
+                dto.invalidationEvents,
+                dto.plannerQueueWaitMs,
+                0L
+            ));
         
         for (PathSegmentDTO segmentDTO : dto.segments) {
             Location start = new Location(world, segmentDTO.startX, segmentDTO.startY, segmentDTO.startZ);
@@ -954,6 +971,13 @@ public class VillageMetadataStore {
         public String villageId;
         public long generatedTimestamp;
         public int totalBlocksPlaced;
+        public long nodesExploredTotal;
+        public double avgNodesPerPath;
+        public long cacheHits;
+        public long cacheMisses;
+        public int cacheEntries;
+        public long invalidationEvents;
+        public long plannerQueueWaitMs;
         public List<PathSegmentDTO> segments;
         
         public PathNetworkDTO() {} // For Jackson

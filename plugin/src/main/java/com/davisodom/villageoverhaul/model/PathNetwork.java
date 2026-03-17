@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.model;
 
+import com.davisodom.villageoverhaul.metrics.PerfCounters;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
 
@@ -15,18 +16,22 @@ public class PathNetwork {
     private final List<PathSegment> segments;
     private final long generatedTimestamp;
     private final int totalBlocksPlaced;
+    private final PerfCounters.Snapshot metricsSummary;
     
-    private PathNetwork(UUID villageId, List<PathSegment> segments, long generatedTimestamp, int totalBlocksPlaced) {
+    private PathNetwork(UUID villageId, List<PathSegment> segments, long generatedTimestamp, int totalBlocksPlaced,
+                        PerfCounters.Snapshot metricsSummary) {
         this.villageId = Objects.requireNonNull(villageId, "villageId cannot be null");
         this.segments = Collections.unmodifiableList(new ArrayList<>(segments));
         this.generatedTimestamp = generatedTimestamp;
         this.totalBlocksPlaced = totalBlocksPlaced;
+        this.metricsSummary = metricsSummary != null ? metricsSummary : PerfCounters.Snapshot.empty();
     }
     
     public UUID getVillageId() { return villageId; }
     public List<PathSegment> getSegments() { return segments; }
     public long getGeneratedTimestamp() { return generatedTimestamp; }
     public int getTotalBlocksPlaced() { return totalBlocksPlaced; }
+    public PerfCounters.Snapshot getMetricsSummary() { return metricsSummary; }
     
     /**
      * Check if two locations are connected by any path segment.
@@ -74,6 +79,7 @@ public class PathNetwork {
         private final List<PathSegment> segments = new ArrayList<>();
         private long generatedTimestamp = System.currentTimeMillis();
         private int totalBlocksPlaced = 0;
+        private PerfCounters.Snapshot metricsSummary = PerfCounters.Snapshot.empty();
         
         public Builder villageId(UUID villageId) {
             this.villageId = villageId;
@@ -90,9 +96,14 @@ public class PathNetwork {
             this.generatedTimestamp = generatedTimestamp;
             return this;
         }
+
+        public Builder metricsSummary(PerfCounters.Snapshot metricsSummary) {
+            this.metricsSummary = metricsSummary != null ? metricsSummary : PerfCounters.Snapshot.empty();
+            return this;
+        }
         
         public PathNetwork build() {
-            return new PathNetwork(villageId, segments, generatedTimestamp, totalBlocksPlaced);
+            return new PathNetwork(villageId, segments, generatedTimestamp, totalBlocksPlaced, metricsSummary);
         }
     }
     

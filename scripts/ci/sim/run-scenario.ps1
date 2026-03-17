@@ -39,6 +39,9 @@ param(
     ,[int]$FixedLayoutCount = 3
     ,[int]$PathCoverageThresholdPct = 50
     ,[switch]$ForceZeroPlacement = $false
+    ,[switch]$RequireCacheHits = $false
+    ,[switch]$RequireCacheInvalidation = $false
+    ,[switch]$RequirePlannerQueue = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -835,7 +838,34 @@ if ($AutoCommands -and $AutoCommands.Count -gt 0) {
                 if ($pathsResp) {
                     $pathsRespClean = Sanitize-Text $pathsResp
                     Write-Host "      generate-paths response: $(if ($pathsRespClean.Length -gt 200) { $pathsRespClean.Substring(0,200) + '...' } else { $pathsRespClean })" -ForegroundColor Gray
-                    if ($pathsRespClean -match 'Path network generated successfully' -or $pathsRespClean -match 'Path network generation failed' -or $pathsRespClean -match 'Path network generated') {
+                    if ($RequireCacheInvalidation) {
+                        $mutateResp = Send-RconCommand -Password $rconPassword -Command "votest mutate-path-terrain $villageId 2"
+                        if ($mutateResp) {
+                            $mutateResp = Sanitize-Text $mutateResp
+                            Write-Host "      mutate-path-terrain response: $(if ($mutateResp.Length -gt 200) { $mutateResp.Substring(0,200) + '...' } else { $mutateResp })" -ForegroundColor Gray
+                        }
+                        Start-Sleep -Seconds 1
+                        $regenResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths $villageId"
+                        if ($regenResp) {
+                            $regenResp = Sanitize-Text $regenResp
+                            Write-Host "      regenerate-paths response: $(if ($regenResp.Length -gt 200) { $regenResp.Substring(0,200) + '...' } else { $regenResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ($RequirePlannerQueue) {
+                        $burstResp = Send-RconCommand -Password $rconPassword -Command "votest generate-paths-burst $villageId 10"
+                        if ($burstResp) {
+                            $burstResp = Sanitize-Text $burstResp
+                            Write-Host "      generate-paths-burst response: $(if ($burstResp.Length -gt 200) { $burstResp.Substring(0,200) + '...' } else { $burstResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ($RequireCacheHits -or $RequireCacheInvalidation -or $RequirePlannerQueue) {
+                        $metricsResp = Send-RconCommand -Password $rconPassword -Command "votest path-metrics $villageId"
+                        if ($metricsResp) {
+                            $metricsResp = Sanitize-Text $metricsResp
+                            Write-Host "      path-metrics response: $(if ($metricsResp.Length -gt 200) { $metricsResp.Substring(0,200) + '...' } else { $metricsResp })" -ForegroundColor Gray
+                        }
+                    }
+                    if ((-not $RequirePlannerQueue) -and ($pathsRespClean -match 'Path network generated successfully' -or $pathsRespClean -match 'Path network generation failed' -or $pathsRespClean -match 'Path network generated')) {
                         Write-Host "      Detected path generation result in RCON response; requesting early stop" -ForegroundColor Cyan
                         $stopRequested = $true
                     }
@@ -1484,46 +1514,116 @@ Write-Host "=== Pathfinding Node Cap Validation (T026a) ===" -ForegroundColor Cy
         }
     }
     
-    # T026a: Check waypoint cache behavior (note: full waypoint cache not yet implemented)
+    # T042/T042a: Check waypoint cache behavior
     Write-Host ""
-    Write-Host "=== Waypoint Cache Validation (T026a) ===" -ForegroundColor Cyan
+    Write-Host "=== Waypoint Cache Validation (T042/T042a) ===" -ForegroundColor Cyan
     
-    # Pattern: Path network cache entries
-    $cachePattern = '\[STRUCT\] Path network complete: village=([a-f0-9\-]+)'
+    $cachePattern = '\[PATH\] cache: hits=([0-9]+), misses=([0-9]+), entries=([0-9]+)(?: village=([a-f0-9\-]+))?'
     $cacheMatches = [regex]::Matches($logContent, $cachePattern)
     
     if ($cacheMatches.Count -gt 0) {
-        $uniqueVillages = @{}
+        $totalHits = 0
+        $totalMisses = 0
+        $maxEntries = 0
         foreach ($match in $cacheMatches) {
-            $villageId = $match.Groups[1].Value
-            if (-not $uniqueVillages.ContainsKey($villageId)) {
-                $uniqueVillages[$villageId] = 1
+            $hits = [int]$match.Groups[1].Value
+            $misses = [int]$match.Groups[2].Value
+            $entries = [int]$match.Groups[3].Value
+            $villageId = $match.Groups[4].Value
+            $totalHits += $hits
+            $totalMisses += $misses
+            if ($entries -gt $maxEntries) { $maxEntries = $entries }
+            if ($villageId) {
+                Write-Host "  Village $villageId cache hits=$hits misses=$misses entries=$entries" -ForegroundColor Gray
             } else {
-                $uniqueVillages[$villageId]++
+                Write-Host "  Cache hits=$hits misses=$misses entries=$entries" -ForegroundColor Gray
             }
         }
         
-        Write-Host "Path network cache entries: $($uniqueVillages.Count) village(s)" -ForegroundColor White
-        
-        $regenerationDetected = $false
-        foreach ($villageId in $uniqueVillages.Keys) {
-            if ($uniqueVillages[$villageId] -gt 1) {
-                Write-Host "  Village $villageId regenerated paths $($uniqueVillages[$villageId]) time(s)" -ForegroundColor Gray
-                $regenerationDetected = $true
-            }
-        }
-        
-        if ($regenerationDetected) {
-            Write-Host "! Path regeneration detected (may indicate cache invalidation or terrain changes)" -ForegroundColor Yellow
+        if ($totalHits -gt 0) {
+            Write-Host "OK Waypoint cache produced hits=$totalHits misses=$totalMisses maxEntries=$maxEntries" -ForegroundColor Green
         } else {
-            Write-Host "OK All villages generated paths exactly once (cache working as expected)" -ForegroundColor Green
+            Write-Host "! No waypoint cache hits detected (misses=$totalMisses maxEntries=$maxEntries)" -ForegroundColor Yellow
+            if ($RequireCacheHits) {
+                throw "Required waypoint cache hits were not observed"
+            }
         }
     } else {
-        Write-Host "! No path network cache activity detected" -ForegroundColor Yellow
+        Write-Host "! No waypoint cache stats detected" -ForegroundColor Yellow
+        if ($RequireCacheHits) {
+            throw "Required waypoint cache stats were not observed"
+        }
     }
     
     Write-Host ""
-    Write-Host "NOTE: Full waypoint-level cache and invalidation not yet implemented (future work)" -ForegroundColor Cyan
+    Write-Host "=== Cache Invalidation Validation (T043) ===" -ForegroundColor Cyan
+
+    $invalidationPattern = '\[PATH\] cache invalidated: segments=([0-9]+), reason=([a-z\-]+), bounds=\((-?[0-9]+)\.\.(-?[0-9]+),(-?[0-9]+)\.\.(-?[0-9]+)\)'
+    $invalidationMatches = [regex]::Matches($logContent, $invalidationPattern)
+    if ($invalidationMatches.Count -gt 0) {
+        foreach ($match in $invalidationMatches) {
+            $segments = [int]$match.Groups[1].Value
+            $reason = $match.Groups[2].Value
+            $minX = $match.Groups[3].Value
+            $maxX = $match.Groups[4].Value
+            $minZ = $match.Groups[5].Value
+            $maxZ = $match.Groups[6].Value
+            Write-Host "  Invalidation reason=$reason segments=$segments bounds=($minX..$maxX,$minZ..$maxZ)" -ForegroundColor Gray
+        }
+        Write-Host "OK Cache invalidation activity detected" -ForegroundColor Green
+    } else {
+        Write-Host "! No cache invalidation activity detected" -ForegroundColor Yellow
+        if ($RequireCacheInvalidation) {
+            throw "Required cache invalidation activity was not observed"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "=== Planner Queue Validation (T044) ===" -ForegroundColor Cyan
+
+    $plannerQueuedPattern = '\[PATH\] planner queued: active=([0-9]+) queued=([0-9]+) cap=([0-9]+)'
+    $plannerStatePattern = '\[PATH\] planners: active=([0-9]+) queued=([0-9]+) cap=([0-9]+)'
+    $plannerQueuedMatches = [regex]::Matches($logContent, $plannerQueuedPattern)
+    $plannerStateMatches = [regex]::Matches($logContent, $plannerStatePattern)
+
+    if ($plannerStateMatches.Count -gt 0) {
+        $maxActive = 0
+        $maxQueued = 0
+        $cap = 0
+        $finalQueued = 0
+        foreach ($match in $plannerStateMatches) {
+            $active = [int]$match.Groups[1].Value
+            $queued = [int]$match.Groups[2].Value
+            $cap = [int]$match.Groups[3].Value
+            if ($active -gt $maxActive) { $maxActive = $active }
+            if ($queued -gt $maxQueued) { $maxQueued = $queued }
+            $finalQueued = $queued
+        }
+
+        Write-Host "  Planner states observed: $($plannerStateMatches.Count), maxActive=$maxActive maxQueued=$maxQueued cap=$cap finalQueued=$finalQueued" -ForegroundColor Gray
+        if ($maxActive -le $cap) {
+            Write-Host "OK Planner concurrency cap respected" -ForegroundColor Green
+        } else {
+            throw "Planner concurrency cap exceeded (maxActive=$maxActive cap=$cap)"
+        }
+
+        if ($plannerQueuedMatches.Count -gt 0) {
+            if ($finalQueued -eq 0) {
+                Write-Host "OK Planner queue drained after contention" -ForegroundColor Green
+            } else {
+                throw "Planner queue did not drain (finalQueued=$finalQueued)"
+            }
+        } elseif ($RequirePlannerQueue) {
+            throw "Required planner queue activity was not observed"
+        } else {
+            Write-Host "! No planner queue contention detected" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "! No planner state logs detected" -ForegroundColor Yellow
+        if ($RequirePlannerQueue) {
+            throw "Required planner state logs were not observed"
+        }
+    }
     
     # T026b: Check path generation between distant buildings (within 200 blocks)
     Write-Host ""

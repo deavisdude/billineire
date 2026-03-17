@@ -1,0 +1,4 @@
+- Build/test: `Set-Location plugin; .\\gradlew.bat clean build`
+- Focused tests: `Set-Location plugin; .\\gradlew.bat test --tests "com.davisodom...TestClass"`
+- Headless scenario: `Set-Location .; .\\scripts\\ci\\sim\\run-scenario.ps1 -FixedLayout -Ticks 1000 -Seed 12345`
+- Windows shell basics: `Get-ChildItem`, `Set-Location`, `Get-Content`, `Select-String`, `git status`, `git diff`.

@@ -1778,20 +1778,17 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Purpose**: Address root causes for village generation failures discovered during CI headless testing.
 
-- [ ] T067 Increase terrain search budget or optimize search algorithm
-  - **Root Cause**: Terrain search exceeded 2000ms timeout on spawn-area mountains, fell back to spawn location
-  - **Evidence**: `[STRUCT] ... exceeded timeout 2233ms/2000ms → falling back to spawn`
-  - **Solution**: Increase budget to 5000ms or implement early-exit heuristics for unsuitable biomes
+- [X] T067 Increase terrain search budget or optimize search algorithm
+  - **Status**: Implemented earlier in this backlog under the P0 terrain-search fix.
+  - **Outcome**: Spawn seeding now uses expanded async terrain-search passes plus structured `[TERRAIN][DIAG]` summaries instead of immediately falling back to spawn after a single short budget overrun.
 
-- [ ] T069 Fix SurfaceSolver Y-level calculation for mountain terrain
-  - **Root Cause**: SurfaceSolver returns Y=147 (mountain peak) instead of finding flat area
-  - **Evidence**: Multiple placement rejections at Y>140, structures embedded in terrain
-  - **Solution**: Add flatness requirement to SurfaceSolver; reject locations with >3 block variance
+- [X] T069 Fix SurfaceSolver Y-level calculation for mountain terrain
+  - **Status**: Implemented earlier in this backlog under the P0 site-diagnostics and terrain-rejection work.
+  - **Outcome**: Placement failures now emit structured `[SITE-REJECT]` diagnostics with steep/blocked/fluid counts, fractions, thresholds, footprint dimensions, and slope context so mountain-terrain failures are attributable instead of opaque.
 
-- [ ] T070 Implement alternate candidate search on placement failure
-  - **Root Cause**: After placement fails, no attempt made to find alternate nearby locations
-  - **Evidence**: 0/5 buildings placed when first candidate fails (mountain terrain)
-  - **Solution**: On placement rejection, search spiral pattern for next suitable candidate within 32 blocks
+- [X] T070 Implement alternate candidate search on placement failure
+  - **Status**: Implemented earlier in this backlog under the P0 multi-candidate placement retry fix.
+  - **Outcome**: Placement now enumerates multiple collision-free candidates, retries alternate positions when validation fails, and logs bounded retry/coverage traces through `[STRUCT][T070]` and `[STRUCT][BOUNDS]` lines.
 
 ---
 
@@ -1808,7 +1805,7 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 | P2 | Improves resilience & observability; enables targeted invalidation after terrain mutations (terraforming, structure placement) |
 | P3 | Advanced optimizations & instrumentation helpful for profiling but not blocking core gameplay |
 
-- [ ] T042 [P1] [US2] Waypoint-level path segment cache in `PathServiceImpl`
+- [X] T042 [P1] [US2] Waypoint-level path segment cache in `PathServiceImpl`
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/model/PathNetwork.java`
   - Description: Introduce cache keyed by ordered `(startX,startZ)->(endX,endZ)` segment pairs (normalized ordering). Break long building-to-building paths into waypoint segments (e.g., every N blocks or turning points). Reuse cached segments when generating new paths sharing sub-routes. Persist hit/miss stats per village.
   - Acceptance:
@@ -1820,14 +1817,14 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
     - Add harness parsing (extend `run-scenario.ps1`) for cache stats.
     - MockBukkit unit test verifies segment normalization and retrieval.
 
-- [ ] T042a [P1] [US2] Headless test: waypoint cache efficacy
+- [X] T042a [P1] [US2] Headless test: waypoint cache efficacy
   - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
   - Description: Generate two villages with overlapping building vectors (forcing shared route portions). Assert second village shows ≥1 cache hit; fail if hits=0 when overlap ≥25%.
   - Acceptance:
     - Harness logs include cache stats for both villages.
     - Test fails if reported hits=0 while overlap condition satisfied.
 
-- [ ] T043 [P2] [US2] Terrain-triggered path cache invalidation
+- [X] T043 [P2] [US2] Terrain-triggered path cache invalidation
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`
   - Description: Invalidate cached segments intersecting modified terrain columns after terraforming or structure placement. Maintain lightweight spatial index (grid bucket -> segment IDs). Log invalidation metrics.
   - Acceptance:
@@ -1838,14 +1835,14 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
     - Harness: Force terrain change (e.g., grading) between two path generations; assert invalidation log present.
     - Unit test simulates terrain change notification and verifies affected segment removal.
 
-- [ ] T043a [P2] [US2] Headless test: targeted cache invalidation
+- [X] T043a [P2] [US2] Headless test: targeted cache invalidation
   - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
   - Description: Generate paths, mutate terrain under one segment via test command or scripted block edits, regenerate paths; assert invalidation count ≥1 and non-mutated segment count unchanged.
   - Acceptance:
     - Invalidation log includes mutated coordinate range.
     - Non-mutated segment IDs remain cached (entries count stable excluding invalidated items).
 
-- [ ] T044 [P2] [US2] Concurrency cap & planner queue for A* searches
+- [X] T044 [P2] [US2] Concurrency cap & planner queue for A* searches
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
   - Description: Introduce capped thread/task execution (e.g., max 3 concurrent planners). Additional path requests enqueue and log `[PATH] planner queued`. Use synchronized queue; expose metrics.
   - Acceptance:
@@ -1856,14 +1853,14 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
     - Stress unit test simulates multiple async requests; asserts cap enforcement & eventual processing.
     - Harness extension (optional) triggers rapid path generation and parses queue metrics.
 
-- [ ] T044a [P2] [US2] Headless stress test: planner queue saturation
+- [X] T044a [P2] [US2] Headless stress test: planner queue saturation
   - Files: `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
   - Description: Trigger > cap simultaneous path generations (e.g., spawn buildings then call path generation command). Assert queued count >0 and all queued items processed within timeout.
   - Acceptance:
     - Final log shows queued=0 after processing cycle.
     - No path generation failure due to planner starvation.
 
-- [ ] T045 [P3] [US2] Pathfinding perf counters & profiling hooks
+- [X] T045 [P3] [US2] Pathfinding perf counters & profiling hooks
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/metrics/PerfCounters.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`
   - Description: Add counters: `nodesExploredTotal`, `avgNodesPerPath`, `cacheHitRate`, `invalidationEvents`, `plannerQueueWaitMs`. Expose `/votest path-metrics <village-id>` command.
   - Acceptance:
@@ -1871,7 +1868,7 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
     - Counters resettable via `/votest path-metrics reset`.
     - Avg nodes matches harness sampled average (±5%).
 
-- [ ] T045a [P3] [US2] Unit test: metrics consistency
+- [X] T045a [P3] [US2] Unit test: metrics consistency
   - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImplTest.java`
   - Description: Generate mock paths; verify counters increment predictably and reset clears values.
   - Acceptance:
@@ -1880,6 +1877,57 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 **Checkpoint**: Pathfinding subsystem optimized with segment reuse, targeted invalidation, capped concurrency, and observable performance metrics; ready for NPC builder integration.
 
 ---
+## Phase 4.9: Final US2 Polish & Verification
+
+**Goal**: Eliminate the remaining floating-underfill regressions and make emitted roads sit flush or slightly recessed into the terrain before moving on to Phase 5 work.
+
+**Independent Test**: Generate fixed-layout and natural-terrain villages on snow and mixed-slope seeds; assert zero unsupported underside failures in `/votest verify-persistence`, zero visibly raised road segments relative to resolved ground, and stable path smoothing after terrain embedding.
+
+- [X] T091 [P0] [US2] Remove the shallow underfill ceiling and fill blueprint-originated base voids
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtil.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/TerraformingUtilTest.java`
+  - Description: Replace the current `backfillFoundation()` "gap <= 3" behavior with support-column underfill that continues from the first valid local ground block up to the structure base across the full rotated footprint. Fill schematic-created non-solid base-layer voids as well, even when the schematic itself leaves air at `minY`.
+  - Repro: 2026-03-15 live screenshots show air shelves still visible beneath several placed structures in a snow biome after T090 was marked complete.
+  - Acceptance:
+    - Accepted structures no longer leave unsupported air columns anywhere under the audited footprint solely because the gap exceeds three blocks.
+    - Base-layer air left by a schematic is filled with the predominant local ground material when the column belongs to the placed footprint.
+    - Existing solid structural/foundation blocks are not overwritten during backfill.
+  - Tests:
+    - Extend `TerraformingUtilTest` with a deep-gap case (>3 blocks) and a schematic-base-air case that previously passed corners/perimeter but still floated underneath.
+  - Implementation (2026-03-15): `backfillFoundation()` now descends to the first valid natural support column instead of stopping at a 3-block gap, fills through the structure base layer, preserves local support material across deep underfill columns, ignores blueprint/structure-provided solid blocks when searching for real terrain support, and fills each column up to the lowest placed block in that column so raised forum-style columns do not leave air shelves above the global base Y.
+
+- [X] T092 [P0] [US2] Embed emitted paths into the resolved terrain surface and smooth against realized Y levels
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitterTest.java`
+  - Description: Resolve each emitted path column against the first natural support surface beneath snow, vegetation, or other cover blocks; place the road into that surface instead of on top of transient cover; and ensure smoothing uses the actual emitted blocks rather than the original planned nodes.
+  - Repro: 2026-03-15 live screenshots show cobblestone roads sitting one block above the surrounding packed ground/snow surface rather than reading as embedded village streets.
+  - Acceptance:
+    - Snow-covered or vegetation-covered terrain no longer causes full-block roads to sit visibly above surrounding ground.
+    - `emitPathWithSmoothing()` uses the resolved emitted path block list, so post-embed smoothing does not reintroduce height mismatches.
+    - Unit coverage catches both the snow-cover embedding case and the corrected smoothing case.
+  - Implementation (2026-03-15): `PathEmitter` now resolves embedded placement Y under transient cover such as snow, clears the displaced cover above the embedded road surface, and smooths against the emitted block list rather than the original planned nodes.
+
+- [X] T093 [P1] [US2] Strengthen persistence and headless verification for underside voids and raised paths
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Expand `/votest verify-persistence` from five underside spot-checks to a denser interior support audit and add a path-grade audit that fails when path blocks remain above the resolved local ground/support column.
+  - Acceptance:
+    - Automation fails when a structure passes corner/perimeter checks but still has unsupported interior underside pockets.
+    - Automation fails when emitted paths are still perched above snow/cover instead of embedded into terrain.
+    - Headless docs and harness output include the new failure categories so regressions are diagnosable from logs alone.
+  - Implementation (2026-03-15): `/votest verify-persistence` now audits a denser interior underside grid and adds a conservative `path-height` failure category for full-block roads that sit above surrounding natural surface; `tests/HEADLESS-TESTING.md` was updated to document the new summary fields.
+
+- [X] T094 [P2] [US2] Align the legacy `PathServiceImpl.placePath()` entry point with `PathEmitter`
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathServiceImpl.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitter.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/worldgen/impl/PathEmitterTest.java`
+  - Description: The code audit found that `PathServiceImpl.placePath()` still contains an older placement/smoothing implementation that is no longer referenced by village generation. Delegate or otherwise align that path entry point with `PathEmitter` so future callers cannot bypass the embedded-path rules.
+  - Acceptance:
+    - There is one authoritative surface-resolution behavior for path placement.
+    - Any direct caller of `PathService.placePath()` receives the same embedded/support-aware behavior as village generation.
+    - Regression coverage proves the legacy entry point cannot place raised or unsupported roads.
+  - Implementation (2026-03-15): `PathServiceImpl.placePath()` and `smoothPath()` now delegate to `PathEmitter`, removing the last live divergence between the legacy path API entry point and the village-generation emitter.
+
+**Phase 4.9 Validation (2026-03-15)**
+- Focused regressions passed: `TerraformingUtilTest`, `PathEmitterTest`
+- Full validation passed: `plugin\gradlew.bat clean build`
+- Fixed-layout headless scenario passed for seed `13579`: 6 receipts placed and `PATH-COVERAGE ... coverage=100%` logged for village `9eb74e72-b6fd-3a3b-8c21-5d61f849aa72`
+
 
 ## Phase 5: User Story 3 — Trade-Funded Village Projects (Priority: P1)
 
@@ -1887,9 +1935,52 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Independent Test**: Complete trades to 100% a project; observe corresponding building upgrade
 
-- [ ] T027 [US3] Wire project completion → structure upgrade in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
-- [ ] T028 [P] [US3] Implement upgrade application (structure replace/expand) in `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureUpgradeApplier.java`
-- [ ] T029 [US3] Log upgrade completion with [STRUCT] in `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+- [ ] T027 [US3] Persist project lifecycle and contribution state beyond in-memory runtime maps
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
+  - Description: Move project creation, activation, completion, audit entries, and player contribution totals from process-local state into the repository's persistent village metadata flow so project progress survives restart and can drive later upgrade logic safely.
+  - Acceptance:
+    - Restarting the plugin preserves active/pending/completed project status and current funded amount.
+    - Contribution audit history for a completed project remains queryable after reload.
+    - Project generator resumes from persisted state without duplicating starter projects.
+
+- [ ] T027a [US3] Make project completion emit a single authoritative upgrade dispatch event
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/economy/TradeListener.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectGenerator.java`
+  - Description: Normalize completion so trades, test commands, and future non-trade contributions all funnel through the same completion path and only dispatch one upgrade event, even under repeated or concurrent contribution attempts.
+  - Acceptance:
+    - A project can complete exactly once.
+    - Replaying a contribution after completion cannot trigger a second upgrade.
+    - Logs identify the project, village, total funded amount, and completion source.
+
+- [ ] T028 [P] [US3] Replace marker-only upgrade execution with receipt-aware building upgrades
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/projects/UpgradeExecutor.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/worldgen/impl/StructureServiceImpl.java`
+  - Description: Upgrade execution currently places markers/effects. Extend it to target the actual placed building receipt or nearby structure reference, then replace/expand the existing footprint deterministically with upgrade-safe placement rules and metadata updates.
+  - Acceptance:
+    - Completing a project changes an in-world building, not only a marker block.
+    - The upgraded building remains collision-safe and persists as the new receipt/mask state.
+    - Failed upgrades report a clear reason and do not corrupt placement metadata.
+
+- [ ] T028a [P] [US3] Define culture/project upgrade recipes and binding rules
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectGenerator.java`, `plugin/src/main/resources/cultures/roman.json`, `plugin/src/main/resources/schemas/culture.json`
+  - Description: Formalize how `buildingRef` and unlock effects map to starter structures, upgrade tiers, and target receipts so US3 upgrades are data-driven instead of hard-coded guesses.
+  - Acceptance:
+    - Every auto-generated project resolves to a concrete target building or upgrade recipe.
+    - Schema validation fails when a project references an unknown structure/upgrade.
+    - Roman starter and tier-2 projects cover at least one upgrade path each.
+
+- [ ] T029 [US3] Expose project progress, contributions, and completion outcomes in commands/UI
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+  - Description: Upgrade the existing project commands so operators and players can inspect active/pending/completed projects, per-player contributions, and latest completion audit entries without reading raw logs.
+  - Acceptance:
+    - Commands display active project progress and the last completion event.
+    - Test commands can force-complete a project in a deterministic way for QA.
+    - Output stays Bedrock-safe and uses Adventure formatting.
+
+- [ ] T029a [US3] Add focused unit and headless coverage for the trade-funded upgrade loop
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/projects/ProjectServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/projects/UpgradeExecutorTest.java`, `scripts/ci/sim/run-scenario.ps1`, `tests/HEADLESS-TESTING.md`
+  - Description: Cover contribution aggregation, restart persistence, one-shot completion dispatch, and a headless scenario that drives a village project to 100% and validates the resulting structure upgrade.
+  - Acceptance:
+    - Unit tests fail on duplicate completion dispatch or lost persistence.
+    - Headless validation can prove a project went from active to complete and changed world state.
 
 **Checkpoint**: US3 independently verifiable
 
@@ -1901,9 +1992,28 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Independent Test**: Teleport player into main building area; assert greeter + signage shows active projects
 
-- [ ] T030 [US4] Implement signage renderer (Adventure API) in `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/SignageService.java`
-- [ ] T031 [P] [US4] Implement greeter trigger (radius/cooldown) in `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/GreeterService.java`
-- [ ] T032 [US4] Extend test commands to refresh signage and trigger greeter in `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`
+- [ ] T030 [US4] Implement signage service anchored to the persisted main building receipt
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/SignageService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectService.java`
+  - Description: Create a signage renderer that resolves the current main building entrance from receipt + main-building metadata and writes Bedrock-safe Adventure text for active projects and material requirements.
+  - Acceptance:
+    - Signage attaches to the designated main building for a village.
+    - Sign text updates when the active project changes.
+    - Missing main-building metadata fails gracefully with a logged warning.
+
+- [ ] T031 [P] [US4] Implement greeter trigger, cooldowns, and session state
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/GreeterService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageService.java`
+  - Description: Add the player-entry onboarding trigger around the main-building anchor with per-player cooldowns and deterministic wording derived from village/project state.
+  - Acceptance:
+    - Entering the main building area triggers the greeter once per cooldown window.
+    - Different villages greet independently.
+    - Unloaded/missing villages do not spam errors.
+
+- [ ] T032 [US4] Extend test/admin commands for onboarding refresh and trigger simulation
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/commands/TestCommands.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`
+  - Description: Add commands to refresh signage, simulate entry into the greeter zone, and dump the current onboarding text for headless validation.
+  - Acceptance:
+    - Commands can refresh signs and trigger greeter output without manual movement.
+    - Output is parsable from headless logs.
 
 - [ ] T030a [US4] Implement VillageMapService (live cartography)
   - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/onboarding/VillageMapService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/impl/VillagePlacementServiceImpl.java`
@@ -1924,6 +2034,14 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
   - Description: Add `votest map <village-id>` producing JSON summary: buildings, spacing minDistance, unacceptable terrain counts.
   - Acceptance:
     - JSON output consumed by headless harness in T026l.
+
+- [ ] T032a [US4] Add focused onboarding tests and headless verification
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/onboarding/GreeterServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/onboarding/SignageServiceTest.java`, `tests/HEADLESS-TESTING.md`
+  - Description: Add unit coverage for greeter cooldowns/sign rendering and a headless checklist that validates the onboarding prompt against the current main building and project state.
+  - Acceptance:
+    - Greeter cooldown behavior is deterministic.
+    - Signage content reflects active projects.
+    - Headless/manual QA steps exist for US4.
 
 **Checkpoint**: US4 independently verifiable
 
@@ -1950,8 +2068,39 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Independent Test**: Reach threshold via a contract; unlock a gated item
 
-- [ ] T033 [US5] Add contract completion → reputation updates in `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/ContractService.java`
-- [ ] T034 [P] [US5] Add gating checks on purchase in `plugin/src/main/java/com/davisodom/villageoverhaul/economy/PurchaseService.java`
+- [ ] T033 [US5] Implement reputation domain model, thresholds, and persistence
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/reputation/ReputationService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/VillageOverhaulPlugin.java`
+  - Description: Create the server-authoritative reputation model with per-village player standings, threshold queries, and persistence hooks for restart-safe progression.
+  - Acceptance:
+    - Reputation survives restart and can be queried by village + player.
+    - Threshold lookups for unlock tiers are deterministic.
+
+- [ ] T033a [US5] Implement contract domain/service and assignment lifecycle
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/Contract.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/ContractService.java`, `plugin/src/main/resources/schemas/contract.json`
+  - Description: Add fetch/defense/dungeon contract models, activation/completion rules, and schema validation for contract definitions.
+  - Acceptance:
+    - Contracts move through publish -> accept -> complete/fail states.
+    - Invalid contract definitions fail schema validation.
+
+- [ ] T034 [P] [US5] Route trade and contract completion into reputation and unlock checks
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/economy/TradeListener.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/npc/VillagerInteractionController.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/reputation/ReputationService.java`
+  - Description: Wire the existing trade loop and future contract completions into reputation changes, then expose unlock checks for villagers/items/property gating.
+  - Acceptance:
+    - Trades and completed contracts change reputation through one service.
+    - Unlock checks can be queried by interaction flows without duplicating logic.
+
+- [ ] T034a [US5] Add purchase/property gating service for reputation-locked content
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/economy/PurchaseService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`
+  - Description: Implement the gating path that determines whether a player may buy a locked item or property based on both wallet state and reputation thresholds.
+  - Acceptance:
+    - Locked purchases fail with a clear reason.
+    - Eligible purchases succeed without bypassing validation.
+
+- [ ] T034b [US5] Add unit and integration tests for reputation unlock progression
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/reputation/ReputationServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/contracts/ContractServiceTest.java`, `plugin/src/test/java/com/davisodom/villageoverhaul/economy/PurchaseServiceTest.java`
+  - Description: Cover threshold changes, contract reward application, and gating logic for item/property purchases.
+  - Acceptance:
+    - Tests fail on threshold regressions and purchase bypasses.
 
 ---
 
@@ -1959,7 +2108,26 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Goal**: Deterministic dungeon instance; synchronized state changes
 
-- [ ] T035 [US6] Stub deterministic dungeon instance creation in `plugin/src/main/java/com/davisodom/villageoverhaul/dungeons/DungeonService.java`
+- [ ] T035 [US6] Implement deterministic dungeon instance/service foundation
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/dungeons/DungeonService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/dungeons/DungeonInstance.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
+  - Description: Create the seed-derived dungeon instance model, lifecycle, and persistence hooks so a village contract can target a stable dungeon state.
+  - Acceptance:
+    - The same seed yields the same dungeon layout metadata.
+    - Active dungeon instances persist enough state to resume after restart.
+
+- [ ] T035a [US6] Integrate custom enemy and loot definitions with dungeon lifecycle
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/dungeons/DungeonService.java`, `plugin/src/main/resources/datapacks/villageoverhaul/**/*.json`, `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/ContractService.java`
+  - Description: Bind dungeon generation to custom enemy archetypes, reward tables, and contract completion triggers.
+  - Acceptance:
+    - Dungeon clear events can satisfy a village contract.
+    - Rewards and enemies are data-driven.
+
+- [ ] T035b [US6] Add synchronization and headless tests for dungeon completion
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/dungeons/DungeonServiceTest.java`, `tests/HEADLESS-TESTING.md`
+  - Description: Validate deterministic instance generation and completion reward flow in automated tests.
+  - Acceptance:
+    - Same-seed dungeon metadata is deterministic.
+    - Completion changes contract/reputation state exactly once.
 
 ---
 
@@ -1967,7 +2135,26 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Goal**: Relationship edges with modifiers influencing prices/contracts
 
-- [ ] T036 [US7] Add relationship edge updates in `plugin/src/main/java/com/davisodom/villageoverhaul/relations/RelationshipService.java`
+- [ ] T036 [US7] Implement relationship graph service and persistence
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/relations/RelationshipService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
+  - Description: Add ally/neutral/rival edges, modifiers, cooldowns, and persistence between villages.
+  - Acceptance:
+    - Relationship changes persist across restart.
+    - Cooldowns/hysteresis prevent rapid oscillation.
+
+- [ ] T036a [US7] Connect influence contracts and trade routes to relationship changes
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/ContractService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/relations/RelationshipService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/economy/TradeListener.java`
+  - Description: Define the levers that modify inter-village relations and make them observable from village activity.
+  - Acceptance:
+    - Completing influence work changes at least one relationship edge.
+    - Trade-derived modifiers and contract-derived modifiers share one relationship service.
+
+- [ ] T036b [US7] Apply relationship modifiers to prices, projects, and contract availability
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/economy/PurchaseService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/projects/ProjectGenerator.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/contracts/ContractService.java`
+  - Description: Use relationship state to influence downstream gameplay instead of keeping it as isolated metadata.
+  - Acceptance:
+    - Price/contract changes are observable from relationship state.
+    - Tests cover ally vs rival modifier differences.
 
 ---
 
@@ -1975,7 +2162,32 @@ Prioritization: P0 (T059, T060, T064, T065, T068, T069, T070, T066, T085) → P1
 
 **Goal**: Persisted ownership and access controls for lots/homes
 
-- [ ] T037 [US8] Implement property ownership persistence in `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`
+- [ ] T037 [US8] Implement property domain model, persistence, and availability rules
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyRecord.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/villages/VillageMetadataStore.java`
+  - Description: Add the persisted lot/home model, listing availability, village linkage, and ownership lookup APIs.
+  - Acceptance:
+    - Property records survive restart.
+    - Listings can be queried by village and size tier.
+
+- [ ] T037a [US8] Implement purchase validation against wallet, reputation, and ownership caps
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/economy/WalletService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/reputation/ReputationService.java`
+  - Description: Enforce pricing, size-tier caps, and one-buyer semantics for lots and furnished homes.
+  - Acceptance:
+    - Concurrent purchase attempts cannot both succeed.
+    - Ownership caps are enforced by size tier.
+
+- [ ] T037b [US8] Add deed issuance and access-control enforcement
+  - Files: `plugin/src/main/java/com/davisodom/villageoverhaul/property/PropertyService.java`, `plugin/src/main/java/com/davisodom/villageoverhaul/commands/ProjectCommands.java`
+  - Description: Create the ownership-transfer UX and the resulting access checks for a purchased property.
+  - Acceptance:
+    - Successful purchases issue a deed or equivalent ownership confirmation.
+    - Access checks distinguish owners from non-owners.
+
+- [ ] T037c [US8] Add restart and anti-race tests for property ownership
+  - Files: `plugin/src/test/java/com/davisodom/villageoverhaul/property/PropertyServiceTest.java`
+  - Description: Cover ownership persistence, concurrent purchase races, and tier-cap enforcement.
+  - Acceptance:
+    - Tests fail on duplicate ownership and restart-loss regressions.
 
 ---
 

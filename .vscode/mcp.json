@@ -12,20 +12,6 @@
         "@upstash/context7-mcp"
       ]
     },
-    "specBillineirePlaytest": {
-      "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "--with",
-        "mcp[cli]>=1.26.0",
-        "python",
-        "${workspaceFolder}/tools/mcp/spec_billineire_server.py"
-      ],
-      "dev": {
-        "watch": "${workspaceFolder}/tools/mcp/**/*.py"
-      }
-    },
     "serena": {
       "type": "stdio",
       "command": "serena",

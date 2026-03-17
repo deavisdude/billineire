@@ -1,6 +1,6 @@
 ---
 name: headless_playtest
-description: "Use when running or debugging automated Minecraft plugin QA in this workspace: specBillineirePlaytest MCP, Gradle build/test, plugin deployment, headless Paper scenarios, RCON commands, village generation, structure placement, pathing, or playtest log triage."
+description: "Use when running or debugging automated Minecraft plugin QA in this workspace: Gradle build/test, plugin deployment, headless Paper scenarios, RCON commands, village generation, structure placement, pathing, or playtest log triage."
 ---
 
 # Headless Playtest
@@ -10,13 +10,7 @@ Use this skill whenever a task needs evidence beyond static code review.
 ## Preferred Workflow
 
 - Build first with `plugin\gradlew.bat clean build`.
-- Prefer the local MCP server tools when available instead of raw PowerShell scripts:
-  - `gradle_build`
-  - `deploy_plugin_jar`
-  - `run_fast_village_generation`
-  - `run_headless_scenario`
-  - `inspect_latest_playtest`
-  - `send_rcon_command`
+- Run playtests and other operations directly through the provided scripts rather than via MCP tool wrappers.
 
 ## Shell Fallbacks
 

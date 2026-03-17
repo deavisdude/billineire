@@ -227,4 +227,60 @@ public class StructureServiceImplTest {
         assertTrue(diagnostics.getOrDefault("chunkNotReady", 0) > 0,
                 "Chunk readiness rejection should be reported in diagnostics");
     }
+
+    @Test
+    @DisplayName("placeStructureAndGetReceipt compacts hollow terrain beneath the Roman forum footprint")
+    public void testForumPlacementCompactsHollowTerrainUnderFootprint() {
+        FakeWorld fake = new FakeWorld();
+        World world = fake.getWorld();
+        Mockito.when(world.getName()).thenReturn("fake");
+        Mockito.when(world.getUID()).thenReturn(java.util.UUID.randomUUID());
+        Mockito.when(world.getMinHeight()).thenReturn(0);
+        Mockito.when(world.getMaxHeight()).thenReturn(256);
+        Mockito.when(world.isChunkGenerated(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+        Mockito.when(world.isChunkLoaded(Mockito.anyInt(), Mockito.anyInt())).thenReturn(true);
+
+        StructureServiceImpl svc = new StructureServiceImpl();
+
+        int originX = 300;
+        int originY = 65;
+        int originZ = 400;
+        Location origin = new Location(world, originX, originY, originZ);
+
+        for (int x = -20; x <= 25; x++) {
+            for (int z = -20; z <= 25; z++) {
+                fake.setBlockType(originX + x, 64, originZ + z, Material.DIRT);
+                fake.setBlockType(originX + x, 65, originZ + z, Material.AIR);
+                fake.setBlockType(originX + x, 66, originZ + z, Material.AIR);
+            }
+        }
+
+        int forumInteriorX = originX + 10;
+        int forumInteriorZ = originZ + 10;
+        fake.setBlockType(forumInteriorX, 63, forumInteriorZ, Material.DIRT);
+        fake.setBlockType(forumInteriorX, 62, forumInteriorZ, Material.DIRT);
+        fake.setBlockType(forumInteriorX, 61, forumInteriorZ, Material.AIR);
+        fake.setBlockType(forumInteriorX, 60, forumInteriorZ, Material.AIR);
+        fake.setBlockType(forumInteriorX, 59, forumInteriorZ, Material.STONE);
+        fake.setBlockType(forumInteriorX, 58, forumInteriorZ, Material.STONE);
+        fake.setBlockType(forumInteriorX, 57, forumInteriorZ, Material.STONE);
+
+        Map<String, Integer> diagnostics = new HashMap<>();
+        Optional<com.davisodom.villageoverhaul.model.PlacementReceipt> receipt =
+            svc.placeStructureAndGetReceipt("building_roman_forum", world, origin, 12345L,
+                java.util.UUID.randomUUID(), null, 0, diagnostics, 0);
+
+        assertTrue(receipt.isPresent(), "Forum placement should succeed on prepared terrain");
+        Material forumFloor = fake.getBlock(forumInteriorX, 64, forumInteriorZ).getType();
+        assertTrue(forumFloor == Material.SMOOTH_SANDSTONE || forumFloor == Material.CHISELED_SANDSTONE,
+            "Forum floor should be placed at the resolved ground level using the forum tile pattern");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 60, forumInteriorZ).getType(),
+            "Shallow hollow terrain under the forum should be compacted instead of left visible");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 61, forumInteriorZ).getType(),
+            "Shallow hollow terrain under the forum should be compacted instead of left visible");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 62, forumInteriorZ).getType(),
+            "Upper support shelves under the forum should be merged into a solid pedestal");
+        assertEquals(Material.DIRT, fake.getBlock(forumInteriorX, 63, forumInteriorZ).getType(),
+            "Upper support shelves under the forum should be merged into a solid pedestal");
+    }
 }

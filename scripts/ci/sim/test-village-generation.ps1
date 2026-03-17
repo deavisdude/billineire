@@ -7,10 +7,10 @@
     monitors logs for generation completion markers, then exits immediately.
     Much faster than full N-tick scenario for testing structure placement.
     
-    Known Bugs Tracked (see tasks.md):
-    - T067: Terrain search falls back to spawn too quickly (2000ms budget)
-    - T069: SurfaceSolver returns mountain-peak Y levels causing blocked rejections
-    - T070: No alternate candidate exploration when placement fails
+    Regression Areas Monitored (see tasks.md):
+    - T067: Terrain search should keep searching across async passes and emit summary diagnostics
+    - T069: Site rejection logs should expose steep/blocked/fluid metrics and thresholds
+    - T070: Placement should retry alternate candidates and emit retry/coverage traces
 
 .PARAMETER Seed
     World seed for deterministic generation (default: 12345)
@@ -425,39 +425,48 @@ if ($villageId) {
     
     Write-Host "Found $($receipts.Count) placement receipts" -ForegroundColor Gray
     
-    # === Known Bug Detection (T067/T069/T070) ===
+    # === Terrain and placement regression signals (T067/T069/T070) ===
     Write-Host ""
-    Write-Host "=== Known Bug Detection ===" -ForegroundColor Cyan
+    Write-Host "=== Terrain/Placement Regression Signals ===" -ForegroundColor Cyan
     
-    # T067: Terrain search fallback to spawn
+    # T067: Terrain search fallback/regression
     $terrainFallback = $false
     $siteValidationFailures = 0
     $blockedTotal = 0
     $steepTotal = 0
+    $fluidTotal = 0
+    $candidateRetryEvents = 0
+    $candidateExhaustions = 0
     
     foreach ($line in $allLines) {
-        if ($line -match "Could not find suitable terrain.*using spawn location as fallback") {
+        if ($line -match "Could not find suitable terrain.*using spawn location as fallback" -or
+            $line -match "X No suitable terrain found after expanded search passes") {
             $terrainFallback = $true
         }
-        if ($line -match "Site validation failed: steep \((\d+) tiles\), blocked \((\d+) tiles\)") {
+        if ($line -match "\[SITE-REJECT\].*steep=([0-9]+).*blocked=([0-9]+).*fluid=([0-9]+)") {
             $siteValidationFailures++
             $steepTotal += [int]$Matches[1]
             $blockedTotal += [int]$Matches[2]
+            $fluidTotal += [int]$Matches[3]
         }
-        if ($line -match "Site validation failed:.*blocked \((\d+) tiles\)") {
-            if (-not ($line -match "steep")) {
-                $siteValidationFailures++
-                $blockedTotal += [int]$Matches[1]
-            }
+        if ($line -match "\[STRUCT\]\[T070\] Candidate [0-9]+/[0-9]+ rejected") {
+            $candidateRetryEvents++
+        }
+        if ($line -match "\[STRUCT\]\[T070\] Failed to place .* after trying [0-9]+/[0-9]+ candidates") {
+            $candidateExhaustions++
         }
     }
     
     if ($terrainFallback) {
-        Write-Host "  ! T067: Terrain search fell back to spawn (known bug)" -ForegroundColor Yellow
+        Write-Host "  ! T067 regression: terrain search exhausted without finding a suitable site" -ForegroundColor Yellow
     }
     if ($siteValidationFailures -gt 0) {
-        Write-Host "  ! T069/T070: $siteValidationFailures site validation failures (steep=$steepTotal, blocked=$blockedTotal)" -ForegroundColor Yellow
-        Write-Host "    T070: No alternate candidate search implemented - each structure tried one location" -ForegroundColor Yellow
+        Write-Host "  ! T069 diagnostics observed: $siteValidationFailures site rejection lines (steep=$steepTotal, blocked=$blockedTotal, fluid=$fluidTotal)" -ForegroundColor Yellow
+    }
+    if ($candidateRetryEvents -gt 0 -or $candidateExhaustions -gt 0) {
+        Write-Host "  OK T070 retry trace present: rejectedCandidates=$candidateRetryEvents exhaustedStructures=$candidateExhaustions" -ForegroundColor Green
+    } elseif ($siteValidationFailures -gt 0) {
+        Write-Host "  ! T070 retry trace not observed despite site rejections; inspect placement logs" -ForegroundColor Yellow
     }
     
     # Check for overlaps (R011b acceptance criteria)
@@ -467,7 +476,7 @@ if ($villageId) {
     # R011b requires at least 2 structures to validate collision detection
     if ($receipts.Count -lt 2) {
         Write-Host "  ! INCONCLUSIVE: Need at least 2 structures to validate collision detection (found $($receipts.Count))" -ForegroundColor Yellow
-        Write-Host "    This is expected while T067/T070 remain unresolved" -ForegroundColor Yellow
+        Write-Host "    Run a seed that produces 2+ receipts to exercise overlap validation." -ForegroundColor Yellow
         $r011bInconclusive = $true
     } else {
         $overlaps = 0
@@ -504,7 +513,7 @@ Write-Host ""
 Write-Host "=== Test Complete ===" -ForegroundColor Cyan
 
 # Adjusted success criteria: use MinExpectedStructures instead of ExpectedStructures
-# This accounts for T067/T069/T070 bugs that prevent full structure placement
+# This keeps the harness usable for degraded runs while still surfacing terrain/placement regressions.
 $structuresOk = $structureCount -ge $MinExpectedStructures
 $overlapsOk = $overlaps -eq 0
 $connectivityOk = ($pathsConnectivity -eq $null -or $pathsConnectivity -ge $PathConnectivityThreshold)
@@ -532,7 +541,7 @@ if ($generationComplete -and $overlapsOk -and $structuresOk -and $connectivityOk
 } elseif ($r011bInconclusive -and $structuresOk) {
     # R011b inconclusive is expected with 1 structure - not a failure if at least minimum placed
     Write-Host "OK Minimum structure placed ($structureCount); R011b skipped (needs 2+ structures)" -ForegroundColor Yellow
-    Write-Host "  Resolve T067/T069/T070 to enable R011b validation" -ForegroundColor Yellow
+    Write-Host "  Run a seed/location that produces 2+ structures to enable overlap validation." -ForegroundColor Yellow
     exit 0
 } else {
     Write-Host "X Test failed" -ForegroundColor Red

@@ -1,0 +1,3 @@
+- Follow standard Java conventions: PascalCase classes, camelCase methods/fields, 4-space indentation, no wildcard imports.
+- Prefer minimal focused changes, deterministic behavior, and structured [STRUCT]/[PATH] logs for observability.
+- Use apply_patch for edits; avoid unrelated refactors and do not revert user changes.

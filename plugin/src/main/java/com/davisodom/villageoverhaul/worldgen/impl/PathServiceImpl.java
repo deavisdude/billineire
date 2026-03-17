@@ -1,5 +1,6 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
+import com.davisodom.villageoverhaul.metrics.PerfCounters;
 import com.davisodom.villageoverhaul.model.PathNetwork;
 import com.davisodom.villageoverhaul.model.VolumeMask;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
@@ -8,7 +9,9 @@ import com.davisodom.villageoverhaul.worldgen.SurfaceSolver;
 import com.davisodom.villageoverhaul.worldgen.TerrainClassifier;
 import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 import java.util.OptionalInt;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -45,6 +48,9 @@ public class PathServiceImpl implements PathService {
     
     // Maximum nodes to explore in A* search
     private static final int DEFAULT_MAX_NODES_EXPLORED = 15000;
+    private static final int WAYPOINT_SEGMENT_THRESHOLD = 40;
+    private static final int WAYPOINT_INTERVAL_BLOCKS = 20;
+    private static final int CACHE_BUCKET_SIZE = 16;
 
     // Path planner defaults
     private static final int DEFAULT_PLANNER_CONCURRENCY_CAP = 3;
@@ -60,6 +66,11 @@ public class PathServiceImpl implements PathService {
     
     // Path network cache (villageId -> PathNetwork)
     private final Map<UUID, PathNetwork> pathNetworks = new HashMap<>();
+    private final PathEmitter pathEmitter = new PathEmitter();
+    private static final Map<UUID, PerfCounters> VILLAGE_COUNTERS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Map<SegmentKey, CachedSegment>> SEGMENT_CACHE = new ConcurrentHashMap<>();
+    private static final Map<UUID, Map<String, Set<SegmentKey>>> SEGMENT_INDEX = new ConcurrentHashMap<>();
+    private static final Map<Integer, PlannerLimiter> SHARED_LIMITERS = new ConcurrentHashMap<>();
 
     private static final Set<Material> PATH_SURFACE_WHITELIST = new HashSet<>();
     static {
@@ -85,7 +96,7 @@ public class PathServiceImpl implements PathService {
     private final VillageMetadataStore metadataStore;
     
     // Current village context for pathfinding
-    private UUID currentVillageContext = null;
+    private final ThreadLocal<UUID> currentVillageContext = new ThreadLocal<>();
 
     private final int maxNodesExplored;
     private final int plannerConcurrencyCap;
@@ -106,7 +117,7 @@ public class PathServiceImpl implements PathService {
         this.nodeCapRetryMaxAttempts = Math.max(0, settings.nodeCapRetryMaxAttempts);
         this.nodeCapBackoffBaseMs = Math.max(0, settings.nodeCapBackoffBaseMs);
         this.nodeCapBackoffMaxMs = Math.max(this.nodeCapBackoffBaseMs, settings.nodeCapBackoffMaxMs);
-        this.plannerLimiter = new PlannerLimiter(this.plannerConcurrencyCap);
+        this.plannerLimiter = SHARED_LIMITERS.computeIfAbsent(this.plannerConcurrencyCap, PlannerLimiter::new);
     }
     
     @Override
@@ -117,7 +128,8 @@ public class PathServiceImpl implements PathService {
         }
         
         // Set village context for building footprint avoidance (T021b)
-        currentVillageContext = villageId;
+        currentVillageContext.set(villageId);
+        PerfCounters counters = countersForVillage(villageId);
         
         PathNetwork.Builder networkBuilder = new PathNetwork.Builder()
                 .villageId(villageId)
@@ -148,7 +160,7 @@ public class PathServiceImpl implements PathService {
         }
         
         // Clear village context after path generation
-        currentVillageContext = null;
+        currentVillageContext.remove();
 
         int coveragePercent = attemptedPairs > 0
             ? (int) Math.round(((double) successfulPaths / (double) attemptedPairs) * 100.0)
@@ -160,12 +172,17 @@ public class PathServiceImpl implements PathService {
             return false;
         }
         
+        PerfCounters.Snapshot metricsSummary = counters.snapshot(countCacheEntries(world.getUID()));
+        networkBuilder.metricsSummary(metricsSummary);
         PathNetwork network = networkBuilder.build();
         pathNetworks.put(villageId, network);
         // Persist network to metadata store so harness/tests can inspect deterministic results
         if (metadataStore != null) {
             metadataStore.setPathNetwork(villageId, network);
         }
+
+        LOGGER.info(String.format("[PATH] cache: hits=%d, misses=%d, entries=%d village=%s",
+            metricsSummary.getCacheHits(), metricsSummary.getCacheMisses(), metricsSummary.getCacheEntries(), villageId));
         
         double connectivity = network.calculateConnectivity(buildingLocations, mainBuildingLocation);
         LOGGER.info(String.format("[PATH] network: village=%s paths=%d/%d blocks=%d connectivity=%.0f%%",
@@ -192,48 +209,151 @@ public class PathServiceImpl implements PathService {
 
     @Override
     public Optional<List<Block>> generatePath(World world, Location start, Location end, long seed) {
-        // R007: Snap start/end to walkable surface if village context exists
+        ResolvedPathContext context = resolvePathContext(world, start, end);
+        if (context == null) {
+            return Optional.empty();
+        }
+
+        double distance = context.start.distance(context.end);
+        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
+            return Optional.empty();
+        }
+
+        UUID villageId = currentVillageContext.get();
+        if (villageId != null) {
+            return generatePathWithCaching(world, villageId, context, seed);
+        }
+
+        PathSearchResult pathResult = findPathAStarWithRetries(world, context.start, context.end, context.graph, seed, null);
+        if (!pathResult.isSuccess()) {
+            return Optional.empty();
+        }
+        return Optional.of(blocksFromPath(world, pathResult.path));
+    }
+
+    private Optional<List<Block>> generatePathWithCaching(World world, UUID villageId,
+                                                          ResolvedPathContext context, long seed) {
+        List<Location> waypoints = buildWaypointSequence(world, context, villageId);
+        PerfCounters counters = countersForVillage(villageId);
+        List<Block> combined = new ArrayList<>();
+
+        for (int index = 0; index < waypoints.size() - 1; index++) {
+            Location segmentStart = waypoints.get(index);
+            Location segmentEnd = waypoints.get(index + 1);
+            SegmentResolution resolution = resolveOrCreateSegment(world, villageId, segmentStart, segmentEnd,
+                context.graph, seed + index, counters);
+            if (resolution == null || resolution.blocks.isEmpty()) {
+                return Optional.empty();
+            }
+
+            if (!combined.isEmpty() && !resolution.blocks.isEmpty()) {
+                resolution.blocks.remove(0);
+            }
+            combined.addAll(resolution.blocks);
+        }
+
+        return combined.isEmpty() ? Optional.empty() : Optional.of(combined);
+    }
+
+    private SegmentResolution resolveOrCreateSegment(World world, UUID villageId, Location start, Location end,
+                                                     WalkableGraph graph, long seed, PerfCounters counters) {
+        UUID worldId = world.getUID();
+        SegmentKey key = SegmentKey.normalized(worldId, start, end);
+        CachedSegment cached = cacheForWorld(worldId).get(key);
+        if (cached != null) {
+            cached.registerVillage(villageId);
+            counters.recordCacheHit();
+            return new SegmentResolution(cached.materialize(world, key.isReversed(start, end)), true);
+        }
+
+        counters.recordCacheMiss();
+        PathSearchResult pathResult = findPathAStarWithRetries(world, start, end, graph, seed, villageId);
+        counters.recordPathSearch(pathResult.nodesExplored);
+        if (!pathResult.isSuccess()) {
+            return null;
+        }
+
+        List<PathCoordinate> storedCoordinates = new ArrayList<>();
+        for (PathNode node : pathResult.path) {
+            storedCoordinates.add(new PathCoordinate(node.x, node.y, node.z));
+        }
+        if (key.isReversed(start, end)) {
+            Collections.reverse(storedCoordinates);
+        }
+
+        CachedSegment created = new CachedSegment(key, storedCoordinates);
+        created.registerVillage(villageId);
+        cacheForWorld(worldId).put(key, created);
+        indexSegment(created);
+        return new SegmentResolution(created.materialize(world, key.isReversed(start, end)), false);
+    }
+
+    private ResolvedPathContext resolvePathContext(World world, Location start, Location end) {
         Location snappedStart = start;
         Location snappedEnd = end;
 
         WalkableGraph graph = null;
-        if (currentVillageContext != null && metadataStore != null) {
-            List<VolumeMask> masks = metadataStore.getVolumeMasks(currentVillageContext);
-            SurfaceSolver solver = new SurfaceSolver(world, masks);
-            graph = new WalkableGraph(solver, masks, 2); // Buffer=2
+        UUID villageContext = currentVillageContext.get();
+        SurfaceSolver solver = null;
+        if (villageContext != null && metadataStore != null) {
+            List<VolumeMask> masks = metadataStore.getVolumeMasks(villageContext);
+            solver = new SurfaceSolver(world, masks);
+            graph = new WalkableGraph(solver, masks, 2);
 
             Optional<Location> resolvedStart = resolveEndpointOutsideMasks(world, solver, graph, start, 32);
             Optional<Location> resolvedEnd = resolveEndpointOutsideMasks(world, solver, graph, end, 32);
             if (resolvedStart.isEmpty() || resolvedEnd.isEmpty()) {
                 LOGGER.warning(String.format("[PATH] Unable to resolve walkable endpoints for path: start=%s end=%s",
                     formatLocation(start), formatLocation(end)));
-                return Optional.empty();
+                return null;
             }
             snappedStart = resolvedStart.get();
             snappedEnd = resolvedEnd.get();
         }
 
-        double distance = snappedStart.distance(snappedEnd);
-        if (distance > MAX_SEARCH_DISTANCE || distance < 3) {
-            return Optional.empty();
+        return new ResolvedPathContext(snappedStart, snappedEnd, graph, solver);
+    }
+
+    private List<Location> buildWaypointSequence(World world, ResolvedPathContext context, UUID villageId) {
+        List<Location> waypoints = new ArrayList<>();
+        waypoints.add(context.start);
+
+        double distance = context.start.distance(context.end);
+        if (distance > WAYPOINT_SEGMENT_THRESHOLD && context.solver != null && context.graph != null) {
+            double deltaX = context.end.getX() - context.start.getX();
+            double deltaY = context.end.getY() - context.start.getY();
+            double deltaZ = context.end.getZ() - context.start.getZ();
+
+            for (double travelled = WAYPOINT_INTERVAL_BLOCKS; travelled < distance; travelled += WAYPOINT_INTERVAL_BLOCKS) {
+                double t = travelled / distance;
+                Location raw = new Location(world,
+                    Math.round(context.start.getX() + (deltaX * t)),
+                    Math.round(context.start.getY() + (deltaY * t)),
+                    Math.round(context.start.getZ() + (deltaZ * t)));
+                Optional<Location> resolved = resolveEndpointOutsideMasks(world, context.solver, context.graph, raw, 12);
+                if (resolved.isPresent() && !sameBlock(waypoints.get(waypoints.size() - 1), resolved.get())
+                        && !sameBlock(context.end, resolved.get())) {
+                    waypoints.add(resolved.get());
+                }
+            }
         }
 
-        PathSearchResult pathResult = findPathAStarWithRetries(world, snappedStart, snappedEnd, graph, seed);
-        if (!pathResult.isSuccess()) {
-            return Optional.empty();
+        if (!sameBlock(waypoints.get(waypoints.size() - 1), context.end)) {
+            waypoints.add(context.end);
         }
-        List<PathNode> path = pathResult.path;
-        
-        if (path == null || path.isEmpty()) {
-            return Optional.empty();
-        }
-        
+        return waypoints;
+    }
+
+    private boolean sameBlock(Location a, Location b) {
+        return a.getBlockX() == b.getBlockX() && a.getBlockY() == b.getBlockY() && a.getBlockZ() == b.getBlockZ();
+    }
+
+    private List<Block> blocksFromPath(World world, List<PathNode> path) {
         List<Block> pathBlocks = new ArrayList<>();
         for (PathNode node : path) {
             pathBlocks.add(world.getBlockAt(node.x, node.y, node.z));
         }
-        
-        return Optional.of(pathBlocks);
+        return pathBlocks;
     }
 
     private Optional<Location> resolveEndpointOutsideMasks(World world, SurfaceSolver solver, WalkableGraph graph,
@@ -301,13 +421,13 @@ public class PathServiceImpl implements PathService {
      * Returns list of path nodes from start to end, or null if no path found.
      */
     private PathSearchResult findPathAStarWithRetries(World world, Location start, Location end,
-                                                      WalkableGraph graph, long seed) {
+                                                      WalkableGraph graph, long seed, UUID villageId) {
         int attempt = 0;
         int maxAttempts = Math.max(0, nodeCapRetryMaxAttempts);
 
         while (true) {
             int nodeCap = computeNodeCapForAttempt(attempt);
-            try (PlannerPermit permit = plannerLimiter.acquire()) {
+            try (PlannerPermit permit = plannerLimiter.acquire(villageId)) {
                 PathSearchResult result = findPathAStar(world, start, end, graph, nodeCap);
                 if (result.isSuccess()) {
                     return result;
@@ -356,7 +476,6 @@ public class PathServiceImpl implements PathService {
         int startZ = start.getBlockZ();
         
         int endX = end.getBlockX();
-        int endY = end.getBlockY();
         int endZ = end.getBlockZ();
         
         PathNode startNode = new PathNode(startX, startY, startZ);
@@ -367,7 +486,6 @@ public class PathServiceImpl implements PathService {
         allNodes.put(startNode.key(), startNode);
         
         int nodesExplored = 0;
-        int obstaclesEncountered = 0;
         int buildingTilesAvoided = 0; // T021b: count building footprint obstacles
         double maxTerrainCostSeen = 0.0;
         
@@ -416,7 +534,6 @@ public class PathServiceImpl implements PathService {
                 
                 // Skip if terrain is impassable
                 if (movementCost >= OBSTACLE_COST) {
-                    obstaclesEncountered++;
                     continue;
                 }
                 
@@ -561,27 +678,7 @@ public class PathServiceImpl implements PathService {
     
     @Override
     public int placePath(World world, List<Block> pathBlocks, String cultureId) {
-        if (pathBlocks.isEmpty()) {
-            return 0;
-        }
-        
-        // Determine path material based on culture
-        Material pathMaterial = getPathMaterial(cultureId);
-        
-        int blocksPlaced = 0;
-        for (Block block : pathBlocks) {
-            Block ground = block.getRelative(BlockFace.DOWN);
-            block.setType(pathMaterial);
-            blocksPlaced++;
-            
-            if (!ground.getType().isSolid()) {
-                ground.setType(Material.DIRT);
-            }
-        }
-        
-        blocksPlaced += smoothPath(world, pathBlocks);
-        
-        return blocksPlaced;
+        return pathEmitter.emitPathWithSmoothing(world, pathBlocks, cultureId, Collections.emptyList());
     }
     
     /**
@@ -603,35 +700,7 @@ public class PathServiceImpl implements PathService {
     
     @Override
     public int smoothPath(World world, List<Block> pathBlocks) {
-        if (pathBlocks.size() < 2) {
-            return 0;
-        }
-        
-        int blocksSmoothed = 0;
-        
-        for (int i = 1; i < pathBlocks.size() - 1; i++) {
-            Block current = pathBlocks.get(i);
-            Block prev = pathBlocks.get(i - 1);
-            Block next = pathBlocks.get(i + 1);
-            
-            int yDiffPrev = current.getY() - prev.getY();
-            int yDiffNext = next.getY() - current.getY();
-            
-            // Add stairs for single-block elevation changes
-            if (Math.abs(yDiffPrev) == 1 || Math.abs(yDiffNext) == 1) {
-                if (tryPlaceStairs(current, prev, next)) {
-                    blocksSmoothed++;
-                }
-            }
-            // Add slabs for half-block smoothing
-            else if (Math.abs(yDiffPrev) == 0 && Math.abs(yDiffNext) == 0) {
-                if (tryPlaceSlab(current)) {
-                    blocksSmoothed++;
-                }
-            }
-        }
-        
-        return blocksSmoothed;
+        return pathEmitter.smoothPath(world, pathBlocks, null);
     }
     
     /**
@@ -754,6 +823,136 @@ public class PathServiceImpl implements PathService {
         }
         return Long.toHexString(hash);
     }
+
+    public static PerfCounters.Snapshot getPathMetrics(UUID villageId) {
+        PerfCounters counters = VILLAGE_COUNTERS.get(villageId);
+        return counters != null ? counters.snapshot(getTotalCacheEntries()) : PerfCounters.Snapshot.empty();
+    }
+
+    public static void resetPathMetrics() {
+        VILLAGE_COUNTERS.values().forEach(PerfCounters::reset);
+    }
+
+    public static void resetPathMetrics(UUID villageId) {
+        PerfCounters counters = VILLAGE_COUNTERS.get(villageId);
+        if (counters != null) {
+            counters.reset();
+        }
+    }
+
+    public static void resetPathState() {
+        resetPathMetrics();
+        SEGMENT_CACHE.clear();
+        SEGMENT_INDEX.clear();
+        SHARED_LIMITERS.clear();
+    }
+
+    static void resetPathStateForTests() {
+        resetPathState();
+    }
+
+    public static InvalidationResult invalidateSegmentCache(World world, int minX, int maxX, int minZ, int maxZ,
+                                                            String reason) {
+        UUID worldId = world.getUID();
+        Map<SegmentKey, CachedSegment> cache = cacheForWorld(worldId);
+        if (cache.isEmpty()) {
+            return new InvalidationResult(0, reason, minX, maxX, minZ, maxZ);
+        }
+
+        Set<SegmentKey> candidateKeys = new HashSet<>();
+        Map<String, Set<SegmentKey>> index = indexForWorld(worldId);
+        int minBucketX = Math.floorDiv(minX, CACHE_BUCKET_SIZE);
+        int maxBucketX = Math.floorDiv(maxX, CACHE_BUCKET_SIZE);
+        int minBucketZ = Math.floorDiv(minZ, CACHE_BUCKET_SIZE);
+        int maxBucketZ = Math.floorDiv(maxZ, CACHE_BUCKET_SIZE);
+        for (int bucketX = minBucketX; bucketX <= maxBucketX; bucketX++) {
+            for (int bucketZ = minBucketZ; bucketZ <= maxBucketZ; bucketZ++) {
+                candidateKeys.addAll(index.getOrDefault(bucketKey(bucketX, bucketZ), Collections.emptySet()));
+            }
+        }
+
+        int removed = 0;
+        for (SegmentKey key : candidateKeys) {
+            CachedSegment cached = cache.get(key);
+            if (cached == null || !cached.intersects(minX, maxX, minZ, maxZ)) {
+                continue;
+            }
+            cache.remove(key);
+            unindexSegment(cached);
+            removed++;
+            for (UUID villageId : cached.getVillages()) {
+                countersForVillage(villageId).recordInvalidationEvent();
+            }
+        }
+
+        if (removed > 0) {
+            LOGGER.info(String.format("[PATH] cache invalidated: segments=%d, reason=%s, bounds=(%d..%d,%d..%d)",
+                removed, reason, minX, maxX, minZ, maxZ));
+        }
+
+        return new InvalidationResult(removed, reason, minX, maxX, minZ, maxZ);
+    }
+
+    AutoCloseable acquirePlannerPermitForTesting(UUID villageId) {
+        return plannerLimiter.acquire(villageId);
+    }
+
+    PlannerStateSnapshot getPlannerStateSnapshot() {
+        return plannerLimiter.snapshot();
+    }
+
+    static SegmentKey createNormalizedSegmentKey(World world, Location start, Location end) {
+        return SegmentKey.normalized(world.getUID(), start, end);
+    }
+
+    private static PerfCounters countersForVillage(UUID villageId) {
+        return VILLAGE_COUNTERS.computeIfAbsent(villageId, ignored -> new PerfCounters());
+    }
+
+    private static Map<SegmentKey, CachedSegment> cacheForWorld(UUID worldId) {
+        return SEGMENT_CACHE.computeIfAbsent(worldId, ignored -> new ConcurrentHashMap<>());
+    }
+
+    private static Map<String, Set<SegmentKey>> indexForWorld(UUID worldId) {
+        return SEGMENT_INDEX.computeIfAbsent(worldId, ignored -> new ConcurrentHashMap<>());
+    }
+
+    private static void indexSegment(CachedSegment segment) {
+        Map<String, Set<SegmentKey>> index = indexForWorld(segment.key.worldId);
+        for (String bucket : segment.bucketKeys()) {
+            index.computeIfAbsent(bucket, ignored -> ConcurrentHashMap.newKeySet()).add(segment.key);
+        }
+    }
+
+    private static void unindexSegment(CachedSegment segment) {
+        Map<String, Set<SegmentKey>> index = indexForWorld(segment.key.worldId);
+        for (String bucket : segment.bucketKeys()) {
+            Set<SegmentKey> keys = index.get(bucket);
+            if (keys == null) {
+                continue;
+            }
+            keys.remove(segment.key);
+            if (keys.isEmpty()) {
+                index.remove(bucket);
+            }
+        }
+    }
+
+    private static int countCacheEntries(UUID worldId) {
+        return cacheForWorld(worldId).size();
+    }
+
+    private static int getTotalCacheEntries() {
+        int total = 0;
+        for (Map<SegmentKey, CachedSegment> cache : SEGMENT_CACHE.values()) {
+            total += cache.size();
+        }
+        return total;
+    }
+
+    private static String bucketKey(int bucketX, int bucketZ) {
+        return bucketX + ":" + bucketZ;
+    }
     
     /**
      * Simple node class for A* pathfinding.
@@ -772,6 +971,191 @@ public class PathServiceImpl implements PathService {
         
         String key() {
             return x + "," + y + "," + z;
+        }
+    }
+
+    static final class PlannerStateSnapshot {
+        private final int active;
+        private final int queued;
+        private final int cap;
+
+        private PlannerStateSnapshot(int active, int queued, int cap) {
+            this.active = active;
+            this.queued = queued;
+            this.cap = cap;
+        }
+
+        int getActive() {
+            return active;
+        }
+
+        int getQueued() {
+            return queued;
+        }
+
+        int getCap() {
+            return cap;
+        }
+    }
+
+    public static final class InvalidationResult {
+        private final int segmentsRemoved;
+
+        private InvalidationResult(int segmentsRemoved, String reason, int minX, int maxX, int minZ, int maxZ) {
+            this.segmentsRemoved = segmentsRemoved;
+        }
+
+        public int getSegmentsRemoved() {
+            return segmentsRemoved;
+        }
+    }
+
+    static final class SegmentKey {
+        private final UUID worldId;
+        private final int startX;
+        private final int startZ;
+        private final int endX;
+        private final int endZ;
+
+        private SegmentKey(UUID worldId, int startX, int startZ, int endX, int endZ) {
+            this.worldId = worldId;
+            this.startX = startX;
+            this.startZ = startZ;
+            this.endX = endX;
+            this.endZ = endZ;
+        }
+
+        static SegmentKey normalized(UUID worldId, Location start, Location end) {
+            int ax = start.getBlockX();
+            int az = start.getBlockZ();
+            int bx = end.getBlockX();
+            int bz = end.getBlockZ();
+            boolean reverse = ax > bx || (ax == bx && az > bz);
+            return reverse ? new SegmentKey(worldId, bx, bz, ax, az) : new SegmentKey(worldId, ax, az, bx, bz);
+        }
+
+        boolean isReversed(Location start, Location end) {
+            return start.getBlockX() != startX || start.getBlockZ() != startZ
+                || end.getBlockX() != endX || end.getBlockZ() != endZ;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof SegmentKey)) {
+                return false;
+            }
+            SegmentKey that = (SegmentKey) other;
+            return startX == that.startX && startZ == that.startZ && endX == that.endX
+                && endZ == that.endZ && Objects.equals(worldId, that.worldId);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(worldId, startX, startZ, endX, endZ);
+        }
+    }
+
+    private static final class CachedSegment {
+        private final SegmentKey key;
+        private final List<PathCoordinate> coordinates;
+        private final int minX;
+        private final int maxX;
+        private final int minZ;
+        private final int maxZ;
+        private final Set<UUID> villages = ConcurrentHashMap.newKeySet();
+
+        private CachedSegment(SegmentKey key, List<PathCoordinate> coordinates) {
+            this.key = key;
+            this.coordinates = Collections.unmodifiableList(new ArrayList<>(coordinates));
+            int localMinX = Integer.MAX_VALUE;
+            int localMaxX = Integer.MIN_VALUE;
+            int localMinZ = Integer.MAX_VALUE;
+            int localMaxZ = Integer.MIN_VALUE;
+            for (PathCoordinate coordinate : coordinates) {
+                localMinX = Math.min(localMinX, coordinate.x);
+                localMaxX = Math.max(localMaxX, coordinate.x);
+                localMinZ = Math.min(localMinZ, coordinate.z);
+                localMaxZ = Math.max(localMaxZ, coordinate.z);
+            }
+            this.minX = localMinX;
+            this.maxX = localMaxX;
+            this.minZ = localMinZ;
+            this.maxZ = localMaxZ;
+        }
+
+        void registerVillage(UUID villageId) {
+            villages.add(villageId);
+        }
+
+        Set<UUID> getVillages() {
+            return villages;
+        }
+
+        boolean intersects(int otherMinX, int otherMaxX, int otherMinZ, int otherMaxZ) {
+            return minX <= otherMaxX && maxX >= otherMinX && minZ <= otherMaxZ && maxZ >= otherMinZ;
+        }
+
+        List<String> bucketKeys() {
+            List<String> keys = new ArrayList<>();
+            int minBucketX = Math.floorDiv(minX, CACHE_BUCKET_SIZE);
+            int maxBucketX = Math.floorDiv(maxX, CACHE_BUCKET_SIZE);
+            int minBucketZ = Math.floorDiv(minZ, CACHE_BUCKET_SIZE);
+            int maxBucketZ = Math.floorDiv(maxZ, CACHE_BUCKET_SIZE);
+            for (int bucketX = minBucketX; bucketX <= maxBucketX; bucketX++) {
+                for (int bucketZ = minBucketZ; bucketZ <= maxBucketZ; bucketZ++) {
+                    keys.add(bucketKey(bucketX, bucketZ));
+                }
+            }
+            return keys;
+        }
+
+        List<Block> materialize(World world, boolean reverse) {
+            List<Block> blocks = new ArrayList<>();
+            List<PathCoordinate> source = reverse ? new ArrayList<>(coordinates) : coordinates;
+            if (reverse) {
+                Collections.reverse(source);
+            }
+            for (PathCoordinate coordinate : source) {
+                blocks.add(world.getBlockAt(coordinate.x, coordinate.y, coordinate.z));
+            }
+            return blocks;
+        }
+    }
+
+    private static final class PathCoordinate {
+        private final int x;
+        private final int y;
+        private final int z;
+
+        private PathCoordinate(int x, int y, int z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    private static final class SegmentResolution {
+        private final List<Block> blocks;
+
+        private SegmentResolution(List<Block> blocks, boolean cacheHit) {
+            this.blocks = blocks;
+        }
+    }
+
+    private static final class ResolvedPathContext {
+        private final Location start;
+        private final Location end;
+        private final WalkableGraph graph;
+        private final SurfaceSolver solver;
+
+        private ResolvedPathContext(Location start, Location end, WalkableGraph graph, SurfaceSolver solver) {
+            this.start = start;
+            this.end = end;
+            this.graph = graph;
+            this.solver = solver;
         }
     }
 
@@ -813,12 +1197,13 @@ public class PathServiceImpl implements PathService {
             this.semaphore = new Semaphore(cap, true);
         }
 
-        private PlannerPermit acquire() {
+        private PlannerPermit acquire(UUID villageId) {
             boolean acquired = semaphore.tryAcquire();
             if (!acquired) {
                 int queuedNow = queued.incrementAndGet();
                 LOGGER.info(String.format("[PATH] planner queued: active=%d queued=%d cap=%d",
                     active.get(), queuedNow, cap));
+                long waitStarted = System.nanoTime();
                 try {
                     semaphore.acquire();
                 } catch (InterruptedException e) {
@@ -826,6 +1211,10 @@ public class PathServiceImpl implements PathService {
                     return new PlannerPermit(this, false);
                 } finally {
                     queued.decrementAndGet();
+                    if (villageId != null) {
+                        long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted);
+                        countersForVillage(villageId).recordPlannerQueueWait(waitedMs);
+                    }
                 }
             }
 
@@ -835,9 +1224,13 @@ public class PathServiceImpl implements PathService {
             return new PlannerPermit(this, true);
         }
 
+        private PlannerStateSnapshot snapshot() {
+            return new PlannerStateSnapshot(active.get(), queued.get(), cap);
+        }
+
         private void release() {
-            semaphore.release();
             int activeNow = active.decrementAndGet();
+            semaphore.release();
             LOGGER.info(String.format("[PATH] planners: active=%d queued=%d cap=%d",
                 activeNow, queued.get(), cap));
         }

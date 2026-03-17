@@ -1,6 +1,6 @@
 ---
 name: agentic_toolchain
-description: "Use when setting up or repairing AI agent productivity in this workspace, or when choosing between Serena, Context7, GitHub, specBillineirePlaytest, and shell fallbacks for the current task."
+description: "Use when setting up or repairing AI agent productivity in this workspace, or when choosing between Serena, Context7, GitHub, and shell fallbacks for the current task."
 ---
 
 # Agentic Toolchain
@@ -11,7 +11,7 @@ Use this skill for workspace-level agent enablement, not for normal feature work
 
 - Keep the Windows CLI toolchain usable for both humans and agents: `rg`, `fd`, `jq`, `delta`, `aider`, `gemini`, `mcp-inspector`.
 - Treat `.vscode/mcp.json` as the shared source of truth for workspace MCP servers.
-- Prefer no-secret servers first: `github`, `context7`, `specBillineirePlaytest`, and `serena`.
+- Prefer no-secret servers first: `github`, `context7`, and `serena`.
 
 ## Bootstrap
 
@@ -21,7 +21,7 @@ Use this skill for workspace-level agent enablement, not for normal feature work
 
 ## Workspace-Specific Priorities
 
-- The highest-value custom server here is `specBillineirePlaytest`; it wraps Gradle, JAR deployment, headless Paper scenarios, and direct RCON access.
+- Use terminal shell commands for build and playtest workflows (e.g., `./gradlew clean build`, `scripts/ci/sim/*`).
 - Use `context7` for current API and library docs.
 - Use `github` for repository metadata, issues, pull requests, and search.
 - Use `serena` when symbol-level navigation/editing is better than file-level grep.
@@ -29,7 +29,7 @@ Use this skill for workspace-level agent enablement, not for normal feature work
 ## Tool Routing
 
 - Use `serena` first for non-trivial code navigation or editing across Java, Kotlin, JSON, YAML, Markdown, or mixed multi-file tasks.
-- Use `specBillineirePlaytest` first for build, deploy, test, headless scenario, fast generation, RCON, and latest-log inspection tasks.
+- Use terminal scripts (e.g., `./gradlew clean build`, `scripts/ci/sim/*`) for build, deploy, test, and playtest tasks.
 - Use `context7` first for version-sensitive upstream docs or examples.
 - Use `github` first for issue, pull request, branch, release, and repository search work.
 - Use shell fallbacks only when the preferred MCP or semantic tool is unavailable or clearly overkill.

@@ -8,8 +8,17 @@ import shutil
 import socket
 import struct
 import subprocess
+import threading
 import time
 from typing import Any
+
+# This module is intentionally disabled: the local specBillineirePlaytest MCP server
+# tooling proved unreliable and is no longer supported. Run the repository's shell
+# build/test/playtest scripts directly instead (e.g., `./gradlew clean build`,
+# `scripts/ci/sim/*`).
+raise RuntimeError(
+    "The specBillineirePlaytest MCP server has been disabled; use terminal scripts instead."
+)
 
 from mcp.server.fastmcp import FastMCP
 
@@ -96,41 +105,75 @@ def _powershell_exe() -> str:
 
 def _run_command(command: list[str], cwd: Path, timeout_seconds: int) -> CommandResult:
     started = time.time()
+
+    # Use a streaming approach to avoid deadlocking when the subprocess emits large
+    # amounts of output (which can fill OS pipe buffers if captured all at once).
+    max_tail_chars = 12000
+    stdout_tail = ""
+    stderr_tail = ""
+
+    def _append_tail(tail: str, chunk: str) -> str:
+        if not chunk:
+            return tail
+        tail += chunk
+        if len(tail) > max_tail_chars:
+            tail = tail[-max_tail_chars:]
+        return tail
+
+    def _reader(pipe, append_fn):
+        nonlocal stdout_tail, stderr_tail
+        try:
+            for line in iter(pipe.readline, ""):
+                if not line:
+                    break
+                if append_fn is stdout_tail_append:
+                    stdout_tail = append_fn(stdout_tail, line)
+                else:
+                    stderr_tail = append_fn(stderr_tail, line)
+        finally:
+            pipe.close()
+
+    def stdout_tail_append(tail: str, chunk: str) -> str:
+        return _append_tail(tail, chunk)
+
+    def stderr_tail_append(tail: str, chunk: str) -> str:
+        return _append_tail(tail, chunk)
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    stdout_thread = threading.Thread(target=_reader, args=(process.stdout, stdout_tail_append))
+    stderr_thread = threading.Thread(target=_reader, args=(process.stderr, stderr_tail_append))
+    stdout_thread.start()
+    stderr_thread.start()
+
     try:
-        completed = subprocess.run(
-            command,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_seconds,
-            check=False,
-        )
-        duration = round(time.time() - started, 2)
-        return CommandResult(
-            command=command,
-            cwd=str(cwd),
-            exit_code=completed.returncode,
-            duration_seconds=duration,
-            stdout_tail=_tail_text(_sanitize_text(completed.stdout)),
-            stderr_tail=_tail_text(_sanitize_text(completed.stderr)),
-        )
-    except subprocess.TimeoutExpired as exc:
-        duration = round(time.time() - started, 2)
-        stdout = _sanitize_text(exc.stdout or "")
-        stderr = _sanitize_text(exc.stderr or "")
-        timeout_message = f"Command timed out after {timeout_seconds}s"
-        stdout_tail = _tail_text(f"{stdout}\n{timeout_message}" if stdout else timeout_message)
-        stderr_tail = _tail_text(stderr)
-        return CommandResult(
-            command=command,
-            cwd=str(cwd),
-            exit_code=124,
-            duration_seconds=duration,
-            stdout_tail=stdout_tail,
-            stderr_tail=stderr_tail,
-        )
+        exit_code = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        exit_code = 124
+    finally:
+        # Ensure we flush any remaining output
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+
+    duration = round(time.time() - started, 2)
+
+    return CommandResult(
+        command=command,
+        cwd=str(cwd),
+        exit_code=exit_code,
+        duration_seconds=duration,
+        stdout_tail=_tail_text(_sanitize_text(stdout_tail)),
+        stderr_tail=_tail_text(_sanitize_text(stderr_tail)),
+    )
 
 
 def _latest_plugin_jar() -> Path:

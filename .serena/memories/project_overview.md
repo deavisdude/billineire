@@ -1,0 +1,3 @@
+- Purpose: Paper Minecraft plugin for seeded village generation, structures, paths, villagers, onboarding, and later trade-funded upgrades.
+- Stack: Java 17+, Gradle plugin project, Paper API, optional WorldEdit/FAWE, Adventure API, Jackson/Gson.
+- Layout: main code under plugin/src/main/java, tests under plugin/src/test/java, specs under specs/, headless harness under scripts/ci/sim/ and test-server/.

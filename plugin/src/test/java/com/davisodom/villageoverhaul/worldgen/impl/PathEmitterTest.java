@@ -323,6 +323,157 @@ public class PathEmitterTest {
     }
 
     @Test
+    @DisplayName("emitPath removes connected tree components instead of leaving partial trees")
+    public void testEmitPath_removesConnectedTreeComponents() {
+        makeFlatGround(540, 540, 540, 540, 64);
+        ensureBlock(540, 65, 540).type = Material.OAK_LOG; toMock(ensureBlock(540, 65, 540));
+        ensureBlock(540, 66, 540).type = Material.OAK_LOG; toMock(ensureBlock(540, 66, 540));
+        ensureBlock(540, 67, 540).type = Material.OAK_LEAVES; toMock(ensureBlock(540, 67, 540));
+        ensureBlock(541, 67, 540).type = Material.OAK_LEAVES; toMock(ensureBlock(541, 67, 540));
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return toMock(ensureBlock(x, y, z));
+        });
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int z = inv.getArgument(1);
+            return blocks.entrySet().stream()
+                    .map(Map.Entry::getValue)
+                    .filter(mb -> mb.x == x && mb.z == z && mb.type != Material.AIR)
+                    .mapToInt(mb -> mb.y)
+                    .max().orElse(0);
+        });
+
+        int placed = emitter.emitPath(world,
+            Collections.singletonList(toMock(ensureBlock(540, 65, 540))),
+            "default",
+            Collections.emptyList());
+
+        assertEquals(1, placed, "Expected the path to reroute to the natural ground after tree removal");
+        assertEquals(Material.DIRT_PATH, world.getBlockAt(540, 64, 540).getType());
+        assertEquals(Material.AIR, world.getBlockAt(540, 65, 540).getType(), "Tree trunk base should be removed");
+        assertEquals(Material.AIR, world.getBlockAt(540, 66, 540).getType(), "Connected trunk blocks should be removed");
+        assertEquals(Material.AIR, world.getBlockAt(540, 67, 540).getType(), "Connected canopy should be removed");
+        assertEquals(Material.AIR, world.getBlockAt(541, 67, 540).getType(), "Adjacent connected leaves should be removed");
+    }
+
+    @Test
+    @DisplayName("emitPath removes the full height of connected trees beyond the immediate path corridor")
+    public void testEmitPath_removesTallConnectedTreeComponents() {
+        makeFlatGround(545, 545, 545, 545, 64);
+        for (int y = 65; y <= 77; y++) {
+            ensureBlock(545, y, 545).type = Material.OAK_LOG; toMock(ensureBlock(545, y, 545));
+        }
+        ensureBlock(545, 78, 545).type = Material.OAK_LEAVES; toMock(ensureBlock(545, 78, 545));
+        ensureBlock(546, 78, 545).type = Material.OAK_LEAVES; toMock(ensureBlock(546, 78, 545));
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return toMock(ensureBlock(x, y, z));
+        });
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int z = inv.getArgument(1);
+            return blocks.entrySet().stream()
+                    .map(Map.Entry::getValue)
+                    .filter(mb -> mb.x == x && mb.z == z && mb.type != Material.AIR)
+                    .mapToInt(mb -> mb.y)
+                    .max().orElse(0);
+        });
+
+        int placed = emitter.emitPath(world,
+            Collections.singletonList(toMock(ensureBlock(545, 65, 545))),
+            "default",
+            Collections.emptyList());
+
+        assertEquals(1, placed, "Expected the path to reroute onto the natural ground after full tree removal");
+        assertEquals(Material.DIRT_PATH, world.getBlockAt(545, 64, 545).getType());
+        assertEquals(Material.AIR, world.getBlockAt(545, 77, 545).getType(),
+            "Tall connected trunk blocks should be removed, not clipped midway");
+        assertEquals(Material.AIR, world.getBlockAt(545, 78, 545).getType(),
+            "Connected canopy above the old corridor radius should also be removed");
+        assertEquals(Material.AIR, world.getBlockAt(546, 78, 545).getType(),
+            "Adjacent tall-canopy leaves should also be removed");
+    }
+
+    @Test
+    @DisplayName("emitPath embeds full-block roads below snow cover instead of perching on top")
+    public void testEmitPath_embedsBelowSnowCover() {
+        makeFlatGround(520, 520, 520, 520, 64);
+        ensureBlock(520, 65, 520).type = Material.SNOW; toMock(ensureBlock(520, 65, 520));
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return toMock(ensureBlock(x, y, z));
+        });
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int z = inv.getArgument(1);
+            return blocks.entrySet().stream()
+                    .map(Map.Entry::getValue)
+                    .filter(mb -> mb.x == x && mb.z == z && mb.type != Material.AIR)
+                    .mapToInt(mb -> mb.y)
+                    .max().orElse(0);
+        });
+
+        int placed = emitter.emitPath(world,
+            Collections.singletonList(toMock(ensureBlock(520, 65, 520))),
+            "roman",
+            Collections.emptyList());
+
+        assertEquals(1, placed, "Expected exactly one embedded path placement");
+        assertEquals(Material.COBBLESTONE, world.getBlockAt(520, 64, 520).getType(),
+            "Road should replace the true ground surface below the snow layer");
+        assertEquals(Material.AIR, world.getBlockAt(520, 65, 520).getType(),
+            "Transient snow cover above the embedded road should be cleared");
+    }
+
+    @Test
+    @DisplayName("emitPathWithSmoothing smooths the realized embedded blocks rather than the original planned Y")
+    public void testEmitPathWithSmoothing_usesResolvedEmbeddedBlocks() {
+        makeFlatGround(530, 536, 530, 530, 64);
+        for (int x = 530; x <= 536; x++) {
+            ensureBlock(x, 65, 530).type = Material.SNOW; toMock(ensureBlock(x, 65, 530));
+        }
+
+        Mockito.when(world.getBlockAt(Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int y = inv.getArgument(1);
+            int z = inv.getArgument(2);
+            return toMock(ensureBlock(x, y, z));
+        });
+        Mockito.when(world.getHighestBlockYAt(Mockito.anyInt(), Mockito.anyInt())).thenAnswer(inv -> {
+            int x = inv.getArgument(0);
+            int z = inv.getArgument(1);
+            return blocks.entrySet().stream()
+                    .map(Map.Entry::getValue)
+                    .filter(mb -> mb.x == x && mb.z == z && mb.type != Material.AIR)
+                    .mapToInt(mb -> mb.y)
+                    .max().orElse(0);
+        });
+
+        List<Block> path = new ArrayList<>();
+        for (int x = 530; x <= 536; x++) {
+            path.add(toMock(ensureBlock(x, 65, 530)));
+        }
+
+        int totalPlaced = emitter.emitPathWithSmoothing(world, path, "default", Collections.emptyList());
+
+        assertTrue(totalPlaced >= path.size(), "Emission plus smoothing should affect the embedded path line");
+        assertEquals(Material.STONE_BRICK_SLAB, world.getBlockAt(535, 64, 530).getType(),
+            "Smoothing should occur on the embedded ground-level road block");
+        assertEquals(Material.AIR, world.getBlockAt(535, 65, 530).getType(),
+            "The original planned Y should remain clear after smoothing uses the realized embedded blocks");
+    }
+
+    @Test
     @DisplayName("smoothPath skips stairs when below block is not a whitelisted surface")
     public void testSmoothPath_skipsUnsupportedSurface() {
         ensureBlock(600, 63, 600).type = Material.DIRT; toMock(ensureBlock(600, 63, 600));

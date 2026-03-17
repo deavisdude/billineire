@@ -215,6 +215,15 @@ public class StructureServiceImpl implements StructureService {
         bathhouse.entranceOffset = BlockVector3.at(7, 1, 0);
         bathhouse.entranceFacing = BlockVector3.at(0, 0, -1);
         loadedStructures.put("building_roman_bathhouse", bathhouse);
+
+        // Main civic building – placed by buildRomanHouse("generic") which produces a large hall.
+        // 21x10x21 footprint (441 > LARGE_STRUCTURE_THRESHOLD) triggers planFoundationFilling.
+        StructureTemplate forum = new StructureTemplate();
+        forum.id = "building_roman_forum";
+        forum.dimensions = new int[]{21, 10, 21};
+        forum.entranceOffset = BlockVector3.at(10, 1, 0);
+        forum.entranceFacing = BlockVector3.at(0, 0, -1);
+        loadedStructures.put("building_roman_forum", forum);
         
         LOGGER.info(String.format("[STRUCT] Loaded %d Roman structure templates", loadedStructures.size()));
     }
@@ -644,6 +653,8 @@ public class StructureServiceImpl implements StructureService {
              emitTerraformingDiagnostic(template.id, bounds, terraformPlan, terraformPlan.isCommitted(), terraformPlan.isRolledBack());
              return Optional.empty();
          }
+
+         PathServiceImpl.invalidateSegmentCache(world, bounds[0], bounds[1], bounds[4], bounds[5], "terraform");
          
          // Sample foundation corners AFTER terraform commit
          LOGGER.info("[DIAG-PLACEMENT] postCommit sampling");
@@ -686,6 +697,8 @@ public class StructureServiceImpl implements StructureService {
         
         // T051: Emit diagnostic artifact showing successful terraforming aligned with placement
         emitTerraformingDiagnostic(template.id, bounds, terraformPlan, true, false);
+
+        PathServiceImpl.invalidateSegmentCache(world, bounds[0], bounds[1], bounds[4], bounds[5], "structure");
         
         LOGGER.info(String.format("[STRUCT] Placement successful: structure='%s', location=%s, seed=%d",
                 template.id, formatLocation(origin), seed));
@@ -873,6 +886,8 @@ public class StructureServiceImpl implements StructureService {
              BlockVector3 weOrigin = BlockVector3.at(origin.getBlockX(), origin.getBlockY(), origin.getBlockZ());
              LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: weOrigin=%s", weOrigin));
              LOGGER.info(String.format("[DIAG-PLACEMENT] weOrigin=(%d,%d,%d)", weOrigin.getX(), weOrigin.getY(), weOrigin.getZ()));
+             int[] sampleBounds = computeAABB(origin, template.clipboard, template.dimensions[0],
+                 template.dimensions[2], template.dimensions[1], rotationDegrees);
              
              LOGGER.info("[STRUCT] DIAGNOSTIC: Creating EditSession");
              try (EditSession editSession = WorldEdit.getInstance().newEditSession(weWorld)) {
@@ -896,39 +911,38 @@ public class StructureServiceImpl implements StructureService {
                  LOGGER.info("[STRUCT] DIAGNOSTIC: Calling Operations.complete()");
                  Operations.complete(operation);
                  LOGGER.info("[STRUCT] DIAGNOSTIC: Operations.complete() finished successfully");
-                 
-                 // Sample foundation corners AFTER paste
-                 LOGGER.info("[DIAG-PLACEMENT] postPaste sampling");
-                 int[] sampleBounds = template.clipboard != null 
-                     ? computeAABB(origin, template.clipboard, template.dimensions[0], template.dimensions[2], template.dimensions[1], rotationDegrees)
-                     : new int[]{origin.getBlockX(), origin.getBlockX(), origin.getBlockY(), origin.getBlockY(), origin.getBlockZ(), origin.getBlockZ()};
-                 for (int sample = 0; sample < 4; sample++) {
-                     int sx = (sample < 2) ? sampleBounds[0] : sampleBounds[1];
-                     int sz = (sample % 2 == 0) ? sampleBounds[4] : sampleBounds[5];
-                     int postY = world.getHighestBlockYAt(sx, sz);
-                     org.bukkit.Material postType = world.getBlockAt(sx, postY, sz).getType();
-                     org.bukkit.Material postAtMinY = world.getBlockAt(sx, sampleBounds[2], sz).getType();
-                     LOGGER.info(String.format("[DIAG-PLACEMENT] postPaste sample corner=%d pos=(%d,%d,%d) highestY=%d type=%s atMinY=%s",
-                             sample, sx, postY, sz, postY, postType, postAtMinY));
-                 }
-                 
-                 LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
-
-                 int backfillWidth = sampleBounds[1] - sampleBounds[0] + 1;
-                 int backfillDepth = sampleBounds[5] - sampleBounds[4] + 1;
-                 int backfilled = TerraformingUtil.backfillFoundation(
-                     world,
-                     new Location(world, sampleBounds[0], sampleBounds[2], sampleBounds[4]),
-                     backfillWidth,
-                     backfillDepth,
-                     Material.DIRT
-                 );
-
-                 LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
-                 
-                 LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
-                 return true;
              }
+
+             // Run diagnostics and support fill only after the edit session has closed so the
+             // schematic cannot overwrite the backfill during its final flush.
+             LOGGER.info("[DIAG-PLACEMENT] postPaste sampling");
+             for (int sample = 0; sample < 4; sample++) {
+                 int sx = (sample < 2) ? sampleBounds[0] : sampleBounds[1];
+                 int sz = (sample % 2 == 0) ? sampleBounds[4] : sampleBounds[5];
+                 int postY = world.getHighestBlockYAt(sx, sz);
+                 org.bukkit.Material postType = world.getBlockAt(sx, postY, sz).getType();
+                 org.bukkit.Material postAtMinY = world.getBlockAt(sx, sampleBounds[2], sz).getType();
+                 LOGGER.info(String.format("[DIAG-PLACEMENT] postPaste sample corner=%d pos=(%d,%d,%d) highestY=%d type=%s atMinY=%s",
+                         sample, sx, postY, sz, postY, postType, postAtMinY));
+             }
+
+             LOGGER.info(String.format("[STRUCT] WorldEdit placement successful for '%s'", template.id));
+
+             int backfillWidth = sampleBounds[1] - sampleBounds[0] + 1;
+             int backfillDepth = sampleBounds[5] - sampleBounds[4] + 1;
+             int backfilled = TerraformingUtil.backfillFoundation(
+                 world,
+                 new Location(world, sampleBounds[0], sampleBounds[2], sampleBounds[4]),
+                 backfillWidth,
+                 backfillDepth,
+                 sampleBounds[3],
+                 Material.DIRT
+             );
+
+             LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
+             
+             LOGGER.info(String.format("[STRUCT] DIAGNOSTIC: About to return TRUE for '%s'", template.id));
+             return true;
              
          } catch (Exception e) {
              LOGGER.warning(String.format("[STRUCT] DIAGNOSTIC: Exception caught in placeWorldEdit: %s", 
@@ -1058,6 +1072,8 @@ public class StructureServiceImpl implements StructureService {
                 buildRomanMarket(world, origin, groundY, width, height, depth, random);
             } else if (template.id.contains("bathhouse")) {
                 buildRomanBathhouse(world, origin, groundY, width, height, depth, random);
+            } else if (template.id.contains("forum")) {
+                buildRomanForum(world, origin, groundY, width, height, depth, random);
             } else {
                 // Fallback to generic building
                 buildRomanHouse(world, origin, groundY, width, height, depth, random, "generic");
@@ -1066,14 +1082,22 @@ public class StructureServiceImpl implements StructureService {
             int[] bounds = computeAABB(origin, template.clipboard, width, depth, height, rotationDegrees);
             int backfillWidth = bounds[1] - bounds[0] + 1;
             int backfillDepth = bounds[5] - bounds[4] + 1;
+            // T049: Use groundY (actual floor level from buildRoman* methods) as the backfill anchor.
+            // bounds[2] = origin.getBlockY() which may be 1+ blocks above groundY when the placement
+            // engine's median footprint Y differs from the 5-point median used by findGroundLevel.
+            // Anchoring from groundY ensures findLowestPlacedBlockY hits the floor immediately,
+            // which (a) fills only the gap below the floor and (b) never floods the house interior.
+            int effectiveBaseY = Math.min(groundY, bounds[2]);
             int backfilled = TerraformingUtil.backfillFoundation(
                 world,
-                new Location(world, bounds[0], bounds[2], bounds[4]),
+                new Location(world, bounds[0], effectiveBaseY, bounds[4]),
                 backfillWidth,
                 backfillDepth,
+                bounds[3],
                 Material.DIRT
             );
-            LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks", template.id, backfilled));
+            LOGGER.info(String.format("[STRUCT] Foundation backfilled for '%s': %d blocks (groundY=%d effectiveBaseY=%d boundsMinY=%d)",
+                template.id, backfilled, groundY, effectiveBaseY, bounds[2]));
             
             LOGGER.fine(String.format("[STRUCT] Paper API placement complete for '%s'", template.id));
             return true;
@@ -1359,7 +1383,84 @@ public class StructureServiceImpl implements StructureService {
         world.getBlockAt(baseX + 2, groundY + 1, baseZ + depth - 3).setType(Material.CAMPFIRE);
         world.getBlockAt(baseX + width - 3, groundY + 1, baseZ + depth - 3).setType(Material.CAMPFIRE);
     }
-    
+
+    /**
+     * Build a Roman forum – large civic plaza with colonnaded perimeter and central raised dais.
+     */
+    private void buildRomanForum(World world, Location origin, int groundY, int width, int height, int depth, Random random) {
+        int baseX = origin.getBlockX();
+        int baseZ = origin.getBlockZ();
+
+        // Sandstone tile floor
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < depth; z++) {
+                Material floor = ((x + z) % 4 == 0) ? Material.CHISELED_SANDSTONE : Material.SMOOTH_SANDSTONE;
+                world.getBlockAt(baseX + x, groundY, baseZ + z).setType(floor);
+            }
+        }
+
+        // Colonnaded perimeter walls with wide arched openings
+        for (int y = 1; y < height - 1; y++) {
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < depth; z++) {
+                    boolean isWall = x == 0 || x == width - 1 || z == 0 || z == depth - 1;
+                    if (!isWall) continue;
+
+                    boolean isColumn = (x % 4 == 0 && (z == 0 || z == depth - 1))
+                                    || (z % 4 == 0 && (x == 0 || x == width - 1));
+                    boolean isEntrance = z == 0 && x >= width / 2 - 2 && x <= width / 2 + 2 && y <= 3;
+                    boolean isArch = y >= 2 && y <= 4 && !isColumn && !isEntrance
+                                   && (x % 4 == 2 || z % 4 == 2);
+
+                    if (isEntrance || isArch) {
+                        // Leave open
+                    } else if (isColumn) {
+                        world.getBlockAt(baseX + x, groundY + y, baseZ + z).setType(Material.SANDSTONE);
+                    } else {
+                        world.getBlockAt(baseX + x, groundY + y, baseZ + z).setType(Material.CUT_SANDSTONE);
+                    }
+                }
+            }
+        }
+
+        // Flat terracotta roof with decorative parapet
+        int roofY = groundY + height - 1;
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < depth; z++) {
+                world.getBlockAt(baseX + x, roofY, baseZ + z).setType(Material.TERRACOTTA);
+            }
+        }
+        for (int x = 0; x < width; x++) {
+            world.getBlockAt(baseX + x, roofY + 1, baseZ).setType(Material.SANDSTONE_WALL);
+            world.getBlockAt(baseX + x, roofY + 1, baseZ + depth - 1).setType(Material.SANDSTONE_WALL);
+        }
+        for (int z = 0; z < depth; z++) {
+            world.getBlockAt(baseX, roofY + 1, baseZ + z).setType(Material.SANDSTONE_WALL);
+            world.getBlockAt(baseX + width - 1, roofY + 1, baseZ + z).setType(Material.SANDSTONE_WALL);
+        }
+
+        // Central raised dais with lectern
+        int daisX = baseX + width / 2;
+        int daisZ = baseZ + depth / 2;
+        world.getBlockAt(daisX - 1, groundY + 1, daisZ - 1).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX,     groundY + 1, daisZ - 1).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX + 1, groundY + 1, daisZ - 1).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX - 1, groundY + 1, daisZ    ).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX,     groundY + 1, daisZ    ).setType(Material.LECTERN);
+        world.getBlockAt(daisX + 1, groundY + 1, daisZ    ).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX - 1, groundY + 1, daisZ + 1).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX,     groundY + 1, daisZ + 1).setType(Material.SMOOTH_SANDSTONE);
+        world.getBlockAt(daisX + 1, groundY + 1, daisZ + 1).setType(Material.SMOOTH_SANDSTONE);
+
+        // Torches on perimeter columns
+        for (int x = 0; x < width; x += 4) {
+            world.getBlockAt(baseX + x, groundY + 2, baseZ + 1).setType(Material.WALL_TORCH);
+            if (depth > 8) {
+                world.getBlockAt(baseX + x, groundY + 2, baseZ + depth - 2).setType(Material.WALL_TORCH);
+            }
+        }
+    }
+
     @Override
     public Optional<int[]> getStructureDimensions(String structureId) {
         StructureTemplate template = loadedStructures.get(structureId);

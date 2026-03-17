@@ -1,10 +1,9 @@
 package com.davisodom.villageoverhaul.worldgen.impl;
 
-import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.mockito.Mockito;
 import com.davisodom.villageoverhaul.VillageOverhaulPlugin;
-import com.davisodom.villageoverhaul.test.MockBukkitRegistryInitializer;
+import com.davisodom.villageoverhaul.metrics.PerfCounters;
 import com.davisodom.villageoverhaul.villages.VillageMetadataStore;
 import com.davisodom.villageoverhaul.model.PathNetwork;
 import org.bukkit.Location;
@@ -17,6 +16,9 @@ import org.junit.jupiter.api.Test;
 import com.davisodom.villageoverhaul.worldgen.WalkableGraph;
 
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -64,13 +66,16 @@ public class PathServiceImplTest {
         });
                 Mockito.when(world.getMaxHeight()).thenReturn(256);
                 Mockito.when(world.getMinHeight()).thenReturn(0);
+                Mockito.when(world.getUID()).thenReturn(UUID.nameUUIDFromBytes("path-test-world".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         service = new PathServiceImpl(store);
+                PathServiceImpl.resetPathStateForTests();
     }
 
     @AfterEach
     public void tearDown() {
         // clear fake world state
         if (blocks != null) blocks.clear();
+        PathServiceImpl.resetPathStateForTests();
     }
 
     private void makeFlatGround(int minX, int maxX, int minZ, int maxZ, int groundY) {
@@ -358,5 +363,141 @@ public class PathServiceImplTest {
         String hashB = computeNetworkHash(store.getPathNetwork(villageIdB).get());
 
         assertTrue(okB, "Second seed run should also succeed");
+    }
+
+    @Test
+    @DisplayName("segment cache keys normalize reversed endpoints")
+    void testSegmentKey_normalizesReverseEndpoints() {
+        Location a = new Location(world, 100, 64, 100);
+        Location b = new Location(world, 180, 64, 100);
+
+        PathServiceImpl.SegmentKey forward = PathServiceImpl.createNormalizedSegmentKey(world, a, b);
+        PathServiceImpl.SegmentKey reverse = PathServiceImpl.createNormalizedSegmentKey(world, b, a);
+
+        assertEquals(forward, reverse, "Segment cache keys should be direction-agnostic");
+    }
+
+    @Test
+    @DisplayName("waypoint cache reuses overlapping segments within a generated network")
+    void testGeneratePathNetwork_recordsCacheHitsForSharedPrefixes() {
+        makeFlatGround(80, 260, 80, 120, 64);
+
+        UUID villageId = UUID.randomUUID();
+        Location main = new Location(world, 100, 64, 100);
+        Location b1 = new Location(world, 170, 64, 100);
+        Location b2 = new Location(world, 230, 64, 100);
+        store.registerVillage(villageId, "roman", main, 9001L);
+
+        boolean ok = service.generatePathNetwork(world, villageId, Arrays.asList(main, b1, b2), main, 9001L);
+
+        assertTrue(ok, "Path generation should succeed on a flat shared corridor");
+        PerfCounters.Snapshot snapshot = PathServiceImpl.getPathMetrics(villageId);
+        assertTrue(snapshot.getCacheHits() > 0L, "Later routes should reuse cached waypoint segments");
+        assertTrue(snapshot.getCacheMisses() > 0L, "Initial route planning should populate the cache");
+        assertTrue(snapshot.getCacheEntries() > 0, "Waypoint cache should retain segment entries");
+
+        PathNetwork network = store.getPathNetwork(villageId).orElseThrow();
+        assertEquals(snapshot.getCacheHits(), network.getMetricsSummary().getCacheHits(),
+            "Persisted path metrics should match the live cache snapshot");
+    }
+
+    @Test
+    @DisplayName("terrain invalidation removes intersecting cached segments and forces recompute")
+    void testInvalidateSegmentCache_removesAffectedSegments() {
+        makeFlatGround(80, 260, 80, 120, 64);
+
+        UUID firstVillage = UUID.randomUUID();
+        UUID secondVillage = UUID.randomUUID();
+        Location main = new Location(world, 100, 64, 100);
+        Location far = new Location(world, 220, 64, 100);
+
+        store.registerVillage(firstVillage, "roman", main, 100L);
+        assertTrue(service.generatePathNetwork(world, firstVillage, Arrays.asList(main, far), main, 100L));
+        int entriesBefore = PathServiceImpl.getPathMetrics(firstVillage).getCacheEntries();
+        assertTrue(entriesBefore > 0, "Initial route should populate the segment cache");
+
+        PathServiceImpl.InvalidationResult invalidation =
+            PathServiceImpl.invalidateSegmentCache(world, 118, 142, 96, 104, "terraform");
+        assertTrue(invalidation.getSegmentsRemoved() >= 1, "Invalidation should remove the segment crossing the modified terrain");
+        assertTrue(PathServiceImpl.getPathMetrics(firstVillage).getInvalidationEvents() >= 1L,
+            "Affected villages should record invalidation events");
+
+        store.registerVillage(secondVillage, "roman", main, 101L);
+        assertTrue(service.generatePathNetwork(world, secondVillage, Arrays.asList(main, far), main, 101L));
+        PerfCounters.Snapshot secondSnapshot = PathServiceImpl.getPathMetrics(secondVillage);
+        assertTrue(secondSnapshot.getCacheMisses() > 0L,
+            "After invalidation the affected route should be recomputed and reinserted");
+    }
+
+    @Test
+    @DisplayName("planner limiter enforces cap and drains queue under contention")
+    void testPlannerLimiter_enforcesCapAndQueue() throws Exception {
+        PathServiceImpl.resetPathStateForTests();
+
+        UUID villageId = UUID.randomUUID();
+        PathServiceImpl.PlannerSettings settings = new PathServiceImpl.PlannerSettings(15000, 3, 0, 0, 0);
+        List<PathServiceImpl> services = Arrays.asList(
+            new PathServiceImpl(store, settings),
+            new PathServiceImpl(store, settings),
+            new PathServiceImpl(store, settings)
+        );
+
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(10);
+        AtomicInteger maxActive = new AtomicInteger();
+        AtomicInteger maxQueued = new AtomicInteger();
+
+        for (int index = 0; index < 10; index++) {
+            PathServiceImpl localService = services.get(index % services.size());
+            Thread thread = new Thread(() -> {
+                try {
+                    start.await();
+                    try (AutoCloseable ignored = localService.acquirePlannerPermitForTesting(villageId)) {
+                        PathServiceImpl.PlannerStateSnapshot snapshot = localService.getPlannerStateSnapshot();
+                        maxActive.accumulateAndGet(snapshot.getActive(), Math::max);
+                        maxQueued.accumulateAndGet(snapshot.getQueued(), Math::max);
+                        Thread.sleep(60L);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    done.countDown();
+                }
+            });
+            thread.start();
+        }
+
+        start.countDown();
+        assertTrue(done.await(5, TimeUnit.SECONDS), "All queued planner requests should complete without starvation");
+
+        PathServiceImpl.PlannerStateSnapshot finalSnapshot = services.get(0).getPlannerStateSnapshot();
+        assertTrue(maxActive.get() <= 3, "Active planners should never exceed the configured cap");
+        assertTrue(maxQueued.get() > 0, "Contention should force at least one request into the queue");
+        assertEquals(0, finalSnapshot.getQueued(), "Planner queue should drain after all work completes");
+        assertTrue(PathServiceImpl.getPathMetrics(villageId).getPlannerQueueWaitMs() > 0L,
+            "Queued planners should contribute wait-time metrics");
+    }
+
+    @Test
+    @DisplayName("path metrics reset clears accumulated counters")
+    void testPathMetricsReset_clearsCounters() {
+        makeFlatGround(80, 240, 80, 120, 64);
+
+        UUID villageId = UUID.randomUUID();
+        Location main = new Location(world, 100, 64, 100);
+        Location far = new Location(world, 220, 64, 100);
+        store.registerVillage(villageId, "roman", main, 5150L);
+
+        assertTrue(service.generatePathNetwork(world, villageId, Arrays.asList(main, far), main, 5150L));
+        PerfCounters.Snapshot beforeReset = PathServiceImpl.getPathMetrics(villageId);
+        assertTrue(beforeReset.getNodesExploredTotal() > 0L, "Generated paths should record explored nodes");
+
+        PathServiceImpl.resetPathMetrics(villageId);
+
+        PerfCounters.Snapshot afterReset = PathServiceImpl.getPathMetrics(villageId);
+        assertEquals(0L, afterReset.getNodesExploredTotal(), "Reset should clear nodes explored totals");
+        assertEquals(0L, afterReset.getCacheHits(), "Reset should clear cache hits");
+        assertEquals(0L, afterReset.getCacheMisses(), "Reset should clear cache misses");
+        assertEquals(0L, afterReset.getInvalidationEvents(), "Reset should clear invalidation counters");
     }
 }

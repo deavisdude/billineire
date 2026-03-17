@@ -5,8 +5,14 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.logging.Logger;
 
 /**
@@ -27,6 +33,15 @@ public class TerraformingUtil {
     
     // Maximum vertical change for grading
     private static final int MAX_VERTICAL_CHANGE = 3;
+
+    private static final int DEFAULT_VEGETATION_COMPONENT_RADIUS = 24;
+    private static final int MIN_CONNECTED_VEGETATION_CLEAR_BLOCKS = 512;
+    private static final int MAX_CONNECTED_VEGETATION_CLEAR_BLOCKS = 8192;
+    private static final int MAX_POST_PASTE_SUPPORT_GAP = 3;
+    private static final int MAX_UNDERSIDE_COMPACTION_DEPTH = 12;
+    private static final int REQUIRED_FOUNDATION_SUPPORT_BAND = 3;
+    private static final int MIN_MOSTLY_AIR_LAYER_AREA = 16;
+    private static final double MOSTLY_AIR_LAYER_RETAINED_RATIO = 0.80D;
     
     // Vegetation materials that can be safely trimmed
     private static final Set<Material> TRIMMABLE_VEGETATION = new HashSet<>();
@@ -131,6 +146,39 @@ public class TerraformingUtil {
             this.skippedCanopy = skippedCanopy;
         }
     }
+
+    private static final class BackfillSupport {
+        private final int supportY;
+        private final Material fillMaterial;
+        private final boolean encounteredVegetation;
+        private final boolean stableSupportFound;
+
+        private BackfillSupport(int supportY, Material fillMaterial,
+                                boolean encounteredVegetation, boolean stableSupportFound) {
+            this.supportY = supportY;
+            this.fillMaterial = fillMaterial;
+            this.encounteredVegetation = encounteredVegetation;
+            this.stableSupportFound = stableSupportFound;
+        }
+    }
+
+    private static final class VegetationNode {
+        private final int x;
+        private final int y;
+        private final int z;
+        private final int originX;
+        private final int originY;
+        private final int originZ;
+
+        private VegetationNode(int x, int y, int z, int originX, int originY, int originZ) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.originX = originX;
+            this.originY = originY;
+            this.originZ = originZ;
+        }
+    }
     
     /**
      * Trim vegetation in the footprint area.
@@ -145,12 +193,9 @@ public class TerraformingUtil {
      * @return Number of blocks trimmed
      */
     public static int trimVegetation(World world, Location origin, int width, int depth, int height) {
-        int trimmedCount = 0;
-        
-        // Only trim 0-2 blocks above ground level (grass, flowers, small plants)
-        // This prevents clearing entire tree columns which creates visible patches
-        int maxTrimHeight = 3; // Relative to origin Y
-        
+        List<Block> vegetationSeeds = new ArrayList<>();
+        int maxTrimHeight = Math.max(height + 2, 4);
+
         for (int x = 0; x < width; x++) {
             for (int z = 0; z < depth; z++) {
                 for (int y = 0; y < maxTrimHeight; y++) {
@@ -159,20 +204,130 @@ public class TerraformingUtil {
                             origin.getBlockY() + y,
                             origin.getBlockZ() + z
                     );
-                    
-                    if (TRIMMABLE_VEGETATION.contains(block.getType())) {
-                        block.setType(Material.AIR);
-                        trimmedCount++;
+
+                    if (isVegetationMaterial(block.getType())) {
+                        vegetationSeeds.add(block);
                     }
                 }
             }
         }
-        
+
+        int trimmedCount = clearConnectedVegetation(
+                world,
+                vegetationSeeds,
+                block -> false,
+                Math.min(MAX_CONNECTED_VEGETATION_CLEAR_BLOCKS,
+                        Math.max(MIN_CONNECTED_VEGETATION_CLEAR_BLOCKS, width * depth * Math.max(height, 4) * 4)),
+                DEFAULT_VEGETATION_COMPONENT_RADIUS
+        );
+
         if (trimmedCount > 0) {
-            LOGGER.fine(String.format("[STRUCT] Trimmed %d vegetation blocks at %s (ground level only)", trimmedCount, origin));
+            LOGGER.fine(String.format("[STRUCT] Trimmed %d vegetation blocks at %s (connected vegetation removal)", trimmedCount, origin));
         }
-        
+
         return trimmedCount;
+    }
+
+    public static int clearConnectedVegetation(World world, Collection<Block> seedBlocks,
+                                               Predicate<Block> skipBlock, int maxBlocks, int maxRadius) {
+        if (seedBlocks == null || seedBlocks.isEmpty() || maxBlocks <= 0) {
+            return 0;
+        }
+
+        Set<String> visited = new HashSet<>();
+        int cleared = 0;
+
+        for (Block seed : seedBlocks) {
+            if (seed == null || cleared >= maxBlocks) {
+                break;
+            }
+            if (!isVegetationMaterial(seed.getType()) || skipBlock.test(seed)) {
+                continue;
+            }
+
+            List<Block> component = collectVegetationComponent(world, seed, skipBlock, visited, maxRadius);
+            for (Block block : component) {
+                block.setType(Material.AIR);
+            }
+            cleared += component.size();
+        }
+
+        return cleared;
+    }
+
+    public static boolean isVegetationMaterial(Material material) {
+        if (material == null) {
+            return false;
+        }
+        if (TRIMMABLE_VEGETATION.contains(material)) {
+            return true;
+        }
+
+        String name = material.name();
+        return (name.endsWith("_LEAVES")
+                || name.endsWith("_LOG")
+                || name.endsWith("_WOOD")
+                || name.endsWith("_STEM")
+                || name.endsWith("_HYPHAE")
+                || name.endsWith("_SAPLING")
+                || name.endsWith("_ROOTS")
+                || name.contains("VINE")
+                || name.contains("MUSHROOM")
+                || name.contains("MOSS_CARPET"))
+            && material != Material.GRASS_BLOCK;
+    }
+
+    private static List<Block> collectVegetationComponent(World world, Block seed, Predicate<Block> skipBlock,
+                                                          Set<String> visited, int maxRadius) {
+        Deque<VegetationNode> queue = new ArrayDeque<>();
+        queue.add(new VegetationNode(seed.getX(), seed.getY(), seed.getZ(), seed.getX(), seed.getY(), seed.getZ()));
+
+        List<Block> component = new ArrayList<>();
+        int minY = getWorldMinHeight(world);
+        int maxY = getWorldMaxHeight(world);
+
+        while (!queue.isEmpty()) {
+            VegetationNode node = queue.removeFirst();
+            if (Math.max(Math.max(Math.abs(node.x - node.originX), Math.abs(node.y - node.originY)),
+                    Math.abs(node.z - node.originZ)) > maxRadius) {
+                continue;
+            }
+
+            String key = blockKey(node.x, node.y, node.z);
+            if (!visited.add(key)) {
+                continue;
+            }
+            if (node.y < minY || node.y > maxY) {
+                continue;
+            }
+
+            Block block = world.getBlockAt(node.x, node.y, node.z);
+            if (skipBlock.test(block) || !isVegetationMaterial(block.getType())) {
+                continue;
+            }
+
+            component.add(block);
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) {
+                            continue;
+                        }
+                        queue.addLast(new VegetationNode(
+                                node.x + dx,
+                                node.y + dy,
+                                node.z + dz,
+                                node.originX,
+                                node.originY,
+                                node.originZ
+                        ));
+                    }
+                }
+            }
+        }
+
+        return component;
     }
     
     /**
@@ -588,18 +743,21 @@ public class TerraformingUtil {
      * Fills any AIR blocks below the structure down to solid ground.
      * This fixes floating structures caused by terrain variations.
      * Fills the full footprint underside so interior air shelves do not remain.
-     * ONLY fills where terrain is within reasonable distance (max 3 blocks gap).
      * 
      * @param world The world
      * @param origin Structure origin (southwest corner, ground level)
      * @param width Structure width (X direction)
      * @param depth Structure depth (Z direction)
+     * @param structureMaxY Top Y of the placed structure bounds
      * @param fillMaterial Fallback material to use when no local surface material can be preserved
      * @return Number of blocks filled
      */
-    public static int backfillFoundation(World world, Location origin, int width, int depth, Material fillMaterial) {
+    public static int backfillFoundation(World world, Location origin, int width, int depth, int structureMaxY,
+                                         Material fillMaterial) {
         int filled = 0;
-        int maxGap = 3; // Only fill gaps up to 3 blocks (prevents walls on steep slopes)
+        int skippedCanopyColumns = 0;
+        int unstableSupportColumns = 0;
+        Material[][] columnFillMaterials = new Material[width][depth];
         
         LOGGER.fine(String.format("[STRUCT] Backfilling foundation at %s (%dx%d)", origin, width, depth));
         
@@ -610,70 +768,329 @@ public class TerraformingUtil {
                 
                 // Find natural terrain height at this position
                 int structureBaseY = origin.getBlockY();
-                SurfaceColumn surface = findSupportBelowBase(world, blockX, blockZ, structureBaseY - 1);
-                int terrainY = surface.surfaceY;
-                int gapSize = structureBaseY - terrainY;
-                Material columnFillMaterial = determineBackfillMaterial(surface.surfaceMaterial, fillMaterial);
-
-                Block baseBlock = world.getBlockAt(blockX, structureBaseY, blockZ);
-                boolean fillBaseLayer = baseBlock.getType().isAir() && hasStructureSupportAbove(world, blockX, structureBaseY, blockZ);
-                if (fillBaseLayer) {
-                    baseBlock.setType(columnFillMaterial);
-                    filled++;
+                BackfillSupport support = resolveBackfillSupport(world, blockX, blockZ, structureBaseY - 1, fillMaterial);
+                if (support.encounteredVegetation) {
+                    skippedCanopyColumns++;
                 }
-                
-                // Only fill if gap is reasonable (1-3 blocks)
-                // Skip if terrain is higher than structure (no gap) or gap is too large (steep slope)
-                if (gapSize < 1 || gapSize > maxGap) {
+                if (!support.stableSupportFound) {
+                    unstableSupportColumns++;
+                }
+                int terrainY = support.supportY;
+                Material columnFillMaterial = support.fillMaterial;
+                columnFillMaterials[x][z] = columnFillMaterial;
+                int lowestPlacedY = findLowestPlacedBlockY(world, blockX, blockZ, structureBaseY, structureMaxY,
+                    columnFillMaterial);
+                int fillTopY = determineBackfillTopY(structureBaseY, lowestPlacedY);
+
+                int fillBottomY = determineBackfillBottomY(world, blockX, blockZ, terrainY, fillTopY);
+
+                if (fillBottomY > fillTopY) {
                     continue;
                 }
 
-                int fillTopY = fillBaseLayer ? structureBaseY - 1 : structureBaseY - 1;
-                
-                // Fill from terrain UP to structure base
-                for (int y = terrainY + 1; y <= fillTopY; y++) {
+                // Fill from the resolved support base up to the fill ceiling, compacting shallow
+                // underside voids so large open structures do not expose hollow terrain shelves.
+                for (int y = fillBottomY; y <= fillTopY; y++) {
                     Block block = world.getBlockAt(blockX, y, blockZ);
-                    if (block.getType().isAir()) {
+                    if (shouldFillBackfillBlock(block.getType())) {
                         block.setType(columnFillMaterial);
                         filled++;
                     }
                 }
             }
         }
+
+        int sealedUndersideBand = sealImmediateUndersideBand(world, origin, width, depth, fillMaterial,
+            columnFillMaterials);
+        filled += sealedUndersideBand;
+
+        int filledLayers = fillMostlyAirLowerLayers(world, origin, width, depth, structureMaxY, fillMaterial,
+            columnFillMaterials);
+        filled += filledLayers;
         
-        LOGGER.info(String.format("[STRUCT] Foundation backfilled: %d blocks placed (max gap: %d)", filled, maxGap));
+        if (skippedCanopyColumns > 0) {
+            LOGGER.info(String.format("[STRUCT] Backfill skipped canopy columns=%d", skippedCanopyColumns));
+        }
+        if (unstableSupportColumns > 0) {
+            LOGGER.info(String.format("[STRUCT] Backfill fell back to unstable support columns=%d", unstableSupportColumns));
+        }
+        LOGGER.info(String.format("[STRUCT] Foundation backfilled: %d blocks placed", filled));
         return filled;
     }
 
-    private static SurfaceColumn findSupportBelowBase(World world, int x, int z, int startY) {
+    private static int sealImmediateUndersideBand(World world, Location origin, int width, int depth,
+                                                  Material defaultFillMaterial, Material[][] columnFillMaterials) {
+        int baseY = origin.getBlockY();
+        int undersideY = baseY - 1;
+        if (undersideY < getWorldMinHeight(world)) {
+            return 0;
+        }
+
+        int filled = 0;
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < depth; z++) {
+                Block baseBlock = world.getBlockAt(origin.getBlockX() + x, baseY, origin.getBlockZ() + z);
+                if (shouldFillBackfillBlock(baseBlock.getType()) || isSkippableGroundLikeFill(baseBlock.getType())) {
+                    continue;
+                }
+
+                Block undersideBlock = world.getBlockAt(origin.getBlockX() + x, undersideY, origin.getBlockZ() + z);
+                if (!shouldFillBackfillBlock(undersideBlock.getType())) {
+                    continue;
+                }
+
+                Material fillForColumn = columnFillMaterials[x][z] != null ? columnFillMaterials[x][z] : defaultFillMaterial;
+                undersideBlock.setType(fillForColumn);
+                filled++;
+            }
+        }
+
+        if (filled > 0) {
+            LOGGER.info(String.format("[STRUCT] Sealed %d underside band block(s) at y=%d beneath pasted base y=%d",
+                filled, undersideY, baseY));
+        }
+        return filled;
+    }
+
+    private static int fillMostlyAirLowerLayers(World world, Location origin, int width, int depth, int structureMaxY,
+                                                Material defaultFillMaterial, Material[][] columnFillMaterials) {
+        int footprintArea = width * depth;
+        if (footprintArea < MIN_MOSTLY_AIR_LAYER_AREA) {
+            LOGGER.fine(String.format("[STRUCT] Skipping mostly-air layer fill: footprint area %d < %d", footprintArea, MIN_MOSTLY_AIR_LAYER_AREA));
+            return 0;
+        }
+
+        int baseY = origin.getBlockY();
+        int filled = 0;
+        int compactedLayers = 0;
+        int previousAirBlocks = footprintArea;
+
+        LOGGER.info(String.format("[STRUCT] Checking for mostly-air schematic layers: origin=%s dims=%dx%d baseY=%d maxY=%d retainedRatio=%.2f", 
+            origin, width, depth, baseY, structureMaxY, MOSTLY_AIR_LAYER_RETAINED_RATIO));
+
+        for (int y = baseY; y <= structureMaxY; y++) {
+            int airBlocks = 0;
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < depth; z++) {
+                    if (world.getBlockAt(origin.getBlockX() + x, y, origin.getBlockZ() + z).getType().isAir()) {
+                        airBlocks++;
+                    }
+                }
+            }
+
+            double airRatio = (double) airBlocks / (double) footprintArea;
+            double retainedRatio = previousAirBlocks <= 0 ? 0.0D : (double) airBlocks / (double) previousAirBlocks;
+            LOGGER.info(String.format("[STRUCT] Mostly-air check y=%d air=%d/%d ratio=%.3f prevAir=%d retained=%.3f",
+                    y, airBlocks, footprintArea, airRatio, previousAirBlocks, retainedRatio));
+            if (airBlocks == 0 || retainedRatio < MOSTLY_AIR_LAYER_RETAINED_RATIO) {
+                LOGGER.info(String.format("[STRUCT] Layer %d air dropped too sharply (retained=%.3f < %.3f), stopping fill scan",
+                        y, retainedRatio, MOSTLY_AIR_LAYER_RETAINED_RATIO));
+                break;
+            }
+
+            int filledThisLayer = 0;
+            for (int x = 0; x < width; x++) {
+                for (int z = 0; z < depth; z++) {
+                    Block block = world.getBlockAt(origin.getBlockX() + x, y, origin.getBlockZ() + z);
+                    if (!shouldFillBackfillBlock(block.getType())) {
+                        continue;
+                    }
+
+                    Material layerFillMaterial = columnFillMaterials[x][z] != null
+                        ? columnFillMaterials[x][z]
+                        : defaultFillMaterial;
+                    block.setType(layerFillMaterial);
+                    filled++;
+                    filledThisLayer++;
+                }
+            }
+
+            if (filledThisLayer > 0) {
+                LOGGER.info(String.format("[STRUCT] Filled %d blocks in mostly-air layer y=%d", filledThisLayer, y));
+            }
+            compactedLayers++;
+            previousAirBlocks = airBlocks;
+        }
+
+        if (compactedLayers > 0) {
+            LOGGER.info(String.format("[STRUCT] Filled %d mostly-air schematic layer(s) inside footprint", compactedLayers));
+        }
+
+        return filled;
+    }
+
+    private static int determineBackfillTopY(int structureBaseY, int lowestPlacedY) {
+        if (lowestPlacedY == Integer.MAX_VALUE || lowestPlacedY <= structureBaseY) {
+            return structureBaseY;
+        }
+
+        int supportGap = lowestPlacedY - structureBaseY;
+        if (supportGap <= MAX_POST_PASTE_SUPPORT_GAP) {
+            return lowestPlacedY - 1;
+        }
+
+        // Large open air volumes above the base layer are more likely courtyards/interiors than
+        // missing foundation blocks, so only seal the pasted footprint's base layer in that case.
+        return structureBaseY;
+    }
+
+    private static int determineBackfillBottomY(World world, int x, int z, int terrainY, int fillTopY) {
+        int fillBottomY = terrainY + 1;
+        int lowerBoundY = Math.max(getWorldMinHeight(world), fillTopY - MAX_UNDERSIDE_COMPACTION_DEPTH);
+        int scanStartY = Math.max(terrainY - 1, lowerBoundY);
+        int consecutiveSupport = 0;
+        boolean encounteredGap = false;
+        int lowestGapY = Integer.MAX_VALUE;
+
+        for (int y = scanStartY; y >= lowerBoundY; y--) {
+            Material material = world.getBlockAt(x, y, z).getType();
+
+            if (shouldFillBackfillBlock(material)) {
+                encounteredGap = true;
+                lowestGapY = Math.min(lowestGapY, y);
+                consecutiveSupport = 0;
+                continue;
+            }
+
+            if (!encounteredGap) {
+                continue;
+            }
+
+            if (isValidBackfillSupport(material)) {
+                consecutiveSupport++;
+                if (consecutiveSupport >= REQUIRED_FOUNDATION_SUPPORT_BAND) {
+                    fillBottomY = lowestGapY;
+                    break;
+                }
+                continue;
+            }
+
+            consecutiveSupport = 0;
+        }
+
+        return fillBottomY;
+    }
+
+    private static int findLowestPlacedBlockY(World world, int x, int z, int structureBaseY, int structureMaxY,
+                                              Material columnFillMaterial) {
+        for (int y = structureBaseY; y <= structureMaxY; y++) {
+            Material material = world.getBlockAt(x, y, z).getType();
+            if (shouldFillBackfillBlock(material)) {
+                continue;
+            }
+            if (material == columnFillMaterial || isSkippableGroundLikeFill(material)) {
+                continue;
+            }
+            return y;
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    private static boolean isSkippableGroundLikeFill(Material material) {
+        return material == Material.DIRT
+            || material == Material.GRASS_BLOCK
+            || material == Material.COARSE_DIRT
+            || material == Material.PODZOL
+            || material == Material.GRAVEL
+            || material == Material.SAND
+            || material == Material.RED_SAND
+            || material == Material.STONE
+            || material == Material.DEEPSLATE
+            || material == Material.ANDESITE
+            || material == Material.DIORITE
+            || material == Material.GRANITE
+            || material == Material.CLAY;
+    }
+
+    private static BackfillSupport resolveBackfillSupport(World world, int x, int z, int startY,
+                                                          Material defaultFillMaterial) {
         int minY = world.getMinHeight();
-        boolean skippedCanopy = false;
-        Material fallback = Material.DIRT;
+        boolean encounteredVegetation = false;
+        Material fallbackSurface = null;
+        int fallbackSupportY = Integer.MIN_VALUE;
 
         for (int y = startY; y >= minY; y--) {
             Material material = world.getBlockAt(x, y, z).getType();
-            if (material.isAir()) {
+            if (shouldFillBackfillBlock(material)) {
+                if (isVegetationMaterial(material)) {
+                    encounteredVegetation = true;
+                }
                 continue;
             }
-            if (isCanopyMaterial(material)) {
-                skippedCanopy = true;
+
+            if (fallbackSurface == null) {
+                fallbackSurface = material;
+                fallbackSupportY = y;
+            }
+            if (!isValidBackfillSupport(material)) {
                 continue;
             }
-            fallback = material;
-            return new SurfaceColumn(y, material, skippedCanopy);
+            if (!isStableBackfillSupport(world, x, y, z)) {
+                continue;
+            }
+
+            return new BackfillSupport(
+                    y,
+                    determineBackfillMaterial(material, defaultFillMaterial),
+                    encounteredVegetation,
+                    true
+            );
         }
 
-        return new SurfaceColumn(startY, fallback, skippedCanopy);
+        if (fallbackSurface != null) {
+            return new BackfillSupport(
+                    fallbackSupportY,
+                    determineBackfillMaterial(fallbackSurface, defaultFillMaterial),
+                    encounteredVegetation,
+                    false
+            );
+        }
+
+        return new BackfillSupport(minY - 1, defaultFillMaterial, encounteredVegetation, false);
     }
 
-    private static boolean hasStructureSupportAbove(World world, int x, int y, int z) {
-        for (int offset = 1; offset <= 2; offset++) {
-            Material above = world.getBlockAt(x, y + offset, z).getType();
-            if (above.isSolid() && !above.isAir()) {
-                return true;
-            }
+    private static boolean isValidBackfillSupport(Material material) {
+        if (material == Material.WATER || material == Material.LAVA) {
+            return false;
         }
-        return false;
+        if (TRIMMABLE_VEGETATION.contains(material)) {
+            return false;
+        }
+        if (material == Material.SNOW || material == Material.SNOW_BLOCK) {
+            return false;
+        }
+        return isGoodFoundationMaterial(material);
+    }
+
+    private static boolean isStableBackfillSupport(World world, int x, int y, int z) {
+        if (y <= world.getMinHeight()) {
+            return true;
+        }
+
+        Material below = world.getBlockAt(x, y - 1, z).getType();
+        if (below.isAir()) {
+            return false;
+        }
+        if (TRIMMABLE_VEGETATION.contains(below)) {
+            return false;
+        }
+        if (below == Material.WATER || below == Material.LAVA || below == Material.SNOW || below == Material.SNOW_BLOCK) {
+            return false;
+        }
+        return below.isSolid();
+    }
+
+    private static boolean shouldFillBackfillBlock(Material material) {
+        if (material == Material.WATER || material == Material.LAVA) {
+            return false;
+        }
+        if (material.isAir()) {
+            return true;
+        }
+        if (TRIMMABLE_VEGETATION.contains(material)) {
+            return true;
+        }
+        return material == Material.SNOW || material == Material.SNOW_BLOCK || !material.isSolid();
     }
 
     private static Material determineBackfillMaterial(Material surfaceMaterial, Material defaultFillMaterial) {
@@ -687,5 +1104,29 @@ public class TerraformingUtil {
             return surfaceMaterial;
         }
         return defaultFillMaterial;
+    }
+
+    private static int getWorldMinHeight(World world) {
+        try {
+            return world.getMinHeight();
+        } catch (RuntimeException e) {
+            return -64;
+        }
+    }
+
+    private static int getWorldMaxHeight(World world) {
+        try {
+            int maxHeight = world.getMaxHeight();
+            if (maxHeight <= getWorldMinHeight(world)) {
+                return 320;
+            }
+            return maxHeight;
+        } catch (RuntimeException e) {
+            return 320;
+        }
+    }
+
+    private static String blockKey(int x, int y, int z) {
+        return x + ":" + y + ":" + z;
     }
 }
